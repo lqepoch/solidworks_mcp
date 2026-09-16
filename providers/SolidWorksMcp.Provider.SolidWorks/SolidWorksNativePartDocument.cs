@@ -101,6 +101,49 @@ internal sealed class SolidWorksNativePartDocument(
     }
 
     /// <inheritdoc />
+    public async Task<OperationResult<DimensionSnapshot>> SetDimensionValueAsync(
+        DimensionUpdateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.ParameterName)
+            || request.ParameterName.Contains('\r')
+            || request.ParameterName.Contains('\n')
+            || request.ParameterName.IndexOf('@') <= 0
+            || request.Value.Millimeters <= 0d)
+        {
+            return SolidWorksProviderResults.Failure<DimensionSnapshot>(
+                "dimension.set",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "A full SOLIDWORKS dimension name and a positive canonical value are required.",
+                    ErrorCategories.Validation,
+                    remediation: "Use a full parameter name such as D1@FeatureName and a value in millimetres."));
+        }
+
+        OperationResult<NativeDimensionResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            application => SetDimensionOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<DimensionSnapshot>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        descriptor = result.Value.Descriptor;
+        registry.TryUpdateDescriptor(descriptor, out SolidWorksDocumentDescriptor? updated);
+        if (updated is not null)
+        {
+            descriptor = updated;
+        }
+
+        return OperationResults.Success(
+            result.Value.Dimension,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-part"));
+    }
+
+    /// <inheritdoc />
     public async Task<OperationResult<RebuildReceipt>> RebuildAsync(CancellationToken cancellationToken = default)
     {
         OperationResult<NativeRebuildResult> result = await host.InvokeOnStaAsync(
@@ -415,6 +458,211 @@ internal sealed class SolidWorksNativePartDocument(
         {
             SolidWorksDocumentRouting.Release(resolved.Value);
         }
+    }
+
+    /// <summary>
+    /// Sets one full native parameter name in the registered configuration and verifies the resulting solid.
+    /// 在登记的 configuration 中设置一个完整 native parameter name，并验证变更后的 solid。
+    /// </summary>
+    private OperationResult<NativeDimensionResult> SetDimensionOnSta(
+        ISldWorks application,
+        DimensionUpdateRequest request)
+    {
+        const string operation = "dimension.set";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDimensionResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native document identity is no longer registered.", ErrorCategories.State));
+        }
+
+        if (request.Configuration is not null
+            && !request.Configuration.Trim().Equals(current.Configuration, StringComparison.Ordinal))
+        {
+            return SolidWorksProviderResults.Failure<NativeDimensionResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.StateConflict,
+                    "The requested dimension configuration does not match the registered document configuration.",
+                    ErrorCategories.State,
+                    details: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["expected-configuration"] = current.Configuration,
+                        ["requested-configuration"] = request.Configuration.Trim(),
+                    },
+                    remediation: "Re-plan the operation against the document's registered active configuration."));
+        }
+
+        OperationResult<ModelDoc2> resolved = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolved.IsSuccess || resolved.Value is null)
+        {
+            return OperationResults.Failure<NativeDimensionResult>(resolved.OperationId, resolved.Error!, resolved.Evidence);
+        }
+
+        ModelDoc2 model = resolved.Value;
+        object? parameter = null;
+        string stage = "resolve-dimension";
+        try
+        {
+            stage = "get-parameter";
+            parameter = model.Parameter(request.ParameterName.Trim());
+            if (parameter is not IDimension dimension)
+            {
+                return SolidWorksProviderResults.Failure<NativeDimensionResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The requested full SOLIDWORKS dimension parameter was not found.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the current feature tree and use a fresh full dimension identity."),
+                    new EvidenceObservation("dimension.requested-name", request.ParameterName.Trim()));
+            }
+
+            string fullName = dimension.FullName?.Trim() ?? request.ParameterName.Trim();
+            string shortName = dimension.Name?.Trim() ?? fullName.Split('@', 2)[0];
+            stage = "read-before-value";
+            double previousMeters = ReadCurrentDimensionMeters(dimension);
+
+            // SetSystemValue3 is the documented configuration-aware setter.  It uses metres at the COM boundary;
+            // all public requests remain canonical millimetres until this exact adapter call.
+            // SetSystemValue3 是官方的 configuration-aware setter；COM 边界使用米，公共 request 一直保持毫米，
+            // 仅在这个 adapter 调用点转换。
+            stage = "set-system-value3";
+            int setStatus = dimension.SetSystemValue3(
+                request.Value.ToMeters(),
+                (int)swSetValueInConfiguration_e.swSetValue_InThisConfiguration,
+                null);
+            if (setStatus != (int)swSetValueReturnStatus_e.swSetValue_Successful)
+            {
+                return SolidWorksProviderResults.Failure<NativeDimensionResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS rejected the requested dimension value.",
+                        ErrorCategories.Provider,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["dimension"] = fullName,
+                            ["set-status"] = setStatus.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        },
+                        remediation: "Inspect the dimension type, driven state and feature errors before retrying."),
+                    new EvidenceObservation("dimension.name", fullName),
+                    new EvidenceObservation("dimension.set-status", setStatus.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            stage = "read-after-value";
+            double actualMeters = ReadCurrentDimensionMeters(dimension);
+            double requestedMeters = request.Value.ToMeters();
+            if (Math.Abs(actualMeters - requestedMeters) > 1e-9d)
+            {
+                return SolidWorksProviderResults.Failure<NativeDimensionResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS accepted the dimension setter but the read-back value did not match the request.",
+                        ErrorCategories.Invariant,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["dimension"] = fullName,
+                            ["requested-meters"] = requestedMeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture),
+                            ["actual-meters"] = actualMeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture),
+                        },
+                        remediation: "Preserve the document and inspect configuration-specific or equation-driven behavior."));
+            }
+
+            stage = "rebuild";
+            bool rebuilt = model.ForceRebuild3(true);
+            if (!rebuilt)
+            {
+                return SolidWorksProviderResults.Failure<NativeDimensionResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not report a successful rebuild after dimension mutation.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the artifact and inspect the feature error state."));
+            }
+
+            stage = "inspect-after-dimension";
+            OperationResult<CadInspectionSnapshot> inspection = SolidWorksNativeInspectionReader.ReadPart(model, current);
+            if (!inspection.IsSuccess || inspection.Value is null)
+            {
+                return OperationResults.Failure<NativeDimensionResult>(inspection.OperationId, inspection.Error!, inspection.Evidence);
+            }
+
+            if (inspection.Value.Bodies.Length == 0 || inspection.Value.Bodies[0].Volume.CubicMillimeters <= 0d)
+            {
+                return SolidWorksProviderResults.Failure<NativeDimensionResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "Dimension mutation completed but inspection did not prove a positive solid volume.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the artifact and inspect the dimension, feature and rebuild errors."));
+            }
+
+            var snapshot = new DimensionSnapshot
+            {
+                DimensionId = new DimensionId($"{current.DocumentId.Value}:dimension:{fullName}"),
+                Name = shortName,
+                FullName = fullName,
+                Configuration = inspection.Value.Document.Configuration,
+                Value = Length.FromMeters(actualMeters),
+                IsReadOnly = dimension.ReadOnly,
+            };
+            var nextDescriptor = current with
+            {
+                StateHash = inspection.Value.Document.StateHash,
+                IsDirty = model.GetSaveFlag(),
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeDimensionResult(snapshot, nextDescriptor),
+                new EvidenceObservation("dimension.name", snapshot.FullName),
+                new EvidenceObservation("dimension.previous-millimeters", Length.FromMeters(previousMeters).ToString()),
+                new EvidenceObservation("dimension.value-millimeters", snapshot.Value.ToString()),
+                new EvidenceObservation("dimension.set-status", ((int)swSetValueReturnStatus_e.swSetValue_Successful).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("rebuild.returned", bool.TrueString),
+                new EvidenceObservation("body.count", inspection.Value.Bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("volume.cubic-millimeters", inspection.Value.Bodies[0].Volume.CubicMillimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("state.hash", nextDescriptor.StateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.Failure<NativeDimensionResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.ProviderFailure,
+                    "SOLIDWORKS failed during the named dimension mutation workflow.",
+                    ErrorCategories.Provider,
+                    retryable: true,
+                    details: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["stage"] = stage,
+                        ["exception-type"] = exception.GetType().FullName ?? exception.GetType().Name,
+                        ["hresult"] = $"0x{exception.HResult:X8}",
+                    },
+                    remediation: "Preserve the isolated artifact and inspect the reported dimension stage."));
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(parameter);
+            SolidWorksDocumentRouting.Release(model);
+        }
+    }
+
+    /// <summary>Reads the current dimension value in system units and normalizes COM's object return.</summary>
+    /// <remarks>使用官方的 GetSystemValue3 读回系统单位；对 COM object return 做单一转换，避免散落转换逻辑。</remarks>
+    private static double ReadCurrentDimensionMeters(IDimension dimension)
+    {
+        object? rawValue = dimension.GetSystemValue3(
+            (int)swInConfigurationOpts_e.swThisConfiguration,
+            null);
+        return Convert.ToDouble(rawValue, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private OperationResult<NativeSaveResult> SaveOnSta(ISldWorks application)
@@ -800,3 +1048,6 @@ internal sealed record NativeSaveResult(SaveReceipt Receipt, SolidWorksDocumentD
 
 /// <summary>Internal result carrying fresh inspection evidence after a native persisted reopen.</summary>
 internal sealed record NativeReopenResult(CadInspectionSnapshot Snapshot, SolidWorksDocumentDescriptor Descriptor);
+
+/// <summary>Internal result carrying a verified native dimension update and new document metadata.</summary>
+internal sealed record NativeDimensionResult(DimensionSnapshot Dimension, SolidWorksDocumentDescriptor Descriptor);

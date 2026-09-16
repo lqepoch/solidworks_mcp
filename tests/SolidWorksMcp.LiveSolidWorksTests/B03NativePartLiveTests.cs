@@ -81,6 +81,24 @@ public sealed class B03NativePartLiveTests
             Assert.True(inspection.Value.Bodies[0].Volume.CubicMillimeters > 0d);
             Assert.NotEqual("", inspection.Value.Document.StateHash);
 
+            double volumeBeforeDimension = inspection.Value.Bodies[0].Volume.CubicMillimeters;
+            OperationResult<DimensionSnapshot> changedDimension = await part.SetDimensionValueAsync(
+                new DimensionUpdateRequest
+                {
+                    ParameterName = $"D1@{extrusion.Value.Name}",
+                    Value = Length.FromMillimeters(15d),
+                    Configuration = part.Configuration,
+                });
+            Assert.True(changedDimension.IsSuccess, FormatError(changedDimension.Error));
+            Assert.Equal("D1", changedDimension.Value!.Name);
+            Assert.Equal(15d, changedDimension.Value.Value.Millimeters, precision: 8);
+
+            OperationResult<CadInspectionSnapshot> afterDimension = await session.Inspection.InspectAsync(part.DocumentId);
+            Assert.True(afterDimension.IsSuccess, FormatError(afterDimension.Error));
+            Assert.Single(afterDimension.Value!.Bodies);
+            Assert.True(afterDimension.Value.Bodies[0].Volume.CubicMillimeters > volumeBeforeDimension);
+            Assert.Contains(afterDimension.Value.Features, feature => feature.Name == extrusion.Value.Name);
+
             OperationResult<SaveReceipt> save = await part.SaveAsync();
             Assert.True(save.IsSuccess, FormatError(save.Error));
             Assert.True(File.Exists(partPath));

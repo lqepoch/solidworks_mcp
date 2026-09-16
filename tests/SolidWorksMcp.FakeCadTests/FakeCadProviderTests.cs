@@ -41,6 +41,14 @@ public sealed class FakeCadProviderTests
             TargetBodyId = body.BodyId,
         })).RequireSuccess();
         Assert.Equal("feature-extrusion-001", recovered.FeatureId.Value);
+
+        DimensionSnapshot changed = (await part.SetDimensionValueAsync(new DimensionUpdateRequest
+        {
+            ParameterName = $"D1@{recovered.Name}",
+            Value = Length.FromMillimeters(15d),
+        })).RequireSuccess();
+        Assert.Equal("D1", changed.Name);
+        Assert.Equal(15d, changed.Value.Millimeters, precision: 8);
     }
 
     /// <summary>Unsupported capability declarations must be observable and never silently mutate state.</summary>
@@ -181,6 +189,12 @@ public sealed class FakeCadProviderTests
             Depth = Length.FromMillimeters(10d),
             TargetBodyId = body.BodyId,
         })).RequireSuccess();
+        DimensionSnapshot changed = (await part.SetDimensionValueAsync(new DimensionUpdateRequest
+        {
+            ParameterName = $"D1@{feature.Name}",
+            Value = Length.FromMillimeters(15d),
+        })).RequireSuccess();
+        Assert.Equal(15d, changed.Value.Millimeters, precision: 8);
         _ = (await part.RebuildAsync()).RequireSuccess();
         _ = (await part.SaveAsync()).RequireSuccess();
 

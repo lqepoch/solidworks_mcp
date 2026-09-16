@@ -9,6 +9,7 @@ internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId doc
 {
     private readonly Dictionary<BodyId, FakeBodyState> bodies = [];
     private readonly List<FeatureSnapshot> features = [];
+    private readonly Dictionary<string, FakeDimensionState> dimensions = CreateDimensionMap();
     private int bodySequence;
     private int featureSequence;
 
@@ -129,6 +130,8 @@ internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId doc
             Depth = request.Depth,
         };
         features.Add(feature);
+        string fullParameterName = $"D1@{feature.Name}";
+        dimensions.Add(fullParameterName, new FakeDimensionState(feature.FeatureId, fullParameterName, request.Depth));
         body.AddExtrusion(request.Depth);
         MarkMutated();
         return Task.FromResult(
@@ -137,6 +140,86 @@ internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId doc
                 operation,
                 new EvidenceObservation("feature.id", featureId.Value),
                 new EvidenceObservation("feature.kind", feature.Kind),
+                new EvidenceObservation("state.hash", StateHash)));
+    }
+
+    /// <inheritdoc />
+    public Task<OperationResult<DimensionSnapshot>> SetDimensionValueAsync(
+        DimensionUpdateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "set-dimension";
+        if (request is null)
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DimensionSnapshot>(operation, "The dimension update request is required."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<DimensionSnapshot>(operation));
+        }
+
+        if (!Session.Supports(CadCapabilityNames.PartMutation, out CadCapability capability))
+        {
+            return Task.FromResult(FakeCadResults.Unsupported<DimensionSnapshot>(operation, capability));
+        }
+
+        if (Session.IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Closed<DimensionSnapshot>(operation));
+        }
+
+        if (Session.Failures.TryTake(FakeCadFailurePoints.SetDimension, out OperationError? injectedError))
+        {
+            return Task.FromResult(FakeCadResults.Failure<DimensionSnapshot>(operation, injectedError!));
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ParameterName) || request.Value.Millimeters <= 0d)
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DimensionSnapshot>(operation, "A full dimension name and positive value are required."));
+        }
+
+        if (request.Configuration is not null
+            && !request.Configuration.Trim().Equals(Configuration, StringComparison.Ordinal))
+        {
+            return Task.FromResult(
+                FakeCadResults.Failure<DimensionSnapshot>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The requested dimension configuration does not match the fake document configuration.",
+                        ErrorCategories.State,
+                        remediation: "Use the document's registered active configuration.")));
+        }
+
+        if (!dimensions.TryGetValue(request.ParameterName.Trim(), out FakeDimensionState? dimension))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<DimensionSnapshot>(operation, request.ParameterName.Trim()));
+        }
+
+        Length previousValue = dimension.Value;
+        dimension.Value = request.Value;
+        if (features.FindIndex(feature => feature.FeatureId == dimension.FeatureId) is int featureIndex && featureIndex >= 0)
+        {
+            FeatureSnapshot feature = features[featureIndex];
+            if (feature.Depth is Length oldDepth
+                && bodies.TryGetValue(feature.BodyId, out FakeBodyState? body))
+            {
+                body.ReplaceExtrusion(oldDepth, request.Value);
+            }
+
+            features[featureIndex] = feature with { Depth = request.Value };
+        }
+
+        MarkMutated();
+        DimensionSnapshot snapshot = dimension.ToSnapshot(DocumentId, Configuration);
+        return Task.FromResult(
+            FakeCadResults.Success(
+                snapshot,
+                operation,
+                new EvidenceObservation("dimension.name", snapshot.FullName),
+                new EvidenceObservation("dimension.previous-millimeters", previousValue.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("dimension.value-millimeters", snapshot.Value.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
                 new EvidenceObservation("state.hash", StateHash)));
     }
 
@@ -160,6 +243,32 @@ internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId doc
             .OrderBy(feature => feature.FeatureId.Value, StringComparer.Ordinal)
             .Select(feature => $"feature:{feature.FeatureId.Value}:{feature.Kind}:{feature.Depth?.Millimeters:G17}"));
 
+    // Keep the comparer explicit; replacing this with a collection expression would silently make lookups case-sensitive.
+    // 保留显式 comparer；若改成 collection expression 会悄悄丢失不区分大小写的查找语义。
+#pragma warning disable IDE0028
+    private static Dictionary<string, FakeDimensionState> CreateDimensionMap() =>
+        new(StringComparer.OrdinalIgnoreCase);
+#pragma warning restore IDE0028
+
+    private sealed class FakeDimensionState(FeatureId featureId, string fullName, Length value)
+    {
+        public FeatureId FeatureId { get; } = featureId;
+
+        public string FullName { get; } = fullName;
+
+        public Length Value { get; set; } = value;
+
+        public DimensionSnapshot ToSnapshot(DocumentId documentId, string configuration) => new()
+        {
+            DimensionId = new DimensionId($"{documentId.Value}:dimension:{FullName}"),
+            Name = FullName.Split('@', 2)[0],
+            FullName = FullName,
+            Configuration = configuration,
+            Value = Value,
+            IsReadOnly = false,
+        };
+    }
+
     private sealed class FakeBodyState(BodyId bodyId, string name)
     {
         private int featureCount;
@@ -173,6 +282,11 @@ internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId doc
         {
             featureCount++;
             height = Length.FromMillimeters(height.Millimeters + depth.Millimeters);
+        }
+
+        public void ReplaceExtrusion(Length oldDepth, Length newDepth)
+        {
+            height = Length.FromMillimeters(height.Millimeters + newDepth.Millimeters - oldDepth.Millimeters);
         }
 
         public BodySnapshot ToSnapshot()

@@ -41,6 +41,9 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
 | `ISldWorks.IActivateDoc3` | `ModelDoc2 IActivateDoc3(System.String Name, System.Boolean Silent, out System.Int32 Errors)` | SOLIDWORKS 2022 Interop reflection | [IActivateDoc3 Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISldWorks~IActivateDoc3.html) | Mutation paths activate the exact extension-qualified registered path, reject activation errors, and then re-check path/type/configuration/state hash. |
 | `ISldWorks.CloseDoc` | `System.Void CloseDoc(System.String FileName)` | SOLIDWORKS 2022 Interop reflection | [ISldWorks Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.ISldWorks.html) | B03 passes the registered canonical path, preflights the document as clean, and verifies `GetOpenDocument` returns null after close. |
 | `ISldWorks.OpenDoc6` | `ModelDoc2 OpenDoc6(System.String FileName, System.Int32 Type, System.Int32 Options, System.String Configuration, ref System.Int32 Errors, ref System.Int32 Warnings)` | SOLIDWORKS 2022 Interop reflection; `swDocPART=1`, `swOpenDocOptions_Silent=1` | [Open Document Example (C#)](https://help.solidworks.com/2022/english/api/sldworksapi/Open_Document_Example_CSharp.htm) | B03 uses the documented replacement for obsolete silent-open calls, passes the registered part configuration, rejects a null model or non-zero load error, then revalidates identity and inspection invariants. |
+| `IModelDoc2.Parameter` | `System.Object Parameter(System.String Name)` | SOLIDWORKS 2022 Interop reflection | [IParameter Method (IFeature)](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IFeature~IParameter.html) | The provider accepts only an explicit full parameter identity such as `D1@FeatureName`; a missing object is reported as `SELECTION_STALE`, never guessed from an enumeration index. |
+| `IDimension.SetSystemValue3` | `System.Int32 SetSystemValue3(System.Double NewValue, System.Int32 WhichConfigurations, System.Object Config_names)` | SOLIDWORKS 2022 Interop reflection; `swSetValue_InThisConfiguration=1`, successful return `swSetValue_Successful=0` | [SetSystemValue3 Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDimension~SetSystemValue3.html) | The thin adapter converts canonical millimetres to SOLIDWORKS metres, writes only the registered configuration, checks the status code, then reads back and rebuilds before reporting success. |
+| `IDimension.GetSystemValue3` | `System.Object GetSystemValue3(System.Int32 WhichConfigurations, System.Object Config_names)` | SOLIDWORKS 2022 Interop reflection; read option `swThisConfiguration=1` | [GetSystemValue3 Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDimension~GetSystemValue3.html) | Read-back is mandatory evidence: the setter's return code alone is not proof. The returned system value is normalized from metres to the vendor-neutral `Length` contract. |
 
 - B03 initially passed `(SaveAsOptions=Silent, Options=0)` to `SaveAs3`, which returned `swFileSaveFormatNotAvailable=32`. The
   correction is now `(SaveAsVersion=swSaveAsCurrentVersion, Options=swSaveAsOptions_Silent)` and is protected by the
@@ -62,7 +65,8 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
 ## Provenance / 来源
 
 The signatures above were obtained by reflection against the locally installed `SolidWorks.Interop.sldworks.dll` and
-cross-checked against the linked SOLIDWORKS API Help pages on 2026-09-16. No upstream source code was adapted for B02.
+cross-checked against the linked SOLIDWORKS API Help pages on 2026-09-16. No upstream source code was adapted for B02
+or the B03 named-dimension slice.
 
 以上签名于 2026-09-16 对本机 `SolidWorks.Interop.sldworks.dll` 做反射取得，并与链接的 SOLIDWORKS API Help 交叉核对。
-B02 没有复用任何 upstream 源码。
+B02 和 B03 命名尺寸切片均没有复用任何 upstream 源码。

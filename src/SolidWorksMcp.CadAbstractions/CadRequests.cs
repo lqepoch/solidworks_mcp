@@ -87,6 +87,26 @@ public sealed record ExtrusionRequest
     public BodyId? TargetBodyId { get; init; }
 }
 
+/// <summary>Request to change one named model dimension in the registered active configuration.</summary>
+/// <remarks>
+/// The first native slice accepts the full SOLIDWORKS parameter name, for example <c>D1@Boss-Extrude-1</c>.
+/// 先实现的 native slice 接收完整 SOLIDWORKS parameter name，例如 <c>D1@Boss-Extrude-1</c>。
+/// </remarks>
+public sealed record DimensionUpdateRequest
+{
+    /// <summary>Full model parameter name; short names are intentionally rejected by the native provider.</summary>
+    public string ParameterName { get; init; } = string.Empty;
+
+    /// <summary>New value in canonical millimetres, converted to SOLIDWORKS metres only at the provider boundary.</summary>
+    public Length Value { get; init; }
+
+    /// <summary>
+    /// Optional configuration assertion.  When present, it must match the document's registered active configuration.
+    /// 可选 configuration assertion；填写时必须匹配 document 登记的 active configuration。
+    /// </summary>
+    public string? Configuration { get; init; }
+}
+
 /// <summary>Request to insert one assembly component instance.</summary>
 public sealed record InsertComponentRequest
 {

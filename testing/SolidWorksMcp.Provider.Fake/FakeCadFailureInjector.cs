@@ -18,6 +18,9 @@ public static class FakeCadFailurePoints
     /// <summary>Failure while creating an extrusion feature.</summary>
     public const string AddExtrusion = "part.add-extrusion";
 
+    /// <summary>Failure while changing a named model dimension.</summary>
+    public const string SetDimension = "part.set-dimension";
+
     /// <summary>Failure while inserting an assembly component.</summary>
     public const string InsertComponent = "assembly.insert-component";
 

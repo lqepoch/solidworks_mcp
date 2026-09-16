@@ -310,8 +310,9 @@ placeholder remains skipped when no opt-in Live session is available.
 
 ## B03 native part foundation evidence (partial)
 
-Issue #19/B03 now has a verified native-provider geometry and persisted-lifecycle slice, but it is not complete: named
-dimension/configuration mutation, the remaining part feature services, and F01/F02 transaction routing are still open.
+Issue #19/B03 now has a verified native-provider geometry and persisted-lifecycle slice plus an implemented named
+dimension mutation path, but it is not complete: the named-dimension path still needs an opt-in native Live run in the
+current session, configuration-specific coverage, the remaining part feature services, and F01/F02 transaction routing.
 
 - `providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksDocumentRegistry.cs` binds a document identity to path,
   type, configuration, state hash, dirty state and the verified profile feature name. Routing rejects a missing,
@@ -333,6 +334,11 @@ dimension/configuration mutation, the remaining part feature services, and F01/F
   and rechecks path/type/configuration/profile identity/body/volume/feature/state-hash evidence. It never routes through
   `ActiveDoc` and never exposes a COM handle to the contract layer. FakeCad supplies a logical in-memory lifecycle double
   for Hosted-safe contract coverage; it is not a disk durability claim.
+- `ICadPartDocument.SetDimensionValueAsync` accepts a full native parameter identity and a canonical `Length`, with an
+  optional exact configuration. The native adapter resolves the registered document on the provider STA, uses the
+  official `IDimension.SetSystemValue3` configuration setter, reads the value back through `GetSystemValue3`, rebuilds,
+  inspects positive volume and updates the registered state hash. A setter return code without read-back and geometry
+  evidence is not accepted as success. FakeCad covers the contract; it does not prove native COM behavior.
 - `src/SolidWorksMcp.EngineeringModel/PartDrawingRequirements.cs` adds the first immutable, vendor-neutral drawing
   requirement set. It models orthographic/isometric coverage, holes, bend radius, thickness, section/detail need,
   material, general tolerance, surface finish and title-block requirements. Private visual review creates only
@@ -340,7 +346,7 @@ dimension/configuration mutation, the remaining part feature services, and F01/F
 
 Official API evidence recorded in `docs/research/solidworks-api-knowledge.md` covers `GetDocumentTemplate`,
 `INewDocument2`, `CreateCircleByRadius`, `FeatureExtrusion3`, `ForceRebuild3`, `SaveAs3`, `IActivateDoc3`,
-`CloseDoc` and `OpenDoc6`. The latest local Live run passed session attachment, sketch creation, persisted part creation,
+`CloseDoc`, `OpenDoc6`, `Parameter`, `SetSystemValue3` and `GetSystemValue3`. The latest local Live run passed session attachment, sketch creation, persisted part creation,
 non-null extrusion, rebuild, positive body/volume inspection, feature identity inspection, save, exact close, OpenDoc6
 reopen, post-reopen inspection and explicit document close. The test used only an isolated user-local workspace and did
 not close the interactive SOLIDWORKS process. No complete B03 release claim is made.
@@ -351,10 +357,14 @@ Evidence command and result:
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
     dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 52 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
 
-Live status: the explicit opt-in B03 test passed in the local SOLIDWORKS environment, including native sketch,
+Live status: the earlier explicit opt-in B03 test passed in the local SOLIDWORKS environment, including native sketch,
 extrusion, rebuild, inspection, save, exact document close, OpenDoc6 reopen, post-reopen inspection and final close.
-The test does not close the interactive SOLIDWORKS process. The explicit opt-in Live test is skipped when
+That run predates the named-dimension assertion. The current explicit opt-in Live test is skipped when
 `SOLIDWORKS_MCP_LIVE_PROCESS_ID` and `SOLIDWORKS_MCP_LIVE_WORKSPACE` are absent.
+
+The current Hosted-safe run passed the FakeCad named-dimension mutation and the native provider build. No claim is made
+that `SetSystemValue3` has passed against a real SOLIDWORKS session until the test is rerun with an explicitly supplied
+user-started process and isolated workspace.
 
 Additional local Live evidence:
 

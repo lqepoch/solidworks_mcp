@@ -45,6 +45,21 @@ public readonly record struct FeatureId
     public string Value { get; }
 }
 
+/// <summary>Stable identity of a model dimension or parameter.</summary>
+/// <remarks>
+/// A dimension identity is separate from its rendered drawing annotation.  尺寸 identity 与工程图上的尺寸标注
+/// 分离；重新生成 drawing 不得改变模型参数本身的逻辑 identity。
+/// </remarks>
+public readonly record struct DimensionId
+{
+    /// <summary>Creates an opaque dimension identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
+    public DimensionId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
+
+    /// <summary>Gets the stable serialized value.</summary>
+    public string Value { get; }
+}
+
 /// <summary>Stable identity of an engineering requirement independent of a CAD feature or drawing annotation.</summary>
 /// <remarks>
 /// A requirement remains the same logical object when its model feature, view or annotation is regenerated.  工程要求的

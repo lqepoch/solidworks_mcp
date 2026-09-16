@@ -69,6 +69,32 @@ public sealed record FeatureSnapshot
     public Length? Depth { get; init; }
 }
 
+/// <summary>Verified snapshot of one named model dimension.</summary>
+/// <remarks>
+/// The value is read back from the CAD parameter after mutation/rebuild; it is not copied from a request alone.
+/// value 必须在 mutation/rebuild 后从 CAD parameter 读回，不能只把 request 当成成功证据。
+/// </remarks>
+public sealed record DimensionSnapshot
+{
+    /// <summary>Stable provider-neutral dimension identity.</summary>
+    public required DimensionId DimensionId { get; init; }
+
+    /// <summary>Short native dimension name, such as D1.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Full native parameter name used for resolution.</summary>
+    public required string FullName { get; init; }
+
+    /// <summary>Configuration in which the value was verified.</summary>
+    public required string Configuration { get; init; }
+
+    /// <summary>Read-back value in canonical millimetres.</summary>
+    public required Length Value { get; init; }
+
+    /// <summary>Whether SOLIDWORKS reports this dimension as read-only.</summary>
+    public required bool IsReadOnly { get; init; }
+}
+
 /// <summary>Inspection snapshot of one assembly component instance.</summary>
 public sealed record ComponentSnapshot
 {

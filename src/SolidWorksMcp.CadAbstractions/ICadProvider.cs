@@ -119,6 +119,17 @@ public interface ICadPartDocument : ICadDocument
     Task<OperationResult<FeatureSnapshot>> AddExtrusionAsync(
         ExtrusionRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Changes one named model dimension, rebuilds the part and returns read-back evidence.</summary>
+    /// <remarks>
+    /// Providers must resolve the exact dimension identity and active configuration before mutation.  A raw setter
+    /// return code is never sufficient; the provider must read the value back and inspect resulting geometry.
+    /// Provider 必须在 mutation 前解析精确的 dimension identity 和 active configuration；setter 返回码不是成功证明，
+    /// 必须读回 value 并 inspection 几何结果。
+    /// </remarks>
+    Task<OperationResult<DimensionSnapshot>> SetDimensionValueAsync(
+        DimensionUpdateRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Assembly-specific component and mate mutations.</summary>
