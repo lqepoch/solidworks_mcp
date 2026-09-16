@@ -355,7 +355,7 @@ Evidence command and result:
 
     dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 52 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
 
 Live status: the earlier explicit opt-in B03 test passed in the local SOLIDWORKS environment, including native sketch,
 extrusion, rebuild, inspection, save, exact document close, OpenDoc6 reopen, post-reopen inspection and final close.
@@ -375,6 +375,42 @@ The command above is shown with placeholders so a machine-specific PID or local 
 contract. The running SOLIDWORKS process was not closed by the test; only the provider-owned COM attachment was
 detached. The native document itself was explicitly closed before test completion, allowing the successful isolated
 artifact cleanup path to run.
+
+## B06 structured native diagnostics evidence (partial)
+
+Issue #22/B06 now has a narrow, fail-closed native diagnostics slice. It is not complete: modal detection and bounded
+dialog recovery, screenshots, drawing export, and the remaining document-level error surfaces still require their own
+provider contracts and Live evidence.
+
+- `src/SolidWorksMcp.CadAbstractions/CadDiagnostics.cs` defines the vendor-neutral `CadDiagnostic` contract with a
+  stable code, severity, privacy-safe classification, scope, entity identity and optional native numeric code.
+  Raw SOLIDWORKS modal/UI text, file contents and COM exception text are deliberately outside the shared contract.
+- `SolidWorksNativeInspection` reads the official `IFeature.GetErrorCode2` signal while traversing the feature tree on
+  the provider STA. Non-zero warning/error codes become structured diagnostics associated with the stable document and
+  feature identity; inspection evidence includes diagnostic totals and severity totals.
+- Native part rebuild now reuses the complete inspection reader after `ForceRebuild3`, carries the diagnostics in
+  `RebuildReceipt`, and fails closed when an error-level diagnostic is present. Extrusion and named-dimension mutation
+  apply the same post-rebuild error gate, so a non-null COM result or a `true` rebuild return cannot alone claim health.
+- `tests/SolidWorksMcp.UnitTests/CadDiagnosticsTests.cs` protects warning/error semantics and receipt propagation.
+
+Official API evidence is recorded in `docs/research/solidworks-api-knowledge.md`:
+[IFeature.GetErrorCode2](https://help.solidworks.com/2025/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SolidWorks.Interop.sldworks.IFeature~GetErrorCode2.html).
+The locally installed SOLIDWORKS 2022 interop was inspected and its callable signature matches the documented API
+shape used by the provider. The linked Help revision is 2025 because that is the public indexed page used for the
+current API citation; this is not a claim that a newer vendor binary was copied into the repository.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.slnx -c Release --no-build --logger "console;verbosity=minimal"     # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
+    dotnet build SolidWorksMcp.hosted.slnx --configuration Release --no-restore -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx --configuration Release --no-build -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed
+
+No new Live SOLIDWORKS run was claimed in this slice because the explicit local Live opt-in variables were absent at
+execution time. Existing B03 Live evidence remains valid for the previously verified geometry/lifecycle path, but it
+does not prove that every new diagnostic branch has observed a real feature error in SOLIDWORKS. No complete B06 claim
+is made.
 
 ## Native stdio composition evidence (partial)
 
@@ -397,9 +433,9 @@ Evidence command and result:
 
     dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 55 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
     dotnet build SolidWorksMcp.hosted.slnx --configuration Release --no-restore -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.hosted.slnx --configuration Release --no-build -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true --logger "console;verbosity=minimal" # exit 0; Unit 55 + Contract 7 + FakeCad 7 passed
+    dotnet test SolidWorksMcp.hosted.slnx --configuration Release --no-build -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed
 
 The native executable was started as a local stdio child and successfully completed MCP `initialize`, `tools/list`
 and `cad.capabilities` requests. The response identified the native provider and exposed four tools. The smoke test

@@ -36,7 +36,7 @@ internal static class SolidWorksNativeInspectionReader
 
             string stateHash = SolidWorksDocumentRouting.ComputeStateHash(model);
             ImmutableArray<BodySnapshot> bodies = ReadBodies(model, descriptor, out double totalMassKg, out double totalVolumeM3);
-            ImmutableArray<FeatureSnapshot> features = ReadFeatures(model, descriptor, bodies);
+            ImmutableArray<FeatureSnapshot> features = ReadFeatures(model, descriptor, bodies, out ImmutableArray<CadDiagnostic> diagnostics);
             var snapshot = new CadInspectionSnapshot
             {
                 Document = new CadDocumentSummary
@@ -50,6 +50,7 @@ internal static class SolidWorksNativeInspectionReader
                 },
                 Bodies = bodies,
                 Features = features,
+                Diagnostics = diagnostics,
             };
             return OperationResults.Success(
                 snapshot,
@@ -60,6 +61,9 @@ internal static class SolidWorksNativeInspectionReader
                         new EvidenceObservation("document.id", descriptor.DocumentId.Value),
                         new EvidenceObservation("body.count", bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("feature.count", features.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("diagnostic.count", diagnostics.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("diagnostic.error.count", diagnostics.Count(diagnostic => diagnostic.Severity is CadDiagnosticSeverity.Error).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("diagnostic.warning.count", diagnostics.Count(diagnostic => diagnostic.Severity is CadDiagnosticSeverity.Warning).ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("mass.kg", totalMassKg.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("volume.millimeters3", (totalVolumeM3 * 1_000_000_000d).ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("state.hash", stateHash),
@@ -150,9 +154,11 @@ internal static class SolidWorksNativeInspectionReader
     private static ImmutableArray<FeatureSnapshot> ReadFeatures(
         ModelDoc2 model,
         SolidWorksDocumentDescriptor descriptor,
-        ImmutableArray<BodySnapshot> bodies)
+        ImmutableArray<BodySnapshot> bodies,
+        out ImmutableArray<CadDiagnostic> diagnostics)
     {
         var snapshots = ImmutableArray.CreateBuilder<FeatureSnapshot>();
+        var diagnosticBuilder = ImmutableArray.CreateBuilder<CadDiagnostic>();
         var current = model.FirstFeature() as IFeature;
         BodyId owner = bodies.Length > 0
             ? bodies[0].BodyId
@@ -166,6 +172,26 @@ internal static class SolidWorksNativeInspectionReader
                 {
                     string name = current.Name?.Trim() ?? "UnnamedFeature";
                     string kind = current.GetTypeName2()?.Trim() ?? "Unknown";
+                    int nativeErrorCode = current.GetErrorCode2(out bool isWarning);
+                    if (nativeErrorCode != 0)
+                    {
+                        // GetErrorCode2 is the documented What's Wrong signal.  Preserve only a stable classification,
+                        // the numeric code and the provider-stable feature identity; never copy modal/UI text.
+                        // GetErrorCode2 是官方 What's Wrong 信号。这里只保留稳定分类、numeric code 和 Provider 稳定
+                        // feature identity，绝不复制 modal/UI 原文。
+                        diagnosticBuilder.Add(
+                            new CadDiagnostic
+                            {
+                                Code = isWarning ? "feature.rebuild-warning" : "feature.rebuild-error",
+                                Severity = isWarning ? CadDiagnosticSeverity.Warning : CadDiagnosticSeverity.Error,
+                                Message = isWarning
+                                    ? "SOLIDWORKS reported a rebuild warning on this feature."
+                                    : "SOLIDWORKS reported a rebuild error on this feature.",
+                                Scope = "feature",
+                                EntityIdentity = $"{descriptor.DocumentId.Value}:feature:{name}",
+                                NativeCode = nativeErrorCode,
+                            });
+                    }
                     snapshots.Add(
                         new FeatureSnapshot
                         {
@@ -189,6 +215,7 @@ internal static class SolidWorksNativeInspectionReader
             SolidWorksDocumentRouting.Release(current);
         }
 
+        diagnostics = diagnosticBuilder.ToImmutable();
         return snapshots.ToImmutable();
     }
 

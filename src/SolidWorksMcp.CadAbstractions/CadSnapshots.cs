@@ -192,6 +192,15 @@ public sealed record CadInspectionSnapshot
     /// <summary>Model features; empty when not available.</summary>
     public ImmutableArray<FeatureSnapshot> Features { get; init; } = [];
 
+    /// <summary>
+    /// Structured rebuild/What's Wrong diagnostics captured during inspection.
+    /// inspection 期间采集的结构化 rebuild/What's Wrong 诊断；不会用截图或裸 bool 替代它。
+    /// </summary>
+    public ImmutableArray<CadDiagnostic> Diagnostics { get; init; } = [];
+
+    /// <summary>True when at least one error-level diagnostic is present.</summary>
+    public bool HasErrors => Diagnostics.Any(diagnostic => diagnostic.Severity is CadDiagnosticSeverity.Error);
+
     /// <summary>Assembly components; empty for non-assembly documents.</summary>
     public ImmutableArray<ComponentSnapshot> Components { get; init; } = [];
 
@@ -213,6 +222,9 @@ public sealed record RebuildReceipt
 
     /// <summary>Gets whether the provider reported rebuild errors.</summary>
     public required bool HasErrors { get; init; }
+
+    /// <summary>Gets structured diagnostics captured after the rebuild.</summary>
+    public ImmutableArray<CadDiagnostic> Diagnostics { get; init; } = [];
 }
 
 /// <summary>Evidence-bearing completion receipt for a successful save.</summary>

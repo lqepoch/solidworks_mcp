@@ -1,4 +1,5 @@
-﻿using SolidWorks.Interop.sldworks;
+﻿using System.Collections.Immutable;
+using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Protocol;
@@ -356,6 +357,21 @@ internal sealed class SolidWorksNativePartDocument(
                 return OperationResults.Failure<NativeExtrusionResult>(inspection.OperationId, inspection.Error!, inspection.Evidence);
             }
 
+            if (inspection.Value.HasErrors)
+            {
+                return OperationResults.Failure<NativeExtrusionResult>(
+                    "solidworks:feature.extrusion",
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS reported feature errors after the extrusion rebuild.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the artifact, inspect the structured What's Wrong diagnostics and repair the feature."),
+                    new OperationEvidence(
+                        "solidworks-provider",
+                        BuildDiagnosticEvidence(inspection.Value.Diagnostics),
+                        stateHash: inspection.Value.Document.StateHash));
+            }
+
             if (inspection.Value.Bodies.Length == 0 || inspection.Value.Bodies[0].Volume.CubicMillimeters <= 0d)
             {
                 return SolidWorksProviderResults.Failure<NativeExtrusionResult>(
@@ -445,14 +461,58 @@ internal sealed class SolidWorksNativePartDocument(
                         ErrorCategories.Invariant));
             }
 
-            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolved.Value);
-            var updated = current with { StateHash = stateHash, IsDirty = resolved.Value.GetSaveFlag() };
-            var receipt = new RebuildReceipt { StateHash = stateHash, HasErrors = false };
+            // ForceRebuild3 returning true is not sufficient proof: SOLIDWORKS can still mark a feature with a
+            // What's Wrong error. Reuse the complete inspection reader so geometry and diagnostics share one state hash.
+            // ForceRebuild3 返回 true 仍不是充分证据：SOLIDWORKS 可能同时在 Feature 上标记 What's Wrong error。
+            // 复用完整 inspection reader，让 geometry、diagnostics 共用同一个 state hash。
+            OperationResult<CadInspectionSnapshot> inspection = SolidWorksNativeInspectionReader.ReadPart(resolved.Value, current);
+            if (!inspection.IsSuccess || inspection.Value is null)
+            {
+                return OperationResults.Failure<NativeRebuildResult>(
+                    "solidworks:part.rebuild",
+                    inspection.Error
+                        ?? new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "SOLIDWORKS rebuild produced no complete inspection evidence.",
+                            ErrorCategories.Invariant),
+                    inspection.Evidence);
+            }
+
+            ImmutableArray<CadDiagnostic> diagnostics = inspection.Value.Diagnostics;
+            string stateHash = inspection.Value.Document.StateHash;
+            var updated = current with { StateHash = stateHash, IsDirty = inspection.Value.Document.IsDirty };
+            var receipt = new RebuildReceipt
+            {
+                StateHash = stateHash,
+                HasErrors = inspection.Value.HasErrors,
+                Diagnostics = diagnostics,
+            };
+            ImmutableArray<EvidenceObservation> evidence =
+            [
+                new EvidenceObservation("rebuild.returned", bool.TrueString),
+                new EvidenceObservation("diagnostic.count", diagnostics.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("diagnostic.error.count", diagnostics.Count(diagnostic => diagnostic.Severity is CadDiagnosticSeverity.Error).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("diagnostic.warning.count", diagnostics.Count(diagnostic => diagnostic.Severity is CadDiagnosticSeverity.Warning).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                .. BuildDiagnosticEvidence(diagnostics),
+                new EvidenceObservation("state.hash", stateHash),
+            ];
+
+            if (inspection.Value.HasErrors)
+            {
+                return OperationResults.Failure<NativeRebuildResult>(
+                    "solidworks:part.rebuild",
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS rebuild returned feature errors in the post-rebuild What's Wrong inspection.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the artifact, inspect the structured diagnostics and repair the feature before retrying."),
+                    new OperationEvidence("solidworks-provider", evidence, stateHash: stateHash));
+            }
+
             return SolidWorksProviderResults.Success(
                 "part.rebuild",
                 new NativeRebuildResult(receipt, updated),
-                new EvidenceObservation("rebuild.returned", bool.TrueString),
-                new EvidenceObservation("state.hash", stateHash));
+                [.. evidence]);
         }
         finally
         {
@@ -592,6 +652,21 @@ internal sealed class SolidWorksNativePartDocument(
             if (!inspection.IsSuccess || inspection.Value is null)
             {
                 return OperationResults.Failure<NativeDimensionResult>(inspection.OperationId, inspection.Error!, inspection.Evidence);
+            }
+
+            if (inspection.Value.HasErrors)
+            {
+                return OperationResults.Failure<NativeDimensionResult>(
+                    "solidworks:dimension.set",
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS reported feature errors after the dimension rebuild.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the artifact, inspect the structured What's Wrong diagnostics and repair the feature."),
+                    new OperationEvidence(
+                        "solidworks-provider",
+                        BuildDiagnosticEvidence(inspection.Value.Diagnostics),
+                        stateHash: inspection.Value.Document.StateHash));
             }
 
             if (inspection.Value.Bodies.Length == 0 || inspection.Value.Bodies[0].Volume.CubicMillimeters <= 0d)
@@ -1034,6 +1109,38 @@ internal sealed class SolidWorksNativePartDocument(
             SolidWorksDocumentRouting.Release(currentModel);
             SolidWorksDocumentRouting.Release(reopened);
         }
+    }
+
+    /// <summary>
+    /// Converts safe diagnostic records into evidence observations for failed mutations.
+    /// 将安全诊断记录转换为失败 mutation 使用的 evidence observations。
+    /// </summary>
+    private static ImmutableArray<EvidenceObservation> BuildDiagnosticEvidence(
+        IEnumerable<CadDiagnostic> diagnostics)
+    {
+        var observations = ImmutableArray.CreateBuilder<EvidenceObservation>();
+        int index = 0;
+        foreach (CadDiagnostic diagnostic in diagnostics)
+        {
+            string prefix = $"diagnostic.{index++}";
+            observations.Add(new EvidenceObservation($"{prefix}.code", diagnostic.Code));
+            observations.Add(new EvidenceObservation($"{prefix}.severity", diagnostic.Severity.ToString()));
+            observations.Add(new EvidenceObservation($"{prefix}.scope", diagnostic.Scope));
+            observations.Add(new EvidenceObservation($"{prefix}.message", diagnostic.Message));
+            if (diagnostic.EntityIdentity is not null)
+            {
+                observations.Add(new EvidenceObservation($"{prefix}.entity", diagnostic.EntityIdentity));
+            }
+
+            if (diagnostic.NativeCode is int nativeCode)
+            {
+                observations.Add(new EvidenceObservation(
+                    $"{prefix}.native-code",
+                    nativeCode.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+        }
+
+        return observations.ToImmutable();
     }
 }
 
