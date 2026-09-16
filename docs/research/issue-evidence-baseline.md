@@ -176,7 +176,7 @@ No Live SOLIDWORKS test was used for A05; capability negotiation and configurati
 
 ## B01 local implementation evidence
 
-Issue #17/B01 is implemented locally in the pending discovery/build-input commit; the final commit SHA will be recorded immediately after verification.
+Issue #17/B01 is implemented locally in commit `2600ee8`.
 
 - `scripts/Invoke-SolidWorksMcpDoctor.ps1` discovers installations through SolidWorks and Windows uninstall registry locations plus standard Program Files roots, then reports executable version/revision, API redist, both Interop DLL paths, type libraries and templates. It reports `complete` or `partial` with actionable missing entries.
 - Installation roots are sorted before probing, and results are sorted by parsed product version descending then executable path ascending. The selected installation is therefore deterministic when multiple SolidWorks versions are present.
