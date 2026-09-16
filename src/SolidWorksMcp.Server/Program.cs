@@ -1,11 +1,31 @@
-﻿namespace SolidWorksMcp.Server;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
+using SolidWorksMcp.Protocol;
+using SolidWorksMcp.Server;
 
-internal static class Program
-{
-    private static void Main()
+// The production executable uses the official MCP C# SDK and stdio as its default transport.
+// 生产入口使用官方 MCP C# SDK，并将 stdio 作为默认传输；日志只写 stderr，保持 stdout 为 MCP wire。
+var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddSolidWorksMcp();
+builder.Services
+    .AddMcpServer(options =>
     {
-        // MCP registration is introduced by Issue #13 after the boundary scaffold.
-        // MCP 注册将在边界脚手架完成后由 Issue #13 引入。
-        Console.Error.WriteLine("SolidWorksMcp.Server foundation is present; MCP host bootstrap is tracked by Issue #13.");
-    }
-}
+        options.ServerInfo = new Implementation
+        {
+            Name = "solidworks-mcp",
+            Version = ProtocolSchema.CurrentVersion,
+        };
+        options.Capabilities = new ServerCapabilities { Tools = new ToolsCapability() };
+    })
+    .WithStdioServerTransport()
+    .WithTools<CadMcpTools>();
+
+builder.Logging.AddConsole(options =>
+{
+    options.LogToStandardErrorThreshold = LogLevel.Trace;
+});
+
+await builder.Build().RunAsync();

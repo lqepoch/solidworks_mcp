@@ -4,7 +4,9 @@ SolidWorksMcp is a planned .NET 10/C# enterprise MCP server and deterministic En
 
 ## Current bootstrap status
 
-The repository now contains the approved module boundaries, a Hosted-safe solution filter, architecture guards, pinned research manifest, licensing policy, AGENTS instructions and a read-only Windows doctor. SOLIDWORKS COM mutation and the MCP tool host are not claimed complete yet; they are tracked by Issues #13 and #17-#22.
+The repository now contains the approved module boundaries, a Hosted-safe solution filter, architecture guards, pinned research manifest, licensing policy, AGENTS instructions, a read-only Windows doctor and the first official C# MCP stdio host. The A02 host exposes a compact `cad.health`, `cad.capabilities`, `cad.create-part` and `cad.inspect` registry; the default executable still uses an explicit unavailable provider until the native SOLIDWORKS provider work in Issues #17-#22 is complete.
+
+The MCP host keeps stdout reserved for the protocol wire and sends console logs to stderr. Its mutation boundary advertises flat, versioned input schemas, validates the schema before starting a CAD session, and returns the typed operation envelope as structured content. Contract tests exercise the official SDK client against FakeCad; they do not claim a live SOLIDWORKS COM result.
 
 Read the Issue evidence baseline before selecting work. The critical path is defined by GitHub Epic #1: #2 -> (#7,#8,#9,#10) -> #3 -> #4 -> #5 -> (#6,#11).
 

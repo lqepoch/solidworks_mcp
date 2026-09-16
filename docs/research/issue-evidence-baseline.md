@@ -133,3 +133,23 @@ Evidence command and result:
     dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --logger "trx;LogFileName=a03-final.trx" # exit 0; 27 passed; 0 failed; 0 skipped
 
 Live SOLIDWORKS was not used for A03; the native implementation and shared-suite execution are deferred to #17 and #51.
+
+## A02 local implementation evidence
+
+Issue #13/A02 is implemented locally in the pending server-host commit; the final commit SHA will be recorded immediately after verification.
+
+- `src/SolidWorksMcp.Server/Program.cs` uses the official Model Context Protocol C# SDK with the standard DI host and stdio transport. Console logging is directed to stderr so stdout remains an unpolluted MCP wire.
+- `src/SolidWorksMcp.Server/ServerComposition.cs` registers an explicitly supplied provider for tests/native hosting, or a safe unavailable provider that reports `UNSUPPORTED_CAPABILITY` instead of pretending that SOLIDWORKS is connected.
+- `src/SolidWorksMcp.Server/McpToolCatalog.cs` keeps the default agent-facing surface compact and records tier, preconditions, side effects and required capability for each tool. The current registry contains `cad.health`, `cad.capabilities`, `cad.create-part` and `cad.inspect`.
+- `src/SolidWorksMcp.Server/CadMcpTools.cs` validates the protocol schema version and required identities before asking `CadSessionAccessor` to start a provider session. Tool input is intentionally represented as flat top-level parameters because the official SDK maps reflected method parameters directly into the advertised MCP schema.
+- `src/SolidWorksMcp.Server/CadSessionAccessor.cs` serializes lazy session startup and owns session disposal for the host lifetime. It is deliberately not a substitute for the STA/transaction engine required by Issues #18 and #43-#48.
+- `tests/SolidWorksMcp.ContractTests/McpServerIntegrationTests.cs` uses the official SDK `McpClient` over paired in-memory streams and FakeCad to verify handshake, `tools/list` metadata, structured results, malformed-input rejection before provider execution and one valid controlled mutation path.
+
+Evidence command and result:
+
+    dotnet restore SolidWorksMcp.hosted.slnx                                                                  # exit 0
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info                 # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore                                           # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --logger "console;verbosity=normal"          # exit 0; 30 passed; 0 failed; 0 skipped
+
+The 30 Hosted-safe tests are 22 Unit, 4 FakeCad and 4 Contract tests (including the reusable provider workflow and three MCP SDK integration tests). No Live SOLIDWORKS test was used for A02; native COM behavior remains explicitly deferred to Issues #17-#22 and the local Live harness in #51.
