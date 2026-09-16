@@ -304,13 +304,14 @@ Evidence command and result:
     dotnet test SolidWorksMcp.slnx -c Release --no-restore --no-build --logger "console;verbosity=minimal" # exit 0; 59 passed; 0 failed; 1 skipped
 
 F02 remains intentionally partial until a native SOLIDWORKS checkpoint coordinator can restore/reopen an isolated
-document and verify the provider state hash. The Live suite still has no real mutation evidence; its four dispatcher
-tests pass and its one explicit placeholder remains skipped when no opt-in Live session is available.
+document and verify the provider state hash as part of rollback. The provider now has a separate native lifecycle proof;
+it is not yet a checkpoint or rollback implementation. The Live suite has real B03 mutation evidence, while its explicit
+placeholder remains skipped when no opt-in Live session is available.
 
 ## B03 native part foundation evidence (partial)
 
-Issue #19/B03 now has a verified native-provider geometry slice, but it is not complete: the current Live proof does
-not yet close/reopen the document, and the mutation is not yet routed through the F01/F02 transaction coordinator.
+Issue #19/B03 now has a verified native-provider geometry and persisted-lifecycle slice, but it is not complete: named
+dimension/configuration mutation, the remaining part feature services, and F01/F02 transaction routing are still open.
 
 - `providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksDocumentRegistry.cs` binds a document identity to path,
   type, configuration, state hash, dirty state and the verified profile feature name. Routing rejects a missing,
@@ -326,28 +327,33 @@ not yet close/reopen the document, and the mutation is not yet routed through th
   bodies, bounding box, feature identity/type and mass/volume through native APIs, then converts the evidence to
   `CadAbstractions` records. Feature metadata is copied before the inspection reader releases potentially shared
   feature RCWs, avoiding a real `InvalidComObjectException` found by Live testing.
+- `ICadDocument.CloseAsync` and `ICadDocument.ReopenAndInspectAsync` define a high-level persisted lifecycle contract.
+  The native part facade performs a clean-state preflight, invokes `CloseDoc` with the registered canonical path,
+  verifies the exact document is closed, invokes `OpenDoc6` on the provider STA with the registered part configuration,
+  and rechecks path/type/configuration/profile identity/body/volume/feature/state-hash evidence. It never routes through
+  `ActiveDoc` and never exposes a COM handle to the contract layer. FakeCad supplies a logical in-memory lifecycle double
+  for Hosted-safe contract coverage; it is not a disk durability claim.
 - `src/SolidWorksMcp.EngineeringModel/PartDrawingRequirements.cs` adds the first immutable, vendor-neutral drawing
   requirement set. It models orthographic/isometric coverage, holes, bend radius, thickness, section/detail need,
   material, general tolerance, surface finish and title-block requirements. Private visual review creates only
   `ReviewRequired` proposals with `private_drawing_review` provenance; explicit approval is required before release.
 
 Official API evidence recorded in `docs/research/solidworks-api-knowledge.md` covers `GetDocumentTemplate`,
-`INewDocument2`, `CreateCircleByRadius`, `FeatureExtrusion3`, `ForceRebuild3`, `SaveAs3` and `IActivateDoc3`. The
-latest local Live run passed session attachment, sketch creation, persisted part creation, non-null extrusion,
-rebuild, positive body/volume inspection, feature identity inspection and save. The test reports cleanup as deferred
-when SOLIDWORKS still owns the document file handle and leaves that artifact in the explicit isolated quarantine.
-Close/reopen/re-inspect and transaction-engine routing remain the next B03/F01 follow-up; no complete B03 release
-claim is made.
+`INewDocument2`, `CreateCircleByRadius`, `FeatureExtrusion3`, `ForceRebuild3`, `SaveAs3`, `IActivateDoc3`,
+`CloseDoc` and `OpenDoc6`. The latest local Live run passed session attachment, sketch creation, persisted part creation,
+non-null extrusion, rebuild, positive body/volume inspection, feature identity inspection, save, exact close, OpenDoc6
+reopen, post-reopen inspection and explicit document close. The test used only an isolated user-local workspace and did
+not close the interactive SOLIDWORKS process. No complete B03 release claim is made.
 
 Evidence command and result:
 
     dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 52 + Contract 7 + FakeCad 6 passed; Live 4 passed + 2 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 52 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
 
 Live status: the explicit opt-in B03 test passed in the local SOLIDWORKS environment, including native sketch,
-extrusion, rebuild, inspection and save. Cleanup was deferred because the interactive document remained open; this
-is a quarantine status, not a geometry failure. The explicit opt-in Live test is skipped when
+extrusion, rebuild, inspection, save, exact document close, OpenDoc6 reopen, post-reopen inspection and final close.
+The test does not close the interactive SOLIDWORKS process. The explicit opt-in Live test is skipped when
 `SOLIDWORKS_MCP_LIVE_PROCESS_ID` and `SOLIDWORKS_MCP_LIVE_WORKSPACE` are absent.
 
 Additional local Live evidence:
@@ -357,7 +363,8 @@ Additional local Live evidence:
 
 The command above is shown with placeholders so a machine-specific PID or local workspace is not treated as a source
 contract. The running SOLIDWORKS process was not closed by the test; only the provider-owned COM attachment was
-detached, and the saved test document remained quarantined because the interactive process retained its file handle.
+detached. The native document itself was explicitly closed before test completion, allowing the successful isolated
+artifact cleanup path to run.
 
 ## Private drawing fixture review evidence (redacted)
 

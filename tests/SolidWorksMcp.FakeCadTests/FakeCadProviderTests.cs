@@ -166,6 +166,34 @@ public sealed class FakeCadProviderTests
         Assert.Equal(ErrorCodes.SelectionStale, result.Error!.Code);
     }
 
+    /// <summary>FakeCad exposes the same save/close/reopen contract while keeping private file I/O out of hosted tests.</summary>
+    /// <remarks>FakeCad 在不接触私有文件 I/O 的 Hosted-safe 测试中，仍暴露与 native provider 相同的生命周期契约。</remarks>
+    [Fact]
+    public async Task PersistedLifecycleContractReturnsFreshInspectionEvidence()
+    {
+        await using var provider = new FakeCadProvider();
+        await using ICadSession session = (await provider.StartSessionAsync(new CadSessionOptions())).RequireSuccess();
+        ICadPartDocument part = (await session.CreatePartAsync(new CreatePartRequest())).RequireSuccess();
+        BodySnapshot body = (await part.CreateBodyAsync(new CreateBodyRequest())).RequireSuccess();
+        FeatureSnapshot feature = (await part.AddExtrusionAsync(new ExtrusionRequest
+        {
+            Name = "Persisted feature",
+            Depth = Length.FromMillimeters(10d),
+            TargetBodyId = body.BodyId,
+        })).RequireSuccess();
+        _ = (await part.RebuildAsync()).RequireSuccess();
+        _ = (await part.SaveAsync()).RequireSuccess();
+
+        CadInspectionSnapshot reopened = (await part.ReopenAndInspectAsync()).RequireSuccess();
+        Assert.Contains(reopened.Features, candidate => candidate.FeatureId == feature.FeatureId);
+        Assert.True(reopened.Bodies[0].Volume.CubicMillimeters > 0d);
+        OperationResult<MutationReceipt> close = await part.CloseAsync();
+        Assert.True(close.IsSuccess, $"Expected success but received {close.Error?.Code}: {close.Error?.Message}");
+        Assert.Contains(
+            close.Evidence!.Observations,
+            observation => observation.Key == "document.closed" && observation.Value == bool.TrueString);
+    }
+
 }
 
 /// <summary>Local assertion extension shared by FakeCad tests.</summary>
@@ -178,4 +206,5 @@ internal static class FakeCadTestResultExtensions
         Assert.NotNull(result.Value);
         return result.Value!;
     }
+
 }

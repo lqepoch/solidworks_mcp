@@ -39,6 +39,18 @@ internal sealed class FakeCadInspectionService(FakeCadSession session) : ICadIns
             return Task.FromResult(FakeCadResults.NotFound<CadInspectionSnapshot>(operation, documentId.Value));
         }
 
+        if (document.IsDocumentClosed)
+        {
+            return Task.FromResult(
+                FakeCadResults.Failure<CadInspectionSnapshot>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The fake CAD document is closed.",
+                        ErrorCategories.State,
+                        remediation: "Reopen the document handle before inspecting it.")));
+        }
+
         CadInspectionSnapshot snapshot = document.BuildInspection();
         return Task.FromResult(
             FakeCadResults.Success(

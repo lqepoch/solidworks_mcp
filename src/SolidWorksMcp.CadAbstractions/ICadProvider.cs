@@ -81,6 +81,30 @@ public interface ICadDocument
 
     /// <summary>Persists the document according to provider path and overwrite policy.</summary>
     Task<OperationResult<SaveReceipt>> SaveAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Closes this document handle without closing the owning CAD session.
+    /// 关闭当前 document handle，但不关闭所属 CAD session。
+    /// </summary>
+    /// <remarks>
+    /// Providers must verify that the exact persisted document is clean and close only that identity.  A native provider
+    /// must not silently close whichever document happens to be active.  Provider 必须校验精确的持久化文档已保存，
+    /// 只关闭该 identity；不能静默关闭当时恰好 active 的其它文档。
+    /// </remarks>
+    Task<OperationResult<MutationReceipt>> CloseAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Closes and reopens this persisted document, then returns fresh inspection evidence.
+    /// 关闭并重新打开持久化 document，然后返回新的 inspection evidence。
+    /// </summary>
+    /// <remarks>
+    /// This is intentionally a high-level lifecycle proof rather than a client-controlled COM sequence.  The native
+    /// provider performs CloseDoc/OpenDoc6 on its STA and revalidates path, type, configuration, feature identity and
+    /// geometry after reopening.  这是高层生命周期证明，不把 COM 序列暴露给 MCP client；原生 Provider 在 STA 上
+    /// 调用 CloseDoc/OpenDoc6，并在 reopen 后重新校验 path、type、configuration、feature identity 和 geometry。
+    /// </remarks>
+    Task<OperationResult<CadInspectionSnapshot>> ReopenAndInspectAsync(
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Part-specific feature and body mutations.</summary>

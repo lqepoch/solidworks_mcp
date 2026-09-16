@@ -6,8 +6,8 @@ using SolidWorksMcp.Provider.SolidWorks;
 namespace SolidWorksMcp.LiveSolidWorksTests;
 
 /// <summary>
-/// Opt-in real SOLIDWORKS B03 proof: create a persisted part, create a circle sketch, extrude, rebuild and inspect.
-/// 显式 opt-in 的真实 SOLIDWORKS B03 证明：创建持久化零件、圆草图、拉伸、重建并 inspection。
+/// Opt-in real SOLIDWORKS B03 proof: create, inspect, save, close, reopen and re-inspect a persisted part.
+/// 显式 opt-in 的真实 SOLIDWORKS B03 证明：创建、inspection、保存、关闭、重新打开并再次 inspection 持久化零件。
 /// </summary>
 /// <remarks>
 /// Hosted CI never runs this test because it needs a user-authorized interactive SOLIDWORKS process.  The test does
@@ -84,6 +84,27 @@ public sealed class B03NativePartLiveTests
             OperationResult<SaveReceipt> save = await part.SaveAsync();
             Assert.True(save.IsSuccess, FormatError(save.Error));
             Assert.True(File.Exists(partPath));
+
+            // ReopenAndInspectAsync is the provider-level lifecycle proof.  It must close the exact registered path,
+            // call the documented native open operation on the provider STA, and verify geometry/feature identity
+            // after reopening.  ReopenAndInspectAsync 是 Provider 层的生命周期证明：必须关闭 registry 中的精确
+            // path，在 Provider STA 上调用官方 open operation，并在 reopen 后复核 geometry/feature identity。
+            OperationResult<CadInspectionSnapshot> reopened = await part.ReopenAndInspectAsync();
+            Assert.True(reopened.IsSuccess, FormatError(reopened.Error));
+            Assert.Single(reopened.Value!.Bodies);
+            Assert.Contains(reopened.Value.Features, feature => feature.Name == extrusion.Value.Name);
+            Assert.True(reopened.Value.Bodies[0].Volume.CubicMillimeters > 0d);
+            // The pre-save inspection hash includes the dirty/save-flag marker; persisted reopen must match the
+            // post-save receipt hash instead.  保存前 inspection hash 包含 dirty/save-flag；持久化 reopen 应与
+            // SaveReceipt 的保存后 hash 比较，而不是与保存前 hash 比较。
+            Assert.Equal(save.Value!.StateHash, reopened.Value.Document.StateHash);
+            Assert.Equal(part.Configuration, reopened.Value.Document.Configuration);
+
+            OperationResult<MutationReceipt> close = await part.CloseAsync();
+            Assert.True(close.IsSuccess, FormatError(close.Error));
+            Assert.Contains(
+                close.Evidence!.Observations,
+                observation => observation.Key == "document.closed" && observation.Value == bool.TrueString);
             completed = true;
             await session.CloseAsync();
         }

@@ -150,6 +150,51 @@ internal sealed class SolidWorksNativePartDocument(
             result.Evidence ?? new OperationEvidence("solidworks-part"));
     }
 
+    /// <inheritdoc />
+    public async Task<OperationResult<MutationReceipt>> CloseAsync(CancellationToken cancellationToken = default)
+    {
+        OperationResult<MutationReceipt> result = await host.InvokeOnStaAsync(
+            sessionId,
+            CloseOnSta,
+            cancellationToken).ConfigureAwait(false);
+        if (result.IsSuccess)
+        {
+            // The facade must not route another request to a document after CloseDoc was verified.  Removing the
+            // registry entry also makes accidental reuse fail as a structured state error instead of touching ActiveDoc.
+            // CloseDoc 验证成功后，facade 不得再把请求路由到该 document；移除 registry entry 可让误用返回结构化
+            // state error，而不是误操作当时的 ActiveDoc。
+            registry.Remove(DocumentId);
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<OperationResult<CadInspectionSnapshot>> ReopenAndInspectAsync(
+        CancellationToken cancellationToken = default)
+    {
+        OperationResult<NativeReopenResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            ReopenAndInspectOnSta,
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<CadInspectionSnapshot>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        descriptor = result.Value.Descriptor;
+        registry.TryUpdateDescriptor(descriptor, out SolidWorksDocumentDescriptor? updated);
+        if (updated is not null)
+        {
+            descriptor = updated;
+        }
+
+        return OperationResults.Success(
+            result.Value.Snapshot,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-part"));
+    }
+
     private OperationResult<NativeExtrusionResult> AddExtrusionOnSta(ISldWorks application, ExtrusionRequest request)
     {
         if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
@@ -431,6 +476,317 @@ internal sealed class SolidWorksNativePartDocument(
             SolidWorksDocumentRouting.Release(resolved.Value);
         }
     }
+
+    /// <summary>
+    /// Closes exactly the registered clean document and verifies that SOLIDWORKS no longer exposes it as open.
+    /// 关闭 registry 中精确登记且已保存的 document，并验证 SOLIDWORKS 不再将它报告为 open。
+    /// </summary>
+    private OperationResult<MutationReceipt> CloseOnSta(ISldWorks application)
+    {
+        const string operation = "part.close";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<MutationReceipt>(
+                operation,
+                new OperationError(
+                    ErrorCodes.NotFound,
+                    "The native document identity is no longer registered.",
+                    ErrorCategories.State));
+        }
+
+        OperationResult<ModelDoc2> resolved = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolved.IsSuccess || resolved.Value is null)
+        {
+            return OperationResults.Failure<MutationReceipt>(resolved.OperationId, resolved.Error!, resolved.Evidence);
+        }
+
+        ModelDoc2 model = resolved.Value;
+        try
+        {
+            if (model.GetSaveFlag())
+            {
+                return SolidWorksProviderResults.Failure<MutationReceipt>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The native document has unsaved changes and cannot be closed by this provider.",
+                        ErrorCategories.State,
+                        remediation: "Save the document, then retry the explicit document close."));
+            }
+
+            // CloseDoc is intentionally invoked with the canonical registered path, never with a title or ActiveDoc.
+            // CloseDoc 明确使用 registry 的 canonical path，绝不使用 title 或 ActiveDoc。
+            application.CloseDoc(current.Path);
+
+            ModelDoc2? stillOpen = application.GetOpenDocument(current.Path);
+            try
+            {
+                if (stillOpen is not null)
+                {
+                    return SolidWorksProviderResults.Failure<MutationReceipt>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.StateConflict,
+                            "SOLIDWORKS reported the exact document as still open after CloseDoc.",
+                            ErrorCategories.State,
+                            retryable: true,
+                            remediation: "Inspect the SOLIDWORKS document state and resolve any blocking dialog before retrying."),
+                        new EvidenceObservation("document.closed", bool.FalseString));
+                }
+            }
+            finally
+            {
+                SolidWorksDocumentRouting.Release(stillOpen);
+            }
+
+            return SolidWorksProviderResults.Success(
+                operation,
+                new MutationReceipt { Operation = operation, StateHash = "closed" },
+                new EvidenceObservation("document.id", current.DocumentId.Value),
+                new EvidenceObservation("document.path", current.Path),
+                new EvidenceObservation("document.closed", bool.TrueString));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<MutationReceipt>(
+                operation,
+                exception,
+                "SOLIDWORKS failed while closing the registered document.");
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(model);
+        }
+    }
+
+    /// <summary>
+    /// Proves persisted lifecycle integrity using OpenDoc6, then performs a fresh native part inspection.
+    /// 使用 OpenDoc6 证明持久化生命周期完整性，再执行一次新的原生零件 inspection。
+    /// </summary>
+    private OperationResult<NativeReopenResult> ReopenAndInspectOnSta(ISldWorks application)
+    {
+        const string operation = "part.reopen-inspect";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.NotFound,
+                    "The native document identity is no longer registered.",
+                    ErrorCategories.State));
+        }
+
+        OperationResult<ModelDoc2> resolved = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolved.IsSuccess || resolved.Value is null)
+        {
+            return OperationResults.Failure<NativeReopenResult>(resolved.OperationId, resolved.Error!, resolved.Evidence);
+        }
+
+        ModelDoc2? currentModel = resolved.Value;
+        ModelDoc2? reopened = null;
+        string stage = "preflight";
+        try
+        {
+            if (currentModel.GetSaveFlag())
+            {
+                return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The native document has unsaved changes and cannot be reopened as persisted state.",
+                        ErrorCategories.State,
+                        remediation: "Save the document before requesting a persisted reopen."));
+            }
+
+            stage = "close";
+            application.CloseDoc(current.Path);
+            SolidWorksDocumentRouting.Release(currentModel);
+            currentModel = null;
+
+            stage = "verify-close";
+            ModelDoc2? stillOpen = application.GetOpenDocument(current.Path);
+            try
+            {
+                if (stillOpen is not null)
+                {
+                    return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.StateConflict,
+                            "SOLIDWORKS did not close the registered document before the reopen step.",
+                            ErrorCategories.State,
+                            retryable: true,
+                            remediation: "Resolve the document or modal-dialog state, then retry the lifecycle proof."),
+                        new EvidenceObservation("document.closed", bool.FalseString));
+                }
+            }
+            finally
+            {
+                SolidWorksDocumentRouting.Release(stillOpen);
+            }
+
+            // OpenDoc6 is the documented replacement for obsolete silent-open methods.  The configuration is explicit
+            // so reopening cannot silently switch to an unrelated active configuration.
+            // OpenDoc6 是官方文档中 obsolete silent-open 方法的替代接口；显式传入 configuration，避免 reopen 静默
+            // 切到无关的 active configuration。
+            stage = "open-doc6";
+            int fileErrors = 0;
+            int fileWarnings = 0;
+            reopened = application.OpenDoc6(
+                current.Path,
+                (int)swDocumentTypes_e.swDocPART,
+                (int)swOpenDocOptions_e.swOpenDocOptions_Silent,
+                current.Configuration,
+                ref fileErrors,
+                ref fileWarnings);
+            if (reopened is null || fileErrors != 0)
+            {
+                return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS OpenDoc6 did not prove a successful part reopen.",
+                        ErrorCategories.Provider,
+                        retryable: true,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["file-errors"] = fileErrors.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            ["file-warnings"] = fileWarnings.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        },
+                        remediation: "Inspect the persisted part and SOLIDWORKS file-load diagnostics before retrying."),
+                    new EvidenceObservation("document.closed", bool.TrueString),
+                    new EvidenceObservation("open-doc6.returned", (reopened is not null).ToString()),
+                    new EvidenceObservation("open-doc6.file-errors", fileErrors.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("open-doc6.file-warnings", fileWarnings.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            stage = "verify-open-identity";
+            string actualPath = reopened.GetPathName()?.Trim() ?? string.Empty;
+            string canonicalActualPath = actualPath.Length == 0 ? string.Empty : System.IO.Path.GetFullPath(actualPath);
+            if (!canonicalActualPath.Equals(current.Path, StringComparison.OrdinalIgnoreCase)
+                || !SolidWorksDocumentRouting.MatchesType(reopened, CadDocumentType.Part))
+            {
+                return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The document returned by OpenDoc6 does not match the registered part identity.",
+                        ErrorCategories.State,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["expected-path"] = current.Path,
+                            ["actual-path"] = canonicalActualPath,
+                            ["expected-type"] = CadDocumentType.Part.ToString(),
+                            ["actual-type"] = reopened.GetType().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        },
+                        remediation: "Do not continue with the reopened handle; re-register the intended document."));
+            }
+
+            string configuration = SolidWorksDocumentRouting.ReadConfiguration(reopened);
+            if (!configuration.Equals(current.Configuration, StringComparison.Ordinal))
+            {
+                return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The reopened part configuration does not match the registered configuration.",
+                        ErrorCategories.State,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["expected-configuration"] = current.Configuration,
+                            ["actual-configuration"] = configuration,
+                        },
+                        remediation: "Activate the intended configuration explicitly and re-plan the operation."));
+            }
+
+            stage = "inspect-reopened-part";
+            OperationResult<CadInspectionSnapshot> inspection = SolidWorksNativeInspectionReader.ReadPart(reopened, current);
+            if (!inspection.IsSuccess || inspection.Value is null)
+            {
+                return OperationResults.Failure<NativeReopenResult>(inspection.OperationId, inspection.Error!, inspection.Evidence);
+            }
+
+            if (current.ProfileFeatureName is not null
+                && !inspection.Value.Features.Any(feature => feature.Name.Equals(current.ProfileFeatureName, StringComparison.Ordinal)))
+            {
+                return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The provider-identified sketch profile was not present after reopening the persisted part.",
+                        ErrorCategories.State,
+                        remediation: "Preserve the artifact for diagnosis and rebuild the selection identity from inspection."),
+                    new EvidenceObservation("profile.name", current.ProfileFeatureName));
+            }
+
+            string reopenedStateHash = inspection.Value.Document.StateHash;
+            if (!reopenedStateHash.Equals(current.StateHash, StringComparison.Ordinal))
+            {
+                return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The persisted part state hash changed across close and reopen.",
+                        ErrorCategories.State,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["expected-state-hash"] = current.StateHash,
+                            ["actual-state-hash"] = reopenedStateHash,
+                        },
+                        remediation: "Treat the reopen as an external state change and create a new operation plan."),
+                    new EvidenceObservation("document.closed", bool.TrueString),
+                    new EvidenceObservation("document.reopened", bool.TrueString),
+                    new EvidenceObservation("state.hash", reopenedStateHash));
+            }
+
+            var updated = current with
+            {
+                StateHash = reopenedStateHash,
+                IsDirty = inspection.Value.Document.IsDirty,
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeReopenResult(inspection.Value, updated),
+                new EvidenceObservation("document.id", current.DocumentId.Value),
+                new EvidenceObservation("document.closed", bool.TrueString),
+                new EvidenceObservation("document.reopened", bool.TrueString),
+                new EvidenceObservation("open-doc6.file-errors", fileErrors.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("open-doc6.file-warnings", fileWarnings.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("body.count", inspection.Value.Bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("feature.count", inspection.Value.Features.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("state.hash", reopenedStateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.Failure<NativeReopenResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.ProviderFailure,
+                    "SOLIDWORKS failed during the persisted part close/reopen workflow.",
+                    ErrorCategories.Provider,
+                    retryable: true,
+                    details: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["stage"] = stage,
+                        ["exception-type"] = exception.GetType().FullName ?? exception.GetType().Name,
+                        ["hresult"] = $"0x{exception.HResult:X8}",
+                    },
+                    remediation: "Preserve the isolated artifact and inspect the reported lifecycle stage."));
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(currentModel);
+            SolidWorksDocumentRouting.Release(reopened);
+        }
+    }
 }
 
 /// <summary>Internal result carrying the feature and the newly inspected document metadata.</summary>
@@ -441,3 +797,6 @@ internal sealed record NativeRebuildResult(RebuildReceipt Receipt, SolidWorksDoc
 
 /// <summary>Internal result carrying a save receipt and updated document metadata.</summary>
 internal sealed record NativeSaveResult(SaveReceipt Receipt, SolidWorksDocumentDescriptor Descriptor);
+
+/// <summary>Internal result carrying fresh inspection evidence after a native persisted reopen.</summary>
+internal sealed record NativeReopenResult(CadInspectionSnapshot Snapshot, SolidWorksDocumentDescriptor Descriptor);
