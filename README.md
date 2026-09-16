@@ -8,6 +8,8 @@ The repository now contains the approved module boundaries, a Hosted-safe soluti
 
 The MCP host keeps stdout reserved for the protocol wire and sends console logs to stderr. Its mutation boundary advertises flat, versioned input schemas, validates the schema before starting a CAD session, and returns the typed operation envelope as structured content. Contract tests exercise the official SDK client against FakeCad; they do not claim a live SOLIDWORKS COM result.
 
+Runtime configuration follows defaults → user-local `%LOCALAPPDATA%\SolidWorksMcp\config.json` (or `SOLIDWORKS_MCP_CONFIG`) → allowlisted `SOLIDWORKS_MCP_*` variables → allowlisted CLI options. Supported switches are provider mode plus the default-off `experimental.drawing` and `experimental.recognition` flags. The doctor creates this user-local file with safe defaults; machine paths remain outside the repository.
+
 Read the Issue evidence baseline before selecting work. The critical path is defined by GitHub Epic #1: #2 -> (#7,#8,#9,#10) -> #3 -> #4 -> #5 -> (#6,#11).
 
 ## Hosted-safe build

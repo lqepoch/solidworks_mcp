@@ -153,3 +153,23 @@ Evidence command and result:
     dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --logger "console;verbosity=normal"          # exit 0; 30 passed; 0 failed; 0 skipped
 
 The 30 Hosted-safe tests are 22 Unit, 4 FakeCad and 4 Contract tests (including the reusable provider workflow and three MCP SDK integration tests). No Live SOLIDWORKS test was used for A02; native COM behavior remains explicitly deferred to Issues #17-#22 and the local Live harness in #51.
+
+## A05 local implementation evidence
+
+Issue #16/A05 is implemented locally in the pending configuration-negotiation commit; the final commit SHA will be recorded immediately after verification.
+
+- `src/SolidWorksMcp.Core/RuntimeConfiguration.cs` defines the versioned user-local configuration contract, allowlisted provider modes, default-off experimental drawing/recognition flags, four-layer precedence (defaults → user-local JSON → environment → CLI), field-source labels and fail-closed handling for unknown CLI values or explicitly missing configuration files. Effective snapshots contain no machine path or secret.
+- `src/SolidWorksMcp.Protocol/ProtocolCompatibility.cs` centralizes schema identity, major/minor parsing and explicit backward-compatibility rules. Current/older compatible versions are accepted; different schema, major versions, future minor versions and malformed versions are rejected.
+- `src/SolidWorksMcp.Server/McpCapabilityNegotiator.cs` evaluates provider declarations and feature flags without starting a CAD session. `cad.capabilities` exposes effective availability; mutation and inspection tools return deterministic `UNSUPPORTED_CAPABILITY` before session startup when a provider/tool combination is unavailable.
+- `scripts/Invoke-SolidWorksMcpDoctor.ps1` now keeps the diagnostic inventory in `doctor.json` and creates a separate safe-default `config.json`; the generated MCP configuration points at the runtime file under `%LOCALAPPDATA%`.
+- `tests/SolidWorksMcp.UnitTests/RuntimeConfigurationTests.cs` covers all layer precedence, default-off behavior, unknown environment isolation, unknown CLI rejection and missing explicit-file rejection. `ProtocolCompatibilityTests.cs` covers schema/version break cases.
+- `tests/SolidWorksMcp.ContractTests/McpCompatibilityContractTests.cs` locks the default tool names/order and safety metadata, and proves a disabled experimental flag fails capability negotiation. The SDK integration suite also proves capability discovery has no session side effect and unsupported provider combinations fail before session startup.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.hosted.slnx --verify-no-changes --severity info --no-restore                 # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore                                           # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --logger "console;verbosity=minimal"          # exit 0; 41 passed; 0 failed; 0 skipped
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksMcpDoctor.ps1 -Initialize -Json       # exit 0; config.json and doctor.json generated under user-local root
+
+No Live SOLIDWORKS test was used for A05; capability negotiation and configuration are vendor-neutral, while native provider behavior and the isolated Live harness remain deferred to Issues #17-#22 and #51.

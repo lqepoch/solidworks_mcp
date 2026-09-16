@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Core;
 
 namespace SolidWorksMcp.Server;
 
@@ -21,7 +22,8 @@ public static class ServerComposition
     /// </remarks>
     public static IServiceCollection AddSolidWorksMcp(
         this IServiceCollection services,
-        ICadProvider? provider = null)
+        ICadProvider? provider = null,
+        SolidWorksMcpConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         if (provider is not null)
@@ -34,8 +36,10 @@ public static class ServerComposition
             services.TryAddSingleton<ICadProvider, UnavailableCadProvider>();
         }
 
+        services.TryAddSingleton(configuration ?? new SolidWorksMcpConfiguration());
         services.TryAddSingleton(McpToolCatalog.CreateDefault());
         services.TryAddSingleton<McpOperationCorrelation>();
+        services.TryAddSingleton<McpCapabilityNegotiator>();
         services.TryAddSingleton<CadSessionAccessor>();
         return services;
     }

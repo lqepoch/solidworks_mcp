@@ -173,13 +173,27 @@ if ($Initialize) {
     }
 
     $selected = $installations | Select-Object -First 1
-    $configurationPath = Join-Path $UserLocalRoot 'doctor.json'
+    # Keep the diagnostic inventory separate from the runtime configuration consumed by the MCP host.
+    # 将诊断清单与 MCP Host 消费的运行时配置分离，避免把机器探测结果误当成业务配置。
+    $doctorReportPath = Join-Path $UserLocalRoot 'doctor.json'
     [pscustomobject]@{
         schemaVersion = '1.0'
         generatedAt = (Get-Date).ToUniversalTime().ToString('O')
         repository = 'SolidWorksMcp'
         solidWorks = $selected
         paths = $paths
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $doctorReportPath -Encoding UTF8
+
+    # Runtime defaults are safe and explicit; native activation remains a separate provider decision.
+    # 运行时默认值安全且显式；是否启用原生 Provider 仍由独立的 Provider 配置决定。
+    $configurationPath = Join-Path $UserLocalRoot 'config.json'
+    [pscustomobject]@{
+        schemaVersion = '1.0'
+        providerMode = 'unavailable'
+        features = [pscustomobject]@{
+            experimentalDrawing = $false
+            experimentalRecognition = $false
+        }
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configurationPath -Encoding UTF8
 
     $propsPath = Join-Path $UserLocalRoot 'SolidWorksMcp.local.props'
@@ -207,7 +221,7 @@ if ($Initialize) {
             }
         }
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $mcpConfigPath -Encoding UTF8
-    $initialization = [pscustomobject]@{ configuration = $configurationPath; msbuild = $propsPath; mcp = $mcpConfigPath }
+    $initialization = [pscustomobject]@{ configuration = $configurationPath; doctorReport = $doctorReportPath; msbuild = $propsPath; mcp = $mcpConfigPath }
 }
 
 $result = [pscustomobject]@{

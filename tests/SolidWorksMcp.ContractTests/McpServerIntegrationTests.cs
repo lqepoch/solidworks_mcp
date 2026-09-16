@@ -4,6 +4,7 @@ using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
 using SolidWorksMcp.Provider.Fake;
 using SolidWorksMcp.Server;
@@ -36,6 +37,7 @@ public sealed class McpServerIntegrationTests
         CallToolResult capabilityResult = await host.Client.CallToolAsync("cad.capabilities");
         Assert.False(capabilityResult.IsError);
         Assert.Contains("CAD operation completed", capabilityResult.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
     }
 
     /// <summary>Schema/version rejection must happen before the provider starts a CAD session.</summary>
@@ -80,6 +82,36 @@ public sealed class McpServerIntegrationTests
         Assert.Equal(1, countingProvider.StartSessionCount);
         Assert.Contains("CAD operation completed", result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
         Assert.NotNull(result.StructuredContent);
+    }
+
+    /// <summary>Capability negotiation must reject an unsupported provider combination before session startup.</summary>
+    [Fact]
+    public async Task UnsupportedProviderCapabilityFailsDeterministicallyBeforeSessionStartup()
+    {
+        var options = new FakeCadOptions
+        {
+            Capabilities = new CadCapabilitySet(
+            [
+                new CadCapability(CadCapabilityNames.Inspection, supported: true),
+            ]),
+        };
+        var countingProvider = new CountingCadProvider(new FakeCadProvider(options));
+        await using var host = await InMemoryMcpHost.CreateAsync(
+            countingProvider,
+            new SolidWorksMcpConfiguration(providerMode: ProviderModes.Fake));
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "cad.create-part",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = "unsupported-part",
+                ["configuration"] = "Default",
+            });
+
+        Assert.True(result.IsError);
+        Assert.Contains(ErrorCodes.UnsupportedCapability, result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
     }
 
     /// <summary>Counts provider starts without changing the provider contract, proving validation ordering.</summary>
@@ -130,7 +162,9 @@ public sealed class McpServerIntegrationTests
 
         public McpClient Client { get; }
 
-        public static async Task<InMemoryMcpHost> CreateAsync(ICadProvider provider)
+        public static async Task<InMemoryMcpHost> CreateAsync(
+            ICadProvider provider,
+            SolidWorksMcpConfiguration? configuration = null)
         {
             ArgumentNullException.ThrowIfNull(provider);
             var clientToServer = new Pipe();
@@ -138,7 +172,7 @@ public sealed class McpServerIntegrationTests
             var cancellation = new CancellationTokenSource();
             var serviceCollection = new ServiceCollection();
             serviceCollection.AddLogging();
-            serviceCollection.AddSolidWorksMcp(provider);
+            serviceCollection.AddSolidWorksMcp(provider, configuration);
             serviceCollection
                 .AddMcpServer(options =>
                 {

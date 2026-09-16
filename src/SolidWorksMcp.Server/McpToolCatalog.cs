@@ -1,5 +1,7 @@
 ﻿using System.Collections.Immutable;
 
+using SolidWorksMcp.Core;
+
 namespace SolidWorksMcp.Server;
 
 /// <summary>Stable metadata that explains tool preconditions and side effects to humans and agents.</summary>
@@ -18,13 +20,15 @@ public sealed record McpToolDescriptor
         string tier,
         string preconditions,
         string sideEffects,
-        string? requiredCapability = null)
+        string? requiredCapability = null,
+        string? requiredFeature = null)
     {
         Name = RequireNonBlank(name, nameof(name));
         Tier = RequireNonBlank(tier, nameof(tier));
         Preconditions = RequireNonBlank(preconditions, nameof(preconditions));
         SideEffects = RequireNonBlank(sideEffects, nameof(sideEffects));
-        RequiredCapability = requiredCapability;
+        RequiredCapability = NormalizeOptional(requiredCapability);
+        RequiredFeature = NormalizeOptional(requiredFeature);
     }
 
     /// <summary>Gets the MCP tool name.</summary>
@@ -42,11 +46,17 @@ public sealed record McpToolDescriptor
     /// <summary>Gets the optional provider capability required by the tool.</summary>
     public string? RequiredCapability { get; }
 
+    /// <summary>Gets the optional default-off feature flag required by the tool.</summary>
+    public string? RequiredFeature { get; }
+
     private static string RequireNonBlank(string value, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
         return value.Trim();
     }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 /// <summary>Immutable registry for the compact high-level MCP tool surface.</summary>
@@ -76,6 +86,11 @@ public sealed class McpToolCatalog
     public ImmutableArray<McpToolDescriptor> Tools { get; }
 
     /// <summary>Creates the A02 default registry.</summary>
+    /// <remarks>
+    /// Experimental tools can be registered with <see cref="FeatureFlagNames.ExperimentalDrawing"/> or another
+    /// allowlisted feature, but no current default tool silently opts into experimental behavior. 实验 tool 必须绑定
+    /// 白名单 feature flag；当前默认 tool 不会静默启用任何实验行为。
+    /// </remarks>
     public static McpToolCatalog CreateDefault() => new(
     [
         new McpToolDescriptor("cad.health", "read", "none", "none"),

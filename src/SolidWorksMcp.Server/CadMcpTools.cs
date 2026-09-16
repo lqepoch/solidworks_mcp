@@ -2,6 +2,7 @@
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
 
 namespace SolidWorksMcp.Server;
@@ -16,12 +17,16 @@ public sealed class CadMcpTools(
     ICadProvider provider,
     McpToolCatalog catalog,
     McpOperationCorrelation correlation,
-    CadSessionAccessor sessions)
+    CadSessionAccessor sessions,
+    McpCapabilityNegotiator capabilities,
+    SolidWorksMcpConfiguration configuration)
 {
     private readonly ICadProvider provider = provider ?? throw new ArgumentNullException(nameof(provider));
     private readonly McpToolCatalog catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     private readonly McpOperationCorrelation correlation = correlation ?? throw new ArgumentNullException(nameof(correlation));
     private readonly CadSessionAccessor sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
+    private readonly McpCapabilityNegotiator capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
+    private readonly SolidWorksMcpConfiguration configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
 
     /// <summary>Returns read-only server and provider health.</summary>
     [McpServerTool(Name = "cad.health")]
@@ -35,6 +40,8 @@ public sealed class CadMcpTools(
             SchemaVersion = ProtocolSchema.CurrentVersion,
             ProviderType = provider.GetType().Name,
             ProviderConfigured = provider is not UnavailableCadProvider,
+            ProviderMode = configuration.ProviderMode,
+            Features = configuration.Features,
         };
         var result = OperationResults.Success(
             health,
@@ -53,6 +60,8 @@ public sealed class CadMcpTools(
             ProviderType = provider.GetType().Name,
             Capabilities = provider.Capabilities,
             Tools = catalog.Tools,
+            ToolAvailability = capabilities.GetAvailability(),
+            Configuration = configuration,
         };
         var result = OperationResults.Success(
             discovery,
@@ -88,6 +97,14 @@ public sealed class CadMcpTools(
             return McpToolResultWriter.Write(OperationResults.Failure<CadDocumentSummary>(correlationId, validationError!));
         }
         CreatePartToolInput validInput = input!;
+
+        // Capability negotiation is a side-effect-free preflight and must precede session startup.
+        // 能力协商是无副作用的 preflight，必须发生在 Session 启动之前。
+        OperationError? capabilityError = capabilities.ValidateInvocation("cad.create-part");
+        if (capabilityError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<CadDocumentSummary>(correlationId, capabilityError));
+        }
 
         var sessionResult = await sessions.GetOrStartAsync(cancellationToken).ConfigureAwait(false);
         if (!sessionResult.IsSuccess)
@@ -131,6 +148,14 @@ public sealed class CadMcpTools(
             return McpToolResultWriter.Write(OperationResults.Failure<CadInspectionSnapshot>(correlationId, validationError!));
         }
         InspectToolInput validInput = input!;
+
+        // Read operations still negotiate explicitly so a missing inspection capability is never hidden by a null result.
+        // 读操作同样必须显式协商，不能用 null 结果掩盖缺失的 inspection 能力。
+        OperationError? capabilityError = capabilities.ValidateInvocation("cad.inspect");
+        if (capabilityError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<CadInspectionSnapshot>(correlationId, capabilityError));
+        }
 
         var sessionResult = await sessions.GetOrStartAsync(cancellationToken).ConfigureAwait(false);
         if (!sessionResult.IsSuccess)
@@ -266,6 +291,12 @@ public sealed class ServerHealth
 
     /// <summary>Whether native or test provider was explicitly configured.</summary>
     public required bool ProviderConfigured { get; init; }
+
+    /// <summary>Selected allowlisted provider profile.</summary>
+    public required string ProviderMode { get; init; }
+
+    /// <summary>Default-off experimental feature state.</summary>
+    public required FeatureFlagSet Features { get; init; }
 }
 
 /// <summary>Provider capability and tool metadata discovery payload.</summary>
@@ -283,4 +314,10 @@ public sealed class CapabilityDiscovery
 
     /// <summary>Compact tool registry with precondition/side-effect metadata.</summary>
     public required System.Collections.Immutable.ImmutableArray<McpToolDescriptor> Tools { get; init; }
+
+    /// <summary>Effective availability after provider and feature negotiation.</summary>
+    public required System.Collections.Immutable.ImmutableArray<McpToolAvailability> ToolAvailability { get; init; }
+
+    /// <summary>Effective settings without user-local paths or secrets.</summary>
+    public required SolidWorksMcpConfiguration Configuration { get; init; }
 }

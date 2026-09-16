@@ -3,13 +3,15 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
 using SolidWorksMcp.Server;
 
 // The production executable uses the official MCP C# SDK and stdio as its default transport.
 // 生产入口使用官方 MCP C# SDK，并将 stdio 作为默认传输；日志只写 stderr，保持 stdout 为 MCP wire。
+SolidWorksMcpConfiguration runtimeConfiguration = SolidWorksMcpConfigurationLoader.Load(args).Configuration;
 var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddSolidWorksMcp();
+builder.Services.AddSolidWorksMcp(configuration: runtimeConfiguration);
 builder.Services
     .AddMcpServer(options =>
     {

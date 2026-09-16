@@ -13,6 +13,12 @@ public static class ProtocolSchema
 
     /// <summary>Current version for all contracts introduced by A04.</summary>
     public const string CurrentVersion = "1.0";
+
+    /// <summary>Current major version used by the explicit compatibility policy.</summary>
+    public const int CurrentMajor = 1;
+
+    /// <summary>Current minor version used by the explicit compatibility policy.</summary>
+    public const int CurrentMinor = 0;
 }
 
 /// <summary>Stable categories used to classify an operation failure for policy and remediation.</summary>
