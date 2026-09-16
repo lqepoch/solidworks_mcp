@@ -1,9 +1,13 @@
-﻿using System.Xml.Linq;
+﻿using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace SolidWorksMcp.UnitTests;
 
-public sealed class ArchitectureBoundaryTests
+public sealed partial class ArchitectureBoundaryTests
 {
+    [GeneratedRegex(@"(?m)^\s*public\b[^\r\n]*\bdouble\b", RegexOptions.CultureInvariant)]
+    private static partial Regex PublicRawDoubleRegex();
+
     private static readonly string[] sourceArray = ["src", "providers", "testing", "tests"];
 
     // This test guards the vendor boundary at project-file level before runtime architecture tests exist.
@@ -49,6 +53,35 @@ public sealed class ArchitectureBoundaryTests
                 .Select(element => (string?)element.Attribute("Include") ?? string.Empty);
             Assert.DoesNotContain(references, reference => reference.Contains("testing", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(references, reference => reference.Contains("tests", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    // The protocol unit wrappers are the only approved place where dimensional doubles enter the model.
+    // Protocol 中的显式单位包装器是允许 dimensional double 进入模型的唯一边界；业务契约必须使用 Length 等类型。
+    [Fact]
+    public void EngineeringBoundariesDoNotExposeRawDimensionalDouble()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string[] engineeringDirectories =
+        [
+            "SolidWorksMcp.CadAbstractions",
+            "SolidWorksMcp.EngineeringModel",
+            "SolidWorksMcp.AutoDrawing",
+            "SolidWorksMcp.AssemblyDrawing",
+            "SolidWorksMcp.RuleEngine",
+            "SolidWorksMcp.Tolerancing",
+        ];
+
+        foreach (string directoryName in engineeringDirectories)
+        {
+            string directory = Path.Combine(repositoryRoot, "src", directoryName);
+            foreach (string sourceFile in Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories))
+            {
+                string source = File.ReadAllText(sourceFile);
+                bool exposesDouble = PublicRawDoubleRegex().IsMatch(source);
+
+                Assert.False(exposesDouble, $"Engineering boundary exposes raw double: {sourceFile}");
+            }
         }
     }
 

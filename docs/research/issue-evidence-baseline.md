@@ -95,3 +95,22 @@ The same comment permits #4 to begin after A04/A03 while native extraction waits
 ## Initial implementation record
 
 This baseline intentionally starts with the requested order: #12, #55, #59, #61, #62 and #49. It creates structure and evidence controls only; no SOLIDWORKS COM behavior is claimed until provider research, API and Live-test gates are implemented.
+
+## A04 local implementation evidence
+
+Issue #15/A04 is implemented locally in commit `pending` (the commit is intentionally made after this evidence update). The implementation is limited to vendor-neutral protocol contracts:
+
+- `src/SolidWorksMcp.Protocol/EngineeringUnits.cs` defines explicit `Length`, `Angle`, `Mass`, `Area`, `Volume`, `Tolerance`, `DimensionLimits`, `Coordinate2D` and `Coordinate3D` values. MCP/domain values are mm, degrees, kg, mm² and mm³; metre/radian conversions are explicit provider-boundary methods.
+- `src/SolidWorksMcp.Protocol/Identifiers.cs` defines typed stable identities for sessions, documents, features, bodies, views, annotations, BOM items, transactions and idempotency keys.
+- `src/SolidWorksMcp.Protocol/OperationContracts.cs` defines schema/version fields, stable error codes/categories, immutable evidence observations and generic success/failure envelopes.
+- `tests/SolidWorksMcp.UnitTests/EngineeringUnitsTests.cs` covers 1000x, squared/cubed and radian conversion traps, invalid physical values, tolerance invariants and JSON unit shape.
+- `tests/SolidWorksMcp.UnitTests/OperationContractTests.cs` covers success/error evidence, stable error codes, schema serialization and typed identifier equality.
+- `tests/SolidWorksMcp.UnitTests/ArchitectureBoundaryTests.cs` prevents engineering-layer public APIs from declaring raw dimensional `double` values.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info   # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore                             # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --logger "trx;LogFileName=a04-final.trx" # exit 0; 23 passed; 0 failed; 0 skipped
+
+No Live SOLIDWORKS test was used for A04; this issue is vendor-neutral and the Live harness remains explicitly skipped under #51.

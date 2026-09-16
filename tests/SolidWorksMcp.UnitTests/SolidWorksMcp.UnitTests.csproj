@@ -11,5 +11,6 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <ProjectReference Include="..\..\src\SolidWorksMcp.Core\SolidWorksMcp.Core.csproj" />
     <ProjectReference Include="..\..\src\SolidWorksMcp.EngineeringModel\SolidWorksMcp.EngineeringModel.csproj" />
+    <ProjectReference Include="..\..\src\SolidWorksMcp.Protocol\SolidWorksMcp.Protocol.csproj" />
   </ItemGroup>
 </Project>
