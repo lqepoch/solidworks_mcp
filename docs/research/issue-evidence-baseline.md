@@ -98,7 +98,7 @@ This baseline intentionally starts with the requested order: #12, #55, #59, #61,
 
 ## A04 local implementation evidence
 
-Issue #15/A04 is implemented locally in commit `pending` (the commit is intentionally made after this evidence update). The implementation is limited to vendor-neutral protocol contracts:
+Issue #15/A04 is implemented locally in commit `af4c662`. The implementation is limited to vendor-neutral protocol contracts:
 
 - `src/SolidWorksMcp.Protocol/EngineeringUnits.cs` defines explicit `Length`, `Angle`, `Mass`, `Area`, `Volume`, `Tolerance`, `DimensionLimits`, `Coordinate2D` and `Coordinate3D` values. MCP/domain values are mm, degrees, kg, mm² and mm³; metre/radian conversions are explicit provider-boundary methods.
 - `src/SolidWorksMcp.Protocol/Identifiers.cs` defines typed stable identities for sessions, documents, features, bodies, views, annotations, BOM items, transactions and idempotency keys.
