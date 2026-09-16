@@ -21,6 +21,8 @@ references/*
 test-evidence/
 live-evidence/
 
+图纸/
+
 # IDE/editor state
 .vs/
 .vscode/
