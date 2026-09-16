@@ -117,7 +117,7 @@ No Live SOLIDWORKS test was used for A04; this issue is vendor-neutral and the L
 
 ## A03 local implementation evidence
 
-Issue #14/A03 is implemented locally in commit `pending` (the commit is intentionally made after this evidence update).
+Issue #14/A03 is implemented locally in commit `ab0f313`.
 
 - `src/SolidWorksMcp.CadAbstractions/ICadProvider.cs` defines vendor-neutral session, document, part, assembly, drawing, inspection and export interfaces. Only typed Protocol units/identities cross the boundary; no COM type is present.
 - `src/SolidWorksMcp.CadAbstractions/CadCapabilities.cs`, `CadRequests.cs` and `CadSnapshots.cs` define explicit capability declarations, deterministic requests, stable identities, load states and evidence-bearing snapshots.
