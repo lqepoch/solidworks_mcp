@@ -1,0 +1,12 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SolidWorksMcp.Provider.Fake</RootNamespace>
+    <AssemblyName>SolidWorksMcp.Provider.Fake</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SolidWorksMcp.CadAbstractions\SolidWorksMcp.CadAbstractions.csproj" />
+    <ProjectReference Include="..\..\src\SolidWorksMcp.Core\SolidWorksMcp.Core.csproj" />
+    <ProjectReference Include="..\..\src\SolidWorksMcp.EngineeringModel\SolidWorksMcp.EngineeringModel.csproj" />
+  </ItemGroup>
+</Project>

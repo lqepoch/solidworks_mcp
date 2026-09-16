@@ -1,0 +1,91 @@
+﻿{
+  "schemaVersion": "1.0",
+  "retrievedAt": "2026-09-16T09:54:13.8519938+08:00",
+  "policy": {
+    "purpose": "Local research corpus only; reference repositories never participate in product build.",
+    "copying": "No direct product-code adaptation is approved by this bootstrap commit.",
+    "proprietarySources": "SOLIDWORKS binaries and copyrighted manuals remain local and are never copied into this repository."
+  },
+  "repositories": [
+    {
+      "name": "jaylamping/solidworks-mcp",
+      "url": "https://github.com/jaylamping/solidworks-mcp",
+      "cloneUrl": "https://github.com/jaylamping/solidworks-mcp.git",
+      "path": "references/jaylamping-solidworks-mcp",
+      "commit": "a0f07cdab596c05739317119256a191fe51962e7",
+      "ref": "main",
+      "license": "MIT",
+      "licenseSource": "https://github.com/jaylamping/solidworks-mcp/blob/a0f07cdab596c05739317119256a191fe51962e7/LICENSE",
+      "role": "STA worker, COM session safety, checkpoints and assembly coverage reference.",
+      "reviewedFiles": [],
+      "capabilities": [],
+      "adoptedIdeas": [],
+      "rejectedIdeas": [],
+      "directCodeAdaptation": null
+    },
+    {
+      "name": "czuryk/SolidworksMCP",
+      "url": "https://github.com/czuryk/SolidworksMCP",
+      "cloneUrl": "https://github.com/czuryk/SolidworksMCP.git",
+      "path": "references/czuryk-SolidworksMCP",
+      "commit": "38468b32890a9fc4c4aeec50fa97f679496c4524",
+      "ref": "main",
+      "license": "MIT",
+      "licenseSource": "https://github.com/czuryk/SolidworksMCP/blob/38468b32890a9fc4c4aeec50fa97f679496c4524/LICENSE",
+      "role": "Transaction, invariant, rollback and geometry-verification reference.",
+      "reviewedFiles": [],
+      "capabilities": [],
+      "adoptedIdeas": [],
+      "rejectedIdeas": [],
+      "directCodeAdaptation": null
+    },
+    {
+      "name": "Slacker-LLC/solidworks-mcp",
+      "url": "https://github.com/Slacker-LLC/solidworks-mcp",
+      "cloneUrl": "https://github.com/Slacker-LLC/solidworks-mcp.git",
+      "path": "references/Slacker-LLC-solidworks-mcp",
+      "commit": "6019ce014c7b64a2982e552e9806e923608cbf1a",
+      "ref": "main",
+      "license": "Apache-2.0",
+      "licenseSource": "https://github.com/Slacker-LLC/solidworks-mcp/blob/6019ce014c7b64a2982e552e9806e923608cbf1a/LICENSE",
+      "role": "Drawing API, explicit units, declarative selection and screenshot evidence reference.",
+      "reviewedFiles": [],
+      "capabilities": [],
+      "adoptedIdeas": [],
+      "rejectedIdeas": [],
+      "directCodeAdaptation": null
+    },
+    {
+      "name": "hjbaard/SolidWorks-MCP",
+      "url": "https://github.com/hjbaard/SolidWorks-MCP",
+      "cloneUrl": "https://github.com/hjbaard/SolidWorks-MCP.git",
+      "path": "references/hjbaard-SolidWorks-MCP",
+      "commit": "e94e18862efd7b51cdd8acb379a7bae4ba34de54",
+      "ref": "main",
+      "license": "MIT",
+      "licenseSource": "https://github.com/hjbaard/SolidWorks-MCP/blob/e94e18862efd7b51cdd8acb379a7bae4ba34de54/LICENSE",
+      "role": "Build-measure-verify-correct workflow and live-test reference.",
+      "reviewedFiles": [],
+      "capabilities": [],
+      "adoptedIdeas": [],
+      "rejectedIdeas": [],
+      "directCodeAdaptation": null
+    },
+    {
+      "name": "modelcontextprotocol/csharp-sdk",
+      "url": "https://github.com/modelcontextprotocol/csharp-sdk",
+      "cloneUrl": "https://github.com/modelcontextprotocol/csharp-sdk.git",
+      "path": "references/modelcontextprotocol-csharp-sdk",
+      "commit": "324ccd83c357acf611e1cf3a6935a945ee600442",
+      "ref": "main",
+      "license": "Apache-2.0",
+      "licenseSource": "https://github.com/modelcontextprotocol/csharp-sdk/blob/324ccd83c357acf611e1cf3a6935a945ee600442/LICENSE",
+      "role": "Official MCP C# SDK source and stdio/DI contract reference.",
+      "reviewedFiles": [],
+      "capabilities": [],
+      "adoptedIdeas": [],
+      "rejectedIdeas": [],
+      "directCodeAdaptation": null
+    }
+  ]
+}

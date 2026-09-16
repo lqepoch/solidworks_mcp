@@ -1,0 +1,31 @@
+﻿# Build output
+**/bin/
+**/obj/
+artifacts/
+TestResults/
+
+# Local machine configuration and generated provider inputs
+.local/
+*.user
+*.suo
+*.userosscache
+Directory.Build.generated.props
+SolidWorksMcp.local.props
+
+# The reference corpus is intentionally local-only. Keep only its manifest/docs tracked.
+references/*
+!references/manifest.json
+!references/README.md
+
+# Local test evidence may contain proprietary paths or CAD content.
+test-evidence/
+live-evidence/
+
+# IDE/editor state
+.vs/
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+Desktop.ini

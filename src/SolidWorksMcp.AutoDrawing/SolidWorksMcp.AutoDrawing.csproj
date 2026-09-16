@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SolidWorksMcp.AutoDrawing</RootNamespace>
+    <AssemblyName>SolidWorksMcp.AutoDrawing</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SolidWorksMcp.CadAbstractions\SolidWorksMcp.CadAbstractions.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.EngineeringModel\SolidWorksMcp.EngineeringModel.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.RuleEngine\SolidWorksMcp.RuleEngine.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.Tolerancing\SolidWorksMcp.Tolerancing.csproj" />
+  </ItemGroup>
+</Project>

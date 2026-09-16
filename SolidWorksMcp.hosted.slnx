@@ -1,0 +1,21 @@
+﻿<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SolidWorksMcp.Protocol/SolidWorksMcp.Protocol.csproj" />
+    <Project Path="src/SolidWorksMcp.Core/SolidWorksMcp.Core.csproj" />
+    <Project Path="src/SolidWorksMcp.CadAbstractions/SolidWorksMcp.CadAbstractions.csproj" />
+    <Project Path="src/SolidWorksMcp.EngineeringModel/SolidWorksMcp.EngineeringModel.csproj" />
+    <Project Path="src/SolidWorksMcp.RuleEngine/SolidWorksMcp.RuleEngine.csproj" />
+    <Project Path="src/SolidWorksMcp.Tolerancing/SolidWorksMcp.Tolerancing.csproj" />
+    <Project Path="src/SolidWorksMcp.AutoDrawing/SolidWorksMcp.AutoDrawing.csproj" />
+    <Project Path="src/SolidWorksMcp.AssemblyDrawing/SolidWorksMcp.AssemblyDrawing.csproj" />
+    <Project Path="src/SolidWorksMcp.Server/SolidWorksMcp.Server.csproj" />
+  </Folder>
+  <Folder Name="/testing/">
+    <Project Path="testing/SolidWorksMcp.Provider.Fake/SolidWorksMcp.Provider.Fake.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj" />
+    <Project Path="tests/SolidWorksMcp.ContractTests/SolidWorksMcp.ContractTests.csproj" />
+    <Project Path="tests/SolidWorksMcp.FakeCadTests/SolidWorksMcp.FakeCadTests.csproj" />
+  </Folder>
+</Solution>

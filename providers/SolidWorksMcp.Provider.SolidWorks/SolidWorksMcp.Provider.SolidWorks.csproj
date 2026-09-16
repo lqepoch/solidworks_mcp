@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>SolidWorksMcp.Provider.SolidWorks</RootNamespace>
+    <AssemblyName>SolidWorksMcp.Provider.SolidWorks</AssemblyName>
+    <IsSolidWorksProvider>true</IsSolidWorksProvider>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SolidWorksMcp.CadAbstractions\SolidWorksMcp.CadAbstractions.csproj" />
+    <ProjectReference Include="..\..\src\SolidWorksMcp.Core\SolidWorksMcp.Core.csproj" />
+    <ProjectReference Include="..\..\src\SolidWorksMcp.Protocol\SolidWorksMcp.Protocol.csproj" />
+  </ItemGroup>
+</Project>

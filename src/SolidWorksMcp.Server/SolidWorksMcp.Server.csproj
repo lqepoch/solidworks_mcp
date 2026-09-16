@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SolidWorksMcp.Server</RootNamespace>
+    <AssemblyName>SolidWorksMcp.Server</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol" />
+    <ProjectReference Include="..\SolidWorksMcp.Core\SolidWorksMcp.Core.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.Protocol\SolidWorksMcp.Protocol.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.CadAbstractions\SolidWorksMcp.CadAbstractions.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.EngineeringModel\SolidWorksMcp.EngineeringModel.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.RuleEngine\SolidWorksMcp.RuleEngine.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.Tolerancing\SolidWorksMcp.Tolerancing.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.AutoDrawing\SolidWorksMcp.AutoDrawing.csproj" />
+    <ProjectReference Include="..\SolidWorksMcp.AssemblyDrawing\SolidWorksMcp.AssemblyDrawing.csproj" />
+  </ItemGroup>
+</Project>

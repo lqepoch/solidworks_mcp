@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>SolidWorksMcp.UnitTests</RootNamespace>
+    <AssemblyName>SolidWorksMcp.UnitTests</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <ProjectReference Include="..\..\src\SolidWorksMcp.Core\SolidWorksMcp.Core.csproj" />
+    <ProjectReference Include="..\..\src\SolidWorksMcp.EngineeringModel\SolidWorksMcp.EngineeringModel.csproj" />
+  </ItemGroup>
+</Project>
