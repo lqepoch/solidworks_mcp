@@ -156,7 +156,7 @@ The 30 Hosted-safe tests are 22 Unit, 4 FakeCad and 4 Contract tests (including 
 
 ## A05 local implementation evidence
 
-Issue #16/A05 is implemented locally in the pending configuration-negotiation commit; the final commit SHA will be recorded immediately after verification.
+Issue #16/A05 is implemented locally in commit `1868706`.
 
 - `src/SolidWorksMcp.Core/RuntimeConfiguration.cs` defines the versioned user-local configuration contract, allowlisted provider modes, default-off experimental drawing/recognition flags, four-layer precedence (defaults → user-local JSON → environment → CLI), field-source labels and fail-closed handling for unknown CLI values or explicitly missing configuration files. Effective snapshots contain no machine path or secret.
 - `src/SolidWorksMcp.Protocol/ProtocolCompatibility.cs` centralizes schema identity, major/minor parsing and explicit backward-compatibility rules. Current/older compatible versions are accepted; different schema, major versions, future minor versions and malformed versions are rejected.
