@@ -4,7 +4,7 @@ SolidWorksMcp is a planned .NET 10/C# enterprise MCP server and deterministic En
 
 ## Current bootstrap status
 
-The repository now contains the approved module boundaries, a Hosted-safe solution filter, architecture guards, pinned research manifest, licensing policy, AGENTS instructions, a read-only Windows doctor and the first official C# MCP stdio host. The A02 host exposes a compact `cad.health`, `cad.capabilities`, `cad.create-part` and `cad.inspect` registry; the default executable still uses an explicit unavailable provider until the native SOLIDWORKS provider work in Issues #17-#22 is complete.
+The repository now contains the approved module boundaries, a Hosted-safe solution filter, architecture guards, pinned research manifest, licensing policy, AGENTS instructions, a read-only Windows doctor and the official C# MCP stdio host. The host exposes a compact `cad.health`, `cad.capabilities`, `cad.create-part` and `cad.inspect` registry. On a doctor-enabled Windows machine, the full solution can opt into the native SOLIDWORKS provider; the default build remains vendor-free and fails closed when native mode is requested without that opt-in.
 
 The MCP host keeps stdout reserved for the protocol wire and sends console logs to stderr. Its mutation boundary advertises flat, versioned input schemas, validates the schema before starting a CAD session, and returns the typed operation envelope as structured content. Contract tests exercise the official SDK client against FakeCad; they do not claim a live SOLIDWORKS COM result.
 
@@ -20,6 +20,8 @@ Requires the .NET 10 SDK and Git. SOLIDWORKS is not required for the hosted solu
 
 Equivalent direct commands are restore, dotnet format --verify-no-changes, Release build and test against SolidWorksMcp.hosted.slnx. The complete solution is SolidWorksMcp.slnx; it includes the Windows provider and opt-in Live test project for local qualification.
 
+The Hosted script forces `SolidWorksMcpNativeProviderEnabled=false` and writes project-scoped ignored artifacts below `artifacts/hosted`, so a Hosted-safe build cannot overwrite local native assets. After running the Windows doctor with `-Initialize`, build the complete solution on the local Windows machine to produce the opt-in `net10.0-windows` server and provider sidecar. The doctor-generated MCP configuration points at that native executable; it never starts or stops `SLDWORKS.exe` automatically.
+
 ## Windows doctor
 
 The doctor detects .NET/Git, SOLIDWORKS installations and running sessions, API redist/type-library candidates, templates and safe user-local test/output roots. It does not modify global registry or settings and is read-only unless -Initialize is supplied.
@@ -28,6 +30,8 @@ The doctor detects .NET/Git, SOLIDWORKS installations and running sessions, API 
     powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksMcpDoctor.ps1 -Initialize -Json
 
 Generated files live under %LOCALAPPDATA%\SolidWorksMcp and are ignored by Git. SOLIDWORKS vendor DLLs are discovered from the local installation; they are never copied into this repository.
+
+The native server accepts only the user-local CAD output/test roots written by the doctor until an operator explicitly adds another allowlisted root. A native create request outside that policy returns `PATH_NOT_ALLOWED`; the allowlist is not serialized into MCP capability payloads.
 
 ## Reference corpus and provenance
 

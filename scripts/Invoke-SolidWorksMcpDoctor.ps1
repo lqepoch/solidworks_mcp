@@ -227,11 +227,12 @@ if ($Initialize) {
   <PropertyGroup>
     <SolidWorksInstallRoot>$installRoot</SolidWorksInstallRoot>
     <SolidWorksApiRedist>$redistRoot</SolidWorksApiRedist>
+    <SolidWorksMcpNativeProviderEnabled>$(if ($selected -and $selected.status -eq 'complete') { 'true' } else { 'false' })</SolidWorksMcpNativeProviderEnabled>
   </PropertyGroup>
 </Project>
 "@ | Set-Content -LiteralPath $propsPath -Encoding UTF8
 
-    $resolvedServerPath = if ($ServerPath) { (Resolve-Path $ServerPath).Path } else { Join-Path (Get-Location) 'src\SolidWorksMcp.Server\bin\Release\net10.0\SolidWorksMcp.Server.exe' }
+    $resolvedServerPath = if ($ServerPath) { (Resolve-Path $ServerPath).Path } else { Join-Path (Get-Location) 'src\SolidWorksMcp.Server\bin\Release\net10.0-windows\SolidWorksMcp.Server.exe' }
     $mcpConfigPath = Join-Path $UserLocalRoot 'mcp.json'
     [pscustomobject]@{
         mcpServers = [pscustomobject]@{

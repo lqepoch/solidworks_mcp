@@ -376,6 +376,44 @@ contract. The running SOLIDWORKS process was not closed by the test; only the pr
 detached. The native document itself was explicitly closed before test completion, allowing the successful isolated
 artifact cleanup path to run.
 
+## Native stdio composition evidence (partial)
+
+The native provider is now composed into the real MCP executable behind an explicit user-local opt-in. This is a
+composition and transport proof, not a claim that every native mutation is complete.
+
+- `src/SolidWorksMcp.Server/SolidWorksMcp.Server.csproj` targets `net10.0-windows` and references the provider only
+  when `SolidWorksMcpNativeProviderEnabled=true`; the provider remains the only project that owns vendor Interop
+  references. Hosted mode targets vendor-free `net10.0` and does not load the provider assembly.
+- `src/SolidWorksMcp.Server/Program.cs` loads the complete doctor configuration, constructs
+  `SolidWorksCadProvider` with the user-local `CadPathAllowlist` in native mode, and fails closed with an explicit
+  diagnostic when a vendor-free executable is asked to run native mode.
+- `Directory.Build.props` and `scripts/build-hosted.ps1` isolate Hosted `bin` and `obj` output per project under the
+  ignored `artifacts/hosted` root. Explicit `bin/obj/artifacts` exclusions prevent generated source from older
+  target/platform combinations being compiled again.
+- `scripts/Invoke-SolidWorksMcpDoctor.ps1 -Initialize -Json` writes user-local provider opt-in properties, an MCP
+  executable path, and the path allowlist. No machine-specific path is committed.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 55 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
+    dotnet build SolidWorksMcp.hosted.slnx --configuration Release --no-restore -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx --configuration Release --no-build -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true --logger "console;verbosity=minimal" # exit 0; Unit 55 + Contract 7 + FakeCad 7 passed
+
+The native executable was started as a local stdio child and successfully completed MCP `initialize`, `tools/list`
+and `cad.capabilities` requests. The response identified the native provider and exposed four tools. The smoke test
+did not start or stop SOLIDWORKS and did not perform a CAD mutation; the current machine had zero running
+`SLDWORKS.exe` sessions at the time of the check. Therefore native MCP create-part evidence and a full
+`Codex -> MCP -> Provider -> SOLIDWORKS` mutation proof remain pending an explicitly user-started SOLIDWORKS
+session and isolated workspace.
+
+The official API references used by the native mutation slice include `IDimension.SetSystemValue3` and its required
+read-back through `IDimension.GetSystemValue3`:
+[SetSystemValue3](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDimension~SetSystemValue3.html)
+and
+[GetSystemValue3](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDimension~GetSystemValue3.html).
+
 ## Private drawing fixture review evidence (redacted)
 
 The user-supplied local drawing corpus is treated as confidential research input, not as a repository fixture. The

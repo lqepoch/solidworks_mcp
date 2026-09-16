@@ -14,6 +14,16 @@
     <RepositoryUrl>https://github.com/lqepoch/solidworks_mcp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!--
+      Keep generated files out of SDK default globs even when an alternate output root is selected.
+      当选择备用输出根目录时，也要显式排除生成文件，避免多次构建的 AssemblyInfo 被再次编译。
+    -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**;artifacts/**</DefaultItemExcludes>
+    <!-- Hosted CI opts into project-scoped ignored output roots so it cannot overwrite local native assets. -->
+    <!-- Hosted CI 显式启用按项目隔离的 ignored 输出根目录，不能覆盖本机 native assets。 -->
+    <SolidWorksMcpHostedBuild Condition="'$(SolidWorksMcpHostedBuild)' == ''">false</SolidWorksMcpHostedBuild>
+    <BaseOutputPath Condition="'$(SolidWorksMcpHostedBuild)' == 'true'">$(MSBuildThisFileDirectory)artifacts\hosted\bin\$(MSBuildProjectName)\</BaseOutputPath>
+    <BaseIntermediateOutputPath Condition="'$(SolidWorksMcpHostedBuild)' == 'true'">$(MSBuildThisFileDirectory)artifacts\hosted\obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
   </PropertyGroup>
 
   <!--
