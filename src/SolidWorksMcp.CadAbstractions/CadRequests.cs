@@ -1,4 +1,5 @@
-﻿using SolidWorksMcp.Protocol;
+﻿using System.Collections.Immutable;
+using SolidWorksMcp.Protocol;
 
 namespace SolidWorksMcp.CadAbstractions;
 
@@ -160,6 +161,12 @@ public sealed record DrawingAnnotationRequest
 
     /// <summary>Display text; source semantic identity must be carried by higher layers.</summary>
     public string Text { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Stable engineering coverage keys explicitly associated with this annotation.
+    /// 与标注显式关联的稳定工程覆盖 key；QA 不通过猜测可见文本来判定尺寸是否完整。
+    /// </summary>
+    public ImmutableArray<string> CoverageKeys { get; init; } = [];
 
     /// <summary>Paper-space position in canonical millimetres.</summary>
     public Coordinate2D Position { get; init; }

@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using SolidWorksMcp.AutoDrawing;
+using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.EngineeringModel;
 using SolidWorksMcp.Protocol;
 
@@ -184,4 +185,90 @@ public sealed class PartDrawingPlannerTests
     }
 
     private static NormalizedScore Score(double value) => NormalizedScore.FromRatio(value);
+}
+
+public sealed class PartDrawingCoverageAnalyzerTests
+{
+    [Fact]
+    public void ExplicitCoveragePassesApprovedRequirementsAndWarnsOnlyForOptionalMissingItems()
+    {
+        var draft = PartDrawingRequirementSet.FromReviewedClasses(
+            "coverage-profile",
+            [PartDrawingSemanticClass.OrthographicViews, PartDrawingSemanticClass.IsometricView],
+            DateTimeOffset.Parse("2026-09-16T00:00:00Z", CultureInfo.InvariantCulture));
+        PartDrawingRequirementSet approved = draft.Approve(draft.Requirements.Where(requirement => requirement.Required).Select(requirement => requirement.RequirementId));
+        PartDrawingPlan plan = PartDrawingPlanner.Plan(new PartDrawingPlanRequest { Requirements = approved, PreferredPrimaryOrientationApproved = true });
+
+        PartDrawingCoverageReport report = PartDrawingCoverageAnalyzer.Analyze(approved, plan, Snapshot(
+            new DrawingAnnotationSnapshot
+            {
+                AnnotationId = new AnnotationId("annotation-01"),
+                ViewId = new ViewId("view-primary"),
+                Kind = "model-dimension",
+                Text = "redacted",
+                CoverageKeys = ["views.orthographic.coverage"],
+                Position = new Coordinate2D(Length.FromMillimeters(0), Length.FromMillimeters(0)),
+            }));
+
+        Assert.True(report.CanRelease);
+        Assert.Equal(PartDrawingCoverageStatus.Pass, report.Findings.Single(finding => finding.CoverageKey == "views.orthographic.coverage").Status);
+        Assert.Equal(PartDrawingCoverageStatus.Warning, report.Findings.Single(finding => finding.CoverageKey == "views.isometric.coverage").Status);
+    }
+
+    [Fact]
+    public void UnapprovedCoverageIsReviewRequiredAndUnknownKeysAreNotSilentlyAccepted()
+    {
+        var requirements = PartDrawingRequirementSet.FromReviewedClasses(
+            "review-profile",
+            [PartDrawingSemanticClass.OrthographicViews],
+            DateTimeOffset.Parse("2026-09-16T00:00:00Z", CultureInfo.InvariantCulture));
+        PartDrawingPlan plan = PartDrawingPlanner.Plan(new PartDrawingPlanRequest { Requirements = requirements });
+
+        PartDrawingCoverageReport report = PartDrawingCoverageAnalyzer.Analyze(requirements, plan, Snapshot(
+            new DrawingAnnotationSnapshot
+            {
+                AnnotationId = new AnnotationId("annotation-02"),
+                ViewId = new ViewId("view-primary"),
+                Kind = "note",
+                Text = "redacted",
+                CoverageKeys = ["views.orthographic.coverage", "unmodeled.coverage"],
+                Position = new Coordinate2D(Length.FromMillimeters(0), Length.FromMillimeters(0)),
+            }));
+
+        Assert.False(report.CanRelease);
+        Assert.Equal(PartDrawingCoverageStatus.ReviewRequired, report.Findings.Single(finding => finding.CoverageKey == "views.orthographic.coverage").Status);
+        Assert.Equal(PartDrawingCoverageStatus.ReviewRequired, report.Findings.Single(finding => finding.CoverageKey == "plan").Status);
+        Assert.Equal(PartDrawingCoverageStatus.Warning, report.Findings.Single(finding => finding.CoverageKey == "unmodeled.coverage").Status);
+    }
+
+    [Fact]
+    public void ApprovedRequirementWithoutExplicitSemanticAnnotationIsBlocking()
+    {
+        var draft = PartDrawingRequirementSet.FromReviewedClasses(
+            "missing-profile",
+            [PartDrawingSemanticClass.OrthographicViews],
+            DateTimeOffset.Parse("2026-09-16T00:00:00Z", CultureInfo.InvariantCulture));
+        PartDrawingRequirementSet approved = draft.Approve(draft.Requirements.Select(requirement => requirement.RequirementId));
+        PartDrawingPlan plan = PartDrawingPlanner.Plan(new PartDrawingPlanRequest { Requirements = approved, PreferredPrimaryOrientationApproved = true });
+
+        PartDrawingCoverageReport report = PartDrawingCoverageAnalyzer.Analyze(approved, plan, Snapshot());
+
+        Assert.False(report.CanRelease);
+        Assert.Equal(PartDrawingCoverageStatus.Blocking, report.Findings.Single().Status);
+        Assert.Equal("missing-required-coverage", report.Findings.Single().Code);
+    }
+
+    private static CadInspectionSnapshot Snapshot(params DrawingAnnotationSnapshot[] annotations) => new()
+    {
+        Document = new CadDocumentSummary
+        {
+            DocumentId = new DocumentId("drawing-01"),
+            DocumentType = CadDocumentType.Drawing,
+            Path = string.Empty,
+            Configuration = "Default",
+            StateHash = "sha256:test",
+            IsDirty = false,
+        },
+        Annotations = [.. annotations],
+    };
 }

@@ -144,6 +144,12 @@ public sealed record DrawingAnnotationSnapshot
     /// <summary>Visible annotation text.</summary>
     public required string Text { get; init; }
 
+    /// <summary>
+    /// Stable engineering coverage keys preserved from the semantic annotation request.
+    /// 从语义标注请求保留下来的稳定工程覆盖 key；不把原始 PDF 文字当作 QA 证据。
+    /// </summary>
+    public ImmutableArray<string> CoverageKeys { get; init; } = [];
+
     /// <summary>Paper-space position.</summary>
     public required Coordinate2D Position { get; init; }
 }

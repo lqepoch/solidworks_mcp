@@ -374,6 +374,13 @@ images, manifests and CAD artifacts are not committed, uploaded or written to Is
 - `NormalizedScore` is a protocol value object with range validation; the planner does not expose raw untyped
   engineering doubles across the AutoDrawing boundary. Missing orthographic coverage is `Blocked`; unapproved
   private-review requirements or unverified candidates remain `ReviewRequired`.
+- `src/SolidWorksMcp.AutoDrawing/PartDrawingCoverageAnalyzer.cs` adds the next QA boundary: drawing annotations carry
+  explicit semantic `CoverageKeys`, and the analyzer reports `Pass`, `Warning`, `ReviewRequired` or `Blocking` without
+  OCR/text similarity. Required approved requirements without semantic annotation coverage block release; optional
+  omissions remain warnings; orphan keys are visible warnings rather than silently accepted coverage.
+- `CadAbstractions.DrawingAnnotationRequest` and `DrawingAnnotationSnapshot` preserve those coverage keys across the
+  provider boundary. FakeCad now round-trips them, while the native drawing provider remains intentionally deferred
+  until the drawing COM implementation is researched and verified.
 
 The two sampled slots are intentionally not named here. A future iteration must run the same script again and sample
 exactly two new candidates (or two new random candidates) before making a reference-driven design decision.
@@ -382,7 +389,9 @@ Planning evidence command and result:
 
     dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 49 + Contract 7 + FakeCad 6 passed; Live 4 passed + 2 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 52 + Contract 7 + FakeCad 6 passed; Live 4 passed + 2 skipped
 
 The planner tests cover approved section selection, deterministic tie-breaking, private-review gating and missing
-orthographic blocking. These tests use only generic semantic classes and synthetic provider-neutral candidates.
+orthographic blocking. Coverage tests cover explicit annotation keys, optional warnings, unresolved review state,
+orphan keys and blocking missing coverage. These tests use only generic semantic classes and synthetic
+provider-neutral candidates.

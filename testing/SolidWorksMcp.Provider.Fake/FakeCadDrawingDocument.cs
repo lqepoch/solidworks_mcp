@@ -132,6 +132,7 @@ internal sealed class FakeCadDrawingDocument(
             ViewId = request.ViewId,
             Kind = request.Kind.Trim(),
             Text = request.Text.Trim(),
+            CoverageKeys = request.CoverageKeys,
             Position = request.Position,
         };
         annotations.Add(snapshot);
