@@ -2,11 +2,11 @@
 
 public sealed class ContractPlaceholderTests
 {
-    // The shared conformance suite is introduced with CadAbstractions in Issue #14.
-    // 共享 Provider 一致性套件将在 Issue #14 定义 CadAbstractions 后引入。
+    /// <summary>FakeCad must complete the representative part-to-drawing workflow without vendor DLLs.</summary>
     [Fact]
-    public void ContractSuiteWillRunAgainstFakeAndSolidWorksProviders()
+    public async Task FakeCadSatisfiesPartToDrawingProviderContract()
     {
-        Assert.True(true);
+        await using var provider = new SolidWorksMcp.Provider.Fake.FakeCadProvider();
+        await CadProviderContractSuite.RunPartToDrawingWorkflowAsync(provider);
     }
 }

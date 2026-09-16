@@ -16,6 +16,7 @@ internal static class IdentifierValidation
 public readonly record struct SessionId
 {
     /// <summary>Creates an opaque session identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public SessionId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>
@@ -26,6 +27,7 @@ public readonly record struct SessionId
 public readonly record struct DocumentId
 {
     /// <summary>Creates an opaque document identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public DocumentId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>
@@ -36,6 +38,7 @@ public readonly record struct DocumentId
 public readonly record struct FeatureId
 {
     /// <summary>Creates an opaque feature identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public FeatureId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>
@@ -46,7 +49,19 @@ public readonly record struct FeatureId
 public readonly record struct BodyId
 {
     /// <summary>Creates an opaque body identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public BodyId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
+
+    /// <summary>Gets the stable serialized value.</summary>
+    public string Value { get; }
+}
+
+/// <summary>Stable identity of an assembly component instance, distinct from its referenced document.</summary>
+public readonly record struct ComponentId
+{
+    /// <summary>Creates an opaque component-instance identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
+    public ComponentId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>
     public string Value { get; }
@@ -56,6 +71,7 @@ public readonly record struct BodyId
 public readonly record struct ViewId
 {
     /// <summary>Creates an opaque view identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public ViewId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>
@@ -66,6 +82,7 @@ public readonly record struct ViewId
 public readonly record struct AnnotationId
 {
     /// <summary>Creates an opaque annotation identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public AnnotationId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>
@@ -77,6 +94,7 @@ public readonly record struct AnnotationId
 public readonly record struct ItemIdentity
 {
     /// <summary>Creates an opaque item identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public ItemIdentity(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>
@@ -87,6 +105,7 @@ public readonly record struct ItemIdentity
 public readonly record struct TransactionId
 {
     /// <summary>Creates an opaque transaction identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public TransactionId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>
@@ -97,6 +116,7 @@ public readonly record struct TransactionId
 public readonly record struct IdempotencyKey
 {
     /// <summary>Creates an opaque idempotency key.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
     public IdempotencyKey(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
 
     /// <summary>Gets the stable serialized value.</summary>

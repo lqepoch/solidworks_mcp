@@ -114,3 +114,22 @@ Evidence command and result:
     dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --logger "trx;LogFileName=a04-final.trx" # exit 0; 23 passed; 0 failed; 0 skipped
 
 No Live SOLIDWORKS test was used for A04; this issue is vendor-neutral and the Live harness remains explicitly skipped under #51.
+
+## A03 local implementation evidence
+
+Issue #14/A03 is implemented locally in commit `pending` (the commit is intentionally made after this evidence update).
+
+- `src/SolidWorksMcp.CadAbstractions/ICadProvider.cs` defines vendor-neutral session, document, part, assembly, drawing, inspection and export interfaces. Only typed Protocol units/identities cross the boundary; no COM type is present.
+- `src/SolidWorksMcp.CadAbstractions/CadCapabilities.cs`, `CadRequests.cs` and `CadSnapshots.cs` define explicit capability declarations, deterministic requests, stable identities, load states and evidence-bearing snapshots.
+- `testing/SolidWorksMcp.Provider.Fake/` implements the same interfaces with deterministic session/document state, body/feature/component/mate/view/annotation identities, stable SHA-256 state hashes and explicit rebuild/save/inspect/export receipts.
+- `FakeCadFailureInjector` provides thread-safe one-shot failures at session, document, part, assembly, drawing, rebuild, save, inspect and export operation points. Unsupported capabilities return `UNSUPPORTED_CAPABILITY` rather than silently doing nothing.
+- `tests/SolidWorksMcp.ContractTests/CadProviderContractSuite.cs` is the reusable provider contract. Its part→body→extrusion→rebuild→inspect→drawing→view→annotation→inspect→export→save workflow currently runs against FakeCad.
+- `tests/SolidWorksMcp.FakeCadTests/FakeCadProviderTests.cs` covers failure recovery, unsupported capability behavior and assembly loading/mate identity.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info   # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore                             # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --logger "trx;LogFileName=a03-final.trx" # exit 0; 27 passed; 0 failed; 0 skipped
+
+Live SOLIDWORKS was not used for A03; the native implementation and shared-suite execution are deferred to #17 and #51.

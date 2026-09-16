@@ -72,4 +72,15 @@ public sealed class OperationContractTests
         Assert.Equal("doc-001", first.Value);
         Assert.Throws<ArgumentException>(() => new ItemIdentity("  "));
     }
+
+    /// <summary>Typed identifiers must survive JSON round-trips without falling back to a default struct value.</summary>
+    [Fact]
+    public void DocumentIdJsonRoundTripPreservesStableValue()
+    {
+        string json = JsonSerializer.Serialize(new DocumentId("doc-serial-001"));
+        DocumentId roundTrip = JsonSerializer.Deserialize<DocumentId>(json);
+
+        Assert.Contains("doc-serial-001", json, StringComparison.Ordinal);
+        Assert.Equal(new DocumentId("doc-serial-001"), roundTrip);
+    }
 }
