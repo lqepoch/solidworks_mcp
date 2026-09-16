@@ -1,4 +1,5 @@
 ﻿using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
 
 namespace SolidWorksMcp.Provider.SolidWorks;
@@ -12,17 +13,20 @@ namespace SolidWorksMcp.Provider.SolidWorks;
 internal sealed class SolidWorksCadSession : ICadSession
 {
     private readonly SolidWorksComSessionHost host;
+    private readonly CadPathAllowlist pathAllowlist;
     private readonly SolidWorksDocumentRegistry registry = new();
     private int lifecycleState;
 
     public SolidWorksCadSession(
         SolidWorksComSessionHost host,
         SolidWorksSessionInfo info,
-        CadCapabilitySet capabilities)
+        CadCapabilitySet capabilities,
+        CadPathAllowlist pathAllowlist)
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
         ArgumentNullException.ThrowIfNull(info);
         Capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
+        this.pathAllowlist = pathAllowlist ?? throw new ArgumentNullException(nameof(pathAllowlist));
         SessionId = info.SessionId;
         Inspection = new SolidWorksInspectionService(
             host,
@@ -70,7 +74,7 @@ internal sealed class SolidWorksCadSession : ICadSession
 
         OperationResult<SolidWorksCreatedPart> created = await host.InvokeOnStaAsync(
             SessionId,
-            application => SolidWorksPartFactory.CreateOnSta(application, SessionId, request),
+            application => SolidWorksPartFactory.CreateOnSta(application, SessionId, request, pathAllowlist),
             cancellationToken).ConfigureAwait(false);
         if (!created.IsSuccess || created.Value is null)
         {

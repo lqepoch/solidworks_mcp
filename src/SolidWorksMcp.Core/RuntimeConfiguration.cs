@@ -143,13 +143,15 @@ public sealed record ConfigurationLoadResult
         SolidWorksMcpConfiguration configuration,
         bool userLocalFileLoaded,
         IReadOnlyDictionary<string, string> sources,
-        IEnumerable<string>? warnings = null)
+        IEnumerable<string>? warnings = null,
+        CadPathAllowlist? pathAllowlist = null)
     {
         Configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         UserLocalFileLoaded = userLocalFileLoaded;
         Sources = (sources ?? throw new ArgumentNullException(nameof(sources)))
             .ToImmutableDictionary(StringComparer.Ordinal);
         Warnings = [.. (warnings ?? [])];
+        PathAllowlist = pathAllowlist ?? CadPathAllowlist.DenyAll;
     }
 
     /// <summary>Gets the validated effective configuration.</summary>
@@ -163,6 +165,14 @@ public sealed record ConfigurationLoadResult
 
     /// <summary>Gets safe non-secret warnings collected while applying optional layers.</summary>
     public ImmutableArray<string> Warnings { get; }
+
+    /// <summary>Gets the private local path policy used by trusted provider composition.</summary>
+    /// <remarks>
+    /// This property is not included in <see cref="SolidWorksMcpConfiguration"/>, so MCP capability payloads cannot
+    /// disclose machine paths. 此属性不放入 SolidWorksMcpConfiguration，因此 MCP capability payload 不会泄露机器路径。
+    /// </remarks>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public CadPathAllowlist PathAllowlist { get; }
 }
 
 /// <summary>Loads the four explicit configuration layers in deterministic precedence order.</summary>
@@ -180,6 +190,7 @@ public static class SolidWorksMcpConfigurationLoader
     private const string SchemaVersionEnvironmentVariable = "SOLIDWORKS_MCP_SCHEMA_VERSION";
     private const string ExperimentalDrawingEnvironmentVariable = "SOLIDWORKS_MCP_FEATURE_EXPERIMENTAL_DRAWING";
     private const string ExperimentalRecognitionEnvironmentVariable = "SOLIDWORKS_MCP_FEATURE_EXPERIMENTAL_RECOGNITION";
+    private const string AllowedPathRootsEnvironmentVariable = "SOLIDWORKS_MCP_ALLOWED_PATH_ROOTS";
 
     /// <summary>Loads settings using the process environment and the standard local application path.</summary>
     public static ConfigurationLoadResult Load(IEnumerable<string>? commandLineArguments = null)
@@ -236,7 +247,7 @@ public static class SolidWorksMcpConfigurationLoader
         ApplyEnvironment(state, env);
         ApplyCommandLine(state, args);
         SolidWorksMcpConfiguration configuration = state.Build();
-        return new ConfigurationLoadResult(configuration, localLoaded, state.Sources, state.Warnings);
+        return new ConfigurationLoadResult(configuration, localLoaded, state.Sources, state.Warnings, state.BuildPathAllowlist());
     }
 
     /// <summary>Returns the documented default configuration path under LocalApplicationData.</summary>
@@ -301,6 +312,11 @@ public static class SolidWorksMcpConfigurationLoader
                     state.SetExperimentalRecognition(experimentalRecognition, "user-local");
                 }
             }
+
+            if (root.TryGetProperty("pathAllowlist", out JsonElement pathAllowlist))
+            {
+                state.SetPathRoots(ReadPathRoots(pathAllowlist), "user-local");
+            }
         }
         catch (JsonException exception)
         {
@@ -320,6 +336,11 @@ public static class SolidWorksMcpConfigurationLoader
         ApplyOptionalString(environment, ProviderModeEnvironmentVariable, state.SetProviderMode, "environment");
         ApplyOptionalBoolean(environment, ExperimentalDrawingEnvironmentVariable, state.SetExperimentalDrawing, "environment");
         ApplyOptionalBoolean(environment, ExperimentalRecognitionEnvironmentVariable, state.SetExperimentalRecognition, "environment");
+        string? roots = GetValue(environment, AllowedPathRootsEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(roots))
+        {
+            state.SetPathRoots(roots.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), "environment");
+        }
     }
 
     private static void ApplyCommandLine(MutableConfigurationState state, string[] args)
@@ -340,6 +361,9 @@ public static class SolidWorksMcpConfigurationLoader
                     break;
                 case "--feature":
                     ApplyFeatureArgument(state, ReadRequiredValue(args, ref index, argument));
+                    break;
+                case "--path-root":
+                    state.SetPathRoots([ReadRequiredValue(args, ref index, argument)], "cli");
                     break;
                 default:
                     throw new ConfigurationException($"Unknown configuration option '{argument}'.");
@@ -449,12 +473,36 @@ public static class SolidWorksMcpConfigurationLoader
         return true;
     }
 
+    private static ImmutableArray<string> ReadPathRoots(JsonElement pathAllowlist)
+    {
+        if (pathAllowlist.ValueKind != JsonValueKind.Object
+            || !pathAllowlist.TryGetProperty("roots", out JsonElement roots)
+            || roots.ValueKind != JsonValueKind.Array)
+        {
+            throw new ConfigurationException("Configuration property 'pathAllowlist.roots' must be an array.");
+        }
+
+        var values = new List<string>();
+        foreach (JsonElement root in roots.EnumerateArray())
+        {
+            if (root.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(root.GetString()))
+            {
+                throw new ConfigurationException("Every pathAllowlist root must be a non-empty string.");
+            }
+
+            values.Add(root.GetString()!);
+        }
+
+        return [.. values];
+    }
+
     private sealed class MutableConfigurationState
     {
         private string schemaVersion = ConfigurationSchema.CurrentVersion;
         private string providerMode = ProviderModes.Unavailable;
         private bool experimentalDrawing;
         private bool experimentalRecognition;
+        private ImmutableArray<string> pathRoots = [];
 
         public Dictionary<string, string> Sources { get; } = [];
 
@@ -482,6 +530,24 @@ public static class SolidWorksMcpConfigurationLoader
         {
             experimentalRecognition = value;
             Sources[FeatureFlagNames.ExperimentalRecognition] = source;
+        }
+
+        public void SetPathRoots(IEnumerable<string> roots, string source)
+        {
+            pathRoots = [.. roots];
+            Sources["pathAllowlist"] = source;
+        }
+
+        public CadPathAllowlist BuildPathAllowlist()
+        {
+            try
+            {
+                return new CadPathAllowlist(pathRoots);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new ConfigurationException("The configured CAD path allowlist is invalid.", exception);
+            }
         }
 
         public SolidWorksMcpConfiguration Build() => new(

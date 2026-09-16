@@ -1,6 +1,7 @@
 ﻿using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
 using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
 
 namespace SolidWorksMcp.Provider.SolidWorks;
@@ -17,32 +18,34 @@ internal static class SolidWorksPartFactory
     public static OperationResult<SolidWorksCreatedPart> CreateOnSta(
         ISldWorks application,
         SessionId sessionId,
-        CreatePartRequest request)
+        CreatePartRequest request,
+        CadPathAllowlist pathAllowlist)
     {
         ArgumentNullException.ThrowIfNull(application);
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(pathAllowlist);
 
-        if (string.IsNullOrWhiteSpace(request.Path))
+        CadPathValidationResult pathValidation = pathAllowlist.ValidateCreateTarget(request.Path, ".sldprt");
+        if (!pathValidation.IsAllowed || string.IsNullOrWhiteSpace(pathValidation.FullPath))
         {
             return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
                 "part.create",
                 new OperationError(
-                    ErrorCodes.InvalidRequest,
-                    "The native B03 part path is required so the document can be rebound safely.",
-                    ErrorCategories.Validation,
-                    remediation: "Use an isolated test/workspace path and pass it explicitly."));
+                    pathValidation.FailureReason == "outside-allowlist"
+                        ? ErrorCodes.PathNotAllowed
+                        : ErrorCodes.InvalidRequest,
+                    "The native part target failed the configured persisted-artifact path policy.",
+                    pathValidation.FailureReason == "outside-allowlist"
+                        ? ErrorCategories.Policy
+                        : ErrorCategories.Validation,
+                    details: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["path-policy-reason"] = pathValidation.FailureReason ?? "invalid",
+                    },
+                    remediation: "Use an existing absolute .sldprt target below an explicitly allowlisted workspace."));
         }
 
-        string path = Path.GetFullPath(request.Path.Trim());
-        if (!path.EndsWith(".sldprt", StringComparison.OrdinalIgnoreCase))
-        {
-            return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
-                "part.create",
-                new OperationError(
-                    ErrorCodes.InvalidRequest,
-                    "The native part target must use the .sldprt extension.",
-                    ErrorCategories.Validation));
-        }
+        string path = pathValidation.FullPath;
 
         if (File.Exists(path))
         {

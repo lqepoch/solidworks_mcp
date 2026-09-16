@@ -210,6 +210,11 @@ if ($Initialize) {
             experimentalDrawing = $false
             experimentalRecognition = $false
         }
+        # Native CAD writes are limited to user-local output/test roots until an operator adds another explicit root.
+        # Native CAD 写入默认只允许用户本地 output/test 根目录；操作者必须显式添加其它根目录。
+        pathAllowlist = [pscustomobject]@{
+            roots = @($paths.output, $paths.testWorkspace)
+        }
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configurationPath -Encoding UTF8
 
     $propsPath = Join-Path $UserLocalRoot 'SolidWorksMcp.local.props'

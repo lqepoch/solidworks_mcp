@@ -41,6 +41,13 @@ From the repository root:
 
 The doctor is read-only by default. Use -Initialize only to create user-local configuration under %LOCALAPPDATA%\SolidWorksMcp; never commit generated properties or machine paths.
 
+Native persisted-artifact writes are deny-by-default. Configure `pathAllowlist.roots` in the user-local runtime config,
+keep the roots dedicated to generated/test CAD, and require the Provider to validate the target again immediately before
+`SaveAs3`. Never weaken the policy by accepting relative paths, string-prefix-only containment, or an MCP caller's
+request as proof of authorization. 原生持久化 artifact 写入默认拒绝；在用户本地配置中显式设置
+`pathAllowlist.roots`，根目录应专用于生成/测试 CAD，Provider 必须在 `SaveAs3` 前再次校验。禁止用相对路径、
+仅字符串前缀判断，或 MCP caller 的请求本身替代授权证明。
+
 ## Safety and release rules
 
 All future mutating CAD operations must use the transaction engine: plan, preflight, acquire single writer, verify target/state, checkpoint, execute, rebuild, inspect, verify invariants, commit or rollback. High-risk checkpoint failure is fail-closed. Unknown SOLIDWORKS modal dialogs return a human-action-required state; never blind-click.

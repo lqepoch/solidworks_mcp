@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
 using SolidWorksMcp.Provider.SolidWorks;
 
@@ -37,7 +38,9 @@ public sealed class B03NativePartLiveTests
         bool completed = false;
         try
         {
-            await using var provider = new SolidWorksCadProvider();
+            // The Live harness grants this run only its isolated temporary workspace; the provider denies all other
+            // native create paths. Live harness 仅向本次运行授予隔离临时 workspace；Provider 拒绝所有其它 native path。
+            await using var provider = new SolidWorksCadProvider(new CadPathAllowlist([workspace]));
             OperationResult<ICadSession> sessionResult = await provider.StartSessionAsync(
                 new CadSessionOptions { RequestedProcessId = processId });
             Assert.True(sessionResult.IsSuccess, FormatError(sessionResult.Error));

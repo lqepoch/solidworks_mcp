@@ -72,11 +72,13 @@ public sealed class CadMcpTools(
 
     /// <summary>Creates one part after schema/version and identity validation.</summary>
     [McpServerTool(Name = "cad.create-part")]
-    [Description("Create one CAD part. Preconditions: schemaVersion=1.0 and valid document/configuration. Side effects: creates one part document; no drawing generation.")]
+    [Description("Create one CAD part. Preconditions: schemaVersion=1.0, valid document/configuration, and for native mode an explicit path below the configured allowlist. Side effects: creates one part document; no drawing generation.")]
     public async Task<CallToolResult> CreatePartAsync(
         [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
         [Description("Stable document identity; it is not a display title.")] string documentId,
         [Description("Active configuration name.")] string configuration,
+        [Description("Explicit absolute .sldprt output path below the configured path allowlist; omit only for FakeCad.")] string? path = null,
+        [Description("Optional initial circle radius in millimetres; this is not a SOLIDWORKS metre value.")] double? initialCircleRadiusMillimeters = null,
         [Description("Optional application operation correlation key.")] string? operationId = null,
         CancellationToken cancellationToken = default)
     {
@@ -90,6 +92,8 @@ public sealed class CadMcpTools(
             OperationId = operationId,
             DocumentId = documentId,
             Configuration = configuration,
+            Path = path,
+            InitialCircleRadiusMillimeters = initialCircleRadiusMillimeters,
         };
         string correlationId = correlation.Resolve(input?.OperationId);
         if (!TryValidate(input, out OperationError? validationError))
@@ -117,6 +121,10 @@ public sealed class CadMcpTools(
             {
                 RequestedDocumentId = new DocumentId(validInput.DocumentId),
                 Configuration = validInput.Configuration,
+                Path = validInput.Path,
+                InitialCircleRadius = validInput.InitialCircleRadiusMillimeters is double radius
+                    ? Length.FromMillimeters(radius)
+                    : null,
             },
             cancellationToken).ConfigureAwait(false);
         OperationResult<CadDocumentSummary> result = created.IsSuccess
@@ -197,6 +205,15 @@ public sealed class CadMcpTools(
         {
             error = InvalidInput("documentId and configuration are required");
         }
+        else if (input.Path is not null && (input.Path.Contains('\r') || input.Path.Contains('\n')))
+        {
+            error = InvalidInput("path must not contain CR/LF characters");
+        }
+        else if (input.InitialCircleRadiusMillimeters is double radius
+            && (!double.IsFinite(radius) || radius <= 0d))
+        {
+            error = InvalidInput("initialCircleRadiusMillimeters must be finite and greater than zero");
+        }
 
         return error is null;
     }
@@ -250,6 +267,14 @@ public sealed class CreatePartToolInput
     /// <summary>Configuration name for the new part.</summary>
     [Description("Active configuration name.")]
     public required string Configuration { get; init; }
+
+    /// <summary>Optional explicit persisted target; the native provider applies the path allowlist again.</summary>
+    [Description("Explicit absolute .sldprt output path below the configured path allowlist.")]
+    public string? Path { get; init; }
+
+    /// <summary>Optional initial circle radius in millimetres.</summary>
+    [Description("Optional initial circle radius in millimetres.")]
+    public double? InitialCircleRadiusMillimeters { get; init; }
 }
 
 /// <summary>Schema-visible input for the read-only inspect tool.</summary>

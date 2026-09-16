@@ -1,4 +1,5 @@
 ﻿using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
 
 namespace SolidWorksMcp.Provider.SolidWorks;
@@ -25,6 +26,7 @@ public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
     ]);
 
     private readonly SolidWorksComSessionHost host;
+    private readonly CadPathAllowlist pathAllowlist;
     private readonly Lock gate = new();
     private SolidWorksCadSession? session;
     private int disposed;
@@ -35,10 +37,27 @@ public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
     {
     }
 
+    /// <summary>Creates a native provider with an explicit persisted-artifact path policy.</summary>
+    /// <remarks>
+    /// An explicit policy is required for native file creation; the parameterless constructor denies all creates.
+    /// 原生文件创建必须显式提供路径策略；无参构造函数默认拒绝所有 create，避免 fail-open。
+    /// </remarks>
+    public SolidWorksCadProvider(CadPathAllowlist pathAllowlist)
+        : this(new SolidWorksComSessionHost(), pathAllowlist)
+    {
+    }
+
     /// <summary>Creates a provider with an internal host; the overload keeps lifecycle tests deterministic.</summary>
     internal SolidWorksCadProvider(SolidWorksComSessionHost host)
+        : this(host, CadPathAllowlist.DenyAll)
+    {
+    }
+
+    /// <summary>Internal constructor that injects both STA host and path policy for deterministic tests.</summary>
+    internal SolidWorksCadProvider(SolidWorksComSessionHost host, CadPathAllowlist pathAllowlist)
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
+        this.pathAllowlist = pathAllowlist ?? throw new ArgumentNullException(nameof(pathAllowlist));
     }
 
     /// <inheritdoc />
@@ -76,7 +95,7 @@ public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
         {
             if (session is null || session.IsClosed)
             {
-                session = new SolidWorksCadSession(host, attached.Value!, capabilities);
+                session = new SolidWorksCadSession(host, attached.Value!, capabilities, pathAllowlist);
             }
 
             return SolidWorksProviderResults.Success<ICadSession>(

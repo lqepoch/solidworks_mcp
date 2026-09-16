@@ -51,3 +51,7 @@ and `blocked`. A PDF selection or visual review is never itself a CAD geometry p
 inspection (body/feature/bounding box/mass/volume and other applicable invariants); drawing claims require requirement
 coverage, association and layout QA. 证据必须区分 selected/rendered/reviewed/implemented/validated/passed/failed/skipped/blocked；
 抽样或视觉复核本身绝不是 CAD 几何通过。几何必须由 Provider inspection 证明，工程图必须由 requirement coverage、关联性和布局 QA 证明。
+
+Generated CAD artifacts used during private review must also stay below the configured native `pathAllowlist.roots`;
+the secret corpus directory itself is never an approved output root. 私密复核生成的 CAD artifact 也必须位于 native
+`pathAllowlist.roots` 之下；秘密 corpus 目录本身绝不能成为允许写入的 output root。

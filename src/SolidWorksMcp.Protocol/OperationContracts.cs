@@ -76,6 +76,9 @@ public static class ErrorCodes
     /// <summary>Operation was cancelled by the caller.</summary>
     public const string Cancelled = "CANCELLED";
 
+    /// <summary>Target path is outside the configured CAD artifact allowlist.</summary>
+    public const string PathNotAllowed = "PATH_NOT_ALLOWED";
+
     /// <summary>Provider boundary returned a CAD/COM failure.</summary>
     public const string ProviderFailure = "PROVIDER_FAILURE";
 
