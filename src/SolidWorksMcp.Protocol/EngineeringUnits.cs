@@ -260,6 +260,57 @@ public readonly record struct Coordinate3D
     public Length Z { get; }
 }
 
+/// <summary>
+/// Represents a finite normalized score in the inclusive range [0, 1].
+/// 表示 [0, 1] 闭区间内的有限归一化评分，避免工程规划 API 暴露无语义的裸 double。
+/// </summary>
+public readonly record struct NormalizedScore : IComparable<NormalizedScore>
+{
+    /// <summary>Creates a score and rejects NaN, infinity and out-of-range values.</summary>
+    [JsonConstructor]
+    public NormalizedScore(double value)
+    {
+        QuantityValidation.RequireFinite(value, nameof(value));
+        if (value is < 0d or > 1d)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "A normalized score must be in [0, 1].");
+        }
+
+        Value = value;
+    }
+
+    /// <summary>Gets the normalized scalar for internal ordering or numeric reporting.</summary>
+    public double Value { get; }
+
+    /// <summary>Creates a normalized score from a finite ratio.</summary>
+    public static NormalizedScore FromRatio(double value) => new(value);
+
+    /// <summary>
+    /// Combines the fixed planner evidence weights: coverage 50%, readability 30%, exposure 20%.
+    /// 使用固定规划权重合并证据：覆盖度 50%、可读性 30%、制造特征暴露 20%。
+    /// </summary>
+    public static NormalizedScore FromPlanningEvidence(
+        NormalizedScore coverage,
+        NormalizedScore readability,
+        NormalizedScore manufacturingExposure) =>
+        new((coverage.Value * 0.50) + (readability.Value * 0.30) + (manufacturingExposure.Value * 0.20));
+
+    /// <summary>Compares scores for deterministic candidate ordering.</summary>
+    public int CompareTo(NormalizedScore other) => Value.CompareTo(other.Value);
+
+    /// <summary>Orders two normalized scores without exposing an untyped scalar at the engineering boundary.</summary>
+    public static bool operator <(NormalizedScore left, NormalizedScore right) => left.Value < right.Value;
+
+    /// <summary>Orders two normalized scores without exposing an untyped scalar at the engineering boundary.</summary>
+    public static bool operator <=(NormalizedScore left, NormalizedScore right) => left.Value <= right.Value;
+
+    /// <summary>Orders two normalized scores without exposing an untyped scalar at the engineering boundary.</summary>
+    public static bool operator >(NormalizedScore left, NormalizedScore right) => left.Value > right.Value;
+
+    /// <summary>Orders two normalized scores without exposing an untyped scalar at the engineering boundary.</summary>
+    public static bool operator >=(NormalizedScore left, NormalizedScore right) => left.Value >= right.Value;
+}
+
 /// <summary>Centralizes validation so every dimensional value rejects NaN and infinity consistently.</summary>
 internal static class QuantityValidation
 {

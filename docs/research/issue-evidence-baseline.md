@@ -367,6 +367,22 @@ images, manifests and CAD artifacts are not committed, uploaded or written to Is
 - `PartDrawingRequirementSet.FromReviewedClasses` turns those classes into deterministic requirement identities while
   preserving `ReviewRequired` status and `private_drawing_review` provenance. A release gate cannot be satisfied by
   visual review or AI inference alone.
+- `src/SolidWorksMcp.AutoDrawing/PartDrawingPlanner.cs` now consumes that graph as a pure high-level compiler stage.
+  It emits primary/projected/isometric roles, compares Section versus Detail candidates using the named normalized
+  evidence score (coverage 50%, readability 30%, manufacturing exposure 20%), applies stable tie-breakers, and
+  exposes `CanGenerate` separately from `CanRelease`. It never calls COM or writes a drawing.
+- `NormalizedScore` is a protocol value object with range validation; the planner does not expose raw untyped
+  engineering doubles across the AutoDrawing boundary. Missing orthographic coverage is `Blocked`; unapproved
+  private-review requirements or unverified candidates remain `ReviewRequired`.
 
 The two sampled slots are intentionally not named here. A future iteration must run the same script again and sample
 exactly two new candidates (or two new random candidates) before making a reference-driven design decision.
+
+Planning evidence command and result:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 49 + Contract 7 + FakeCad 6 passed; Live 4 passed + 2 skipped
+
+The planner tests cover approved section selection, deterministic tie-breaking, private-review gating and missing
+orthographic blocking. These tests use only generic semantic classes and synthetic provider-neutral candidates.
