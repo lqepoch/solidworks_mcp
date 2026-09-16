@@ -191,3 +191,27 @@ Evidence command and result:
     dotnet build SolidWorksMcp.slnx -c Release --no-restore                                                    # exit 0; 0 warnings; 0 errors, including native provider reference resolution
 
 The current machine reports SOLIDWORKS `30.0.0.5041` at `D:\Solidworks2022\SOLIDWORKS`, API redist `D:\Solidworks2022\SOLIDWORKS\api\redist`, `sldworks.tlb`, both Interop DLLs and 13 templates. No Live mutation is claimed by B01; COM session behavior is deferred to B02/#18.
+
+## B02 local implementation evidence
+
+Issue #18/B02 is implemented locally in commit `61c587b`.
+
+- `providers/SolidWorksMcp.Provider.SolidWorks/StaComDispatcher.cs` owns one background thread configured as STA, uses a bounded FIFO queue, serializes all queued work, rejects direct non-STA access through an executable affinity guard, and cancels only work that has not started. It never aborts an in-flight COM call during shutdown.
+- `providers/SolidWorksMcp.Provider.SolidWorks/RotSolidWorksConnector.cs` enumerates the Windows Running Object Table and accepts only live `ISldWorks` objects whose official `GetProcessID()` matches the requested process. An unqualified attach is rejected when more than one eligible process exists; the provider does not launch SOLIDWORKS or use arbitrary active-object lookup.
+- `providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksComSessionHost.cs` owns the process-bound RCW on the STA, records `sw:{pid}:{revision}` identity, verifies PID/revision before reuse, and releases only the provider RCW on detach. It deliberately does not call `ISldWorks.ExitApp()` on an interactive user session.
+- `providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksCadProvider.cs` and `SolidWorksCadSession.cs` expose the vendor-neutral provider contract while keeping all document/model/drawing capabilities explicitly unsupported until their dependent issues implement verified COM operations. No half-implemented mutation is advertised.
+- `docs/research/solidworks-api-knowledge.md` records the locally reflected SOLIDWORKS 2022 signatures for `GetProcessID`, `RevisionNumber`, `UserControl`, `Visible`, `IFrameObject` and `ExitApp`, with official API Help links and runtime decisions. No upstream code was adapted for B02.
+- `tests/SolidWorksMcp.LiveSolidWorksTests/StaDispatcherTests.cs` proves 32 concurrent requests execute with maximum concurrency 1 on one STA thread, direct affinity violations fail, queued cancellation prevents execution, and an impossible PID returns `NOT_FOUND` without launching a SOLIDWORKS process. The geometry placeholder remains an explicit skip.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info             # exit 0
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                         # exit 0; hosted build 0 warnings/0 errors; Unit 30 + Contract 7 + FakeCad 4 passed
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore                                     # exit 0; 0 warnings; 0 errors, including native provider
+    dotnet test SolidWorksMcp.slnx -c Release --no-restore --no-build --logger "console;verbosity=minimal" # exit 0; 45 passed; 0 failed; 1 skipped
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksMcpDoctor.ps1 -Json    # exit 0; one complete SOLIDWORKS 2022 installation; no running session
+
+Live status: dispatcher/process-binding tests passed locally, but no real SOLIDWORKS document mutation or geometry
+test passed. The existing explicit Live placeholder remains `skipped` under #51, and B02 does not claim the final
+Codex → MCP → Provider → SLDWORKS geometry loop. On failure, revert commit `61c587b`; no customer CAD or vendor DLL
+was modified or committed.
