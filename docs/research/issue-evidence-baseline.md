@@ -215,3 +215,30 @@ Live status: dispatcher/process-binding tests passed locally, but no real SOLIDW
 test passed. The existing explicit Live placeholder remains `skipped` under #51, and B02 does not claim the final
 Codex → MCP → Provider → SLDWORKS geometry loop. On failure, revert commit `61c587b`; no customer CAD or vendor DLL
 was modified or committed.
+
+## B05 selection foundation evidence (partial)
+
+Issue #21/B05 is partially implemented in commit `1347316`; the native document-bound resolver remains gated on B03.
+
+- `src/SolidWorksMcp.CadAbstractions/DeclarativeSelection.cs` defines provider-neutral entity kinds, opaque persistent
+  references, deterministic geometry signatures, semantic selectors, resolution methods and evidence-bearing selection
+  snapshots. No global selection mark or enumeration index crosses this boundary.
+- `src/SolidWorksMcp.CadAbstractions/ICadProvider.cs` exposes `ICadSelectionService`; `CadCapabilityNames.Selection`
+  makes support explicit. Native B02 reports the capability unsupported until B03 registers document handles; FakeCad
+  reports it supported.
+- `testing/SolidWorksMcp.Provider.Fake/FakeCadSelectionService.cs` implements persistent-reference → geometry-signature
+  → semantic-name precedence, validates resolved identity against inspection data, fingerprints selectors and returns
+  `SELECTION_STALE` when `ExpectedStateHash` no longer matches after a mutation.
+- `tests/SolidWorksMcp.FakeCadTests/FakeCadProviderTests.cs` covers semantic and geometry resolution plus stale-state
+  rejection. The native `GetObjectByPersistReference3` adapter is intentionally not claimed until B03 supplies a
+  document registry and a minimal real Live test.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info             # exit 0
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                         # exit 0; 0 warnings/0 errors; Unit 30 + Contract 7 + FakeCad 6 passed
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore                                     # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.slnx -c Release --no-restore --no-build --logger "console;verbosity=minimal" # exit 0; 47 passed; 0 failed; 1 skipped
+
+Status is intentionally partial: the native selection capability remains `UNSUPPORTED_CAPABILITY` until document
+identity, persistent-reference resolution and minimal real SOLIDWORKS verification are delivered with B03/B05 follow-up.
