@@ -348,20 +348,26 @@ public static class CadTransactionPlanValidator
     }
 }
 
-/// <summary>Executes validated plans with finite retry, timeout, budget and idempotency semantics.</summary>
+/// <summary>Executes validated plans with finite retry, checkpoint, recovery and idempotency semantics.</summary>
 /// <remarks>
-/// F01 intentionally stops before checkpoint/rollback.  F02 adds the fail-closed checkpoint boundary; this engine
-/// already leaves a clean seam so a high-risk operation can be blocked before its handler runs.
-/// F01 暂不实现 checkpoint/rollback；F02 将增加 fail-closed checkpoint 边界，本引擎已预留在 handler 之前阻断高风险操作的 seam。
+/// The engine owns policy and ordering; a provider-owned <see cref="ICadCheckpointCoordinator"/> owns the actual
+/// CAD snapshot and restore mechanics.  This keeps COM-specific save/reopen behavior outside Core while making a
+/// missing or unverified checkpoint fail closed.  引擎负责 policy 与顺序；Provider-owned
+/// <see cref="ICadCheckpointCoordinator"/> 负责真实 CAD snapshot/restore。这样 COM 保存/重开细节不会进入 Core，
+/// 但缺失 checkpoint 或恢复未验证时会 fail closed。
 /// </remarks>
 public sealed class CadTransactionEngine(
     ICadPlanOperationExecutor operationExecutor,
     ICadPlanVerifier planVerifier,
-    ICadIdempotencyStore? suppliedIdempotencyStore = null)
+    ICadIdempotencyStore? suppliedIdempotencyStore = null,
+    ICadCheckpointCoordinator? suppliedCheckpointCoordinator = null,
+    string? providerVersion = null)
 {
     private readonly ICadPlanOperationExecutor executor = operationExecutor ?? throw new ArgumentNullException(nameof(operationExecutor));
     private readonly ICadPlanVerifier verifier = planVerifier ?? throw new ArgumentNullException(nameof(planVerifier));
     private readonly ICadIdempotencyStore idempotencyStore = suppliedIdempotencyStore ?? new InMemoryCadIdempotencyStore();
+    private readonly ICadCheckpointCoordinator checkpointCoordinator = suppliedCheckpointCoordinator ?? new FailClosedCadCheckpointCoordinator();
+    private readonly string providerRevision = string.IsNullOrWhiteSpace(providerVersion) ? "unknown" : providerVersion.Trim();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> keyGates = new(StringComparer.Ordinal);
 
     /// <summary>Runs one plan or reconciles a previously committed request with the same idempotency key.</summary>
@@ -411,6 +417,114 @@ public sealed class CadTransactionEngine(
             int operationsExecuted = 0;
             string? finalStateHash = null;
             var observations = ImmutableArray.CreateBuilder<EvidenceObservation>();
+            CadCheckpoint? checkpoint = null;
+            bool checkpointRequired = CadCheckpointPolicy.RequiresCheckpoint(plan);
+
+            // Recovery gets its own bounded token.  A caller cancellation must not interrupt the attempt to prove
+            // restoration, otherwise a cancelled request could leave an unknown CAD state with no evidence.
+            // 恢复使用独立且有上限的 token。调用方取消不能打断“证明已恢复”的尝试，否则取消请求可能留下未知 CAD 状态。
+            async Task<OperationResult<CadTransactionReceipt>> FailWithRecoveryAsync(OperationError error)
+            {
+                if (!checkpointRequired || checkpoint is null)
+                {
+                    return Failure(operationId, error, observations.ToImmutable());
+                }
+
+                OperationResult<CadRecoveryResult>? recovery = null;
+                using (var recoveryTimeout = new CancellationTokenSource(CadCheckpointPolicy.RecoveryTimeout))
+                {
+                    try
+                    {
+                        recovery = await checkpointCoordinator.RecoverAsync(
+                            checkpoint,
+                            new CadTransactionContext
+                            {
+                                Plan = plan,
+                                Attempt = attempts,
+                                ProviderCallsUsed = providerCalls,
+                            },
+                            recoveryTimeout.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // The recovery timeout is intentionally translated into an explicit unrecovered state.
+                        // 恢复超时必须转换成明确的 unrecovered，不能让调用方误以为 rollback 成功。
+                        recovery = null;
+                    }
+                    catch (Exception exception)
+                    {
+                        // Never expose provider exception text or COM details in a public evidence envelope.
+                        // 绝不能把 Provider 异常文本或 COM 细节直接放入公开 evidence envelope。
+                        observations.Add(new EvidenceObservation("recovery.exception_type", exception.GetType().Name));
+                        recovery = null;
+                    }
+                }
+
+                observations.AddRange(recovery?.Evidence?.Observations ?? []);
+                CadRecoveryResult? recoveryValue = recovery?.Value;
+                if (recovery?.IsSuccess == true && recoveryValue is not null && recoveryValue.PreStateVerified)
+                {
+                    observations.Add(new EvidenceObservation("recovery.pre_state_verified", "True"));
+                    return Failure(operationId, error, observations.ToImmutable());
+                }
+
+                string recoveryStatus = recoveryValue?.Status.ToString() ?? CadRecoveryStatus.Unrecovered.ToString();
+                var rollbackError = new OperationError(
+                    ErrorCodes.RollbackFailed,
+                    "The transaction failed and the CAD pre-state could not be verified after recovery.",
+                    ErrorCategories.Invariant,
+                    details: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["original.error_code"] = error.Code,
+                        ["recovery.status"] = recoveryStatus,
+                        ["recovery.pre_state_verified"] = "False",
+                    },
+                    remediation: "Quarantine the document, preserve the recovery evidence, and require human inspection.");
+                observations.Add(new EvidenceObservation("recovery.status", recoveryStatus));
+                observations.Add(new EvidenceObservation("recovery.pre_state_verified", "False"));
+                return Failure(operationId, rollbackError, observations.ToImmutable());
+            }
+
+            if (checkpointRequired)
+            {
+                OperationResult<CadCheckpoint>? checkpointResult;
+                try
+                {
+                    checkpointResult = await checkpointCoordinator.CreateAsync(
+                        CadCheckpointRequest.FromPlan(
+                            plan,
+                            providerRevision,
+                            DateTimeOffset.UtcNow.Add(CadCheckpointPolicy.DefaultRetention)),
+                        timeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return Failure(
+                        operationId,
+                        new OperationError(
+                            ErrorCodes.CheckpointFailed,
+                            "The checkpoint could not be created within the transaction budget.",
+                            ErrorCategories.Policy,
+                            remediation: "Do not retry blindly; inspect checkpoint storage and the target document."),
+                        observations.ToImmutable());
+                }
+
+                observations.AddRange(checkpointResult?.Evidence?.Observations ?? []);
+                if (checkpointResult is null || !checkpointResult.IsSuccess || checkpointResult.Value is null)
+                {
+                    return Failure(
+                        operationId,
+                        checkpointResult?.Error ?? new OperationError(
+                            ErrorCodes.CheckpointFailed,
+                            "The checkpoint coordinator returned no checkpoint.",
+                            ErrorCategories.Policy),
+                        observations.ToImmutable());
+                }
+
+                checkpoint = checkpointResult.Value;
+                observations.Add(new EvidenceObservation("checkpoint.id", checkpoint.Manifest.CheckpointId));
+                observations.Add(new EvidenceObservation("checkpoint.manifest", checkpoint.Manifest.ManifestPath));
+            }
 
             foreach (CadPlannedOperation operation in plan.Operations)
             {
@@ -420,15 +534,13 @@ public sealed class CadTransactionEngine(
                     attempts++;
                     if (++providerCalls > plan.Budget.MaxProviderCalls)
                     {
-                        return Failure(
-                            operationId,
+                        return await FailWithRecoveryAsync(
                             new OperationError(
                                 ErrorCodes.Timeout,
                                 "The transaction provider-call budget was exhausted before completion.",
                                 ErrorCategories.Execution,
                                 retryable: false,
-                                remediation: "Reduce the plan scope or increase its explicit finite provider-call budget."),
-                            observations.ToImmutable());
+                                remediation: "Reduce the plan scope or increase its explicit finite provider-call budget."));
                     }
 
                     try
@@ -443,22 +555,18 @@ public sealed class CadTransactionEngine(
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
-                        return Failure(
-                            operationId,
-                            new OperationError(ErrorCodes.Cancelled, "The CAD transaction was cancelled by its caller.", ErrorCategories.Execution),
-                            observations.ToImmutable());
+                        return await FailWithRecoveryAsync(
+                            new OperationError(ErrorCodes.Cancelled, "The CAD transaction was cancelled by its caller.", ErrorCategories.Execution));
                     }
                     catch (OperationCanceledException)
                     {
-                        return Failure(
-                            operationId,
+                        return await FailWithRecoveryAsync(
                             new OperationError(
                                 ErrorCodes.Timeout,
                                 "The CAD transaction exceeded its finite timeout budget.",
                                 ErrorCategories.Execution,
                                 retryable: false,
-                                remediation: "Inspect the CAD session and start a new bounded transaction."),
-                            observations.ToImmutable());
+                                remediation: "Inspect the CAD session and start a new bounded transaction."));
                     }
 
                     if (execution is null || execution.IsSuccess || execution.Error?.Retryable != true || attempt > plan.Budget.MaxRetries)
@@ -469,22 +577,18 @@ public sealed class CadTransactionEngine(
 
                 if (execution is null || !execution.IsSuccess || execution.Value is null)
                 {
-                    return Failure(
-                        operationId,
-                        execution?.Error ?? new OperationError(ErrorCodes.ProviderFailure, "The operation returned no result.", ErrorCategories.Provider),
-                        observations.ToImmutable());
+                    return await FailWithRecoveryAsync(
+                        execution?.Error ?? new OperationError(ErrorCodes.ProviderFailure, "The operation returned no result.", ErrorCategories.Provider));
                 }
 
                 if (!execution.Value.OperationCode.Equals(operation.OperationCode, StringComparison.Ordinal))
                 {
-                    return Failure(
-                        operationId,
+                    return await FailWithRecoveryAsync(
                         new OperationError(
                             ErrorCodes.InvariantViolation,
                             "The registered handler returned evidence for a different operation code.",
                             ErrorCategories.Invariant,
-                            remediation: "Fix the operation registry before retrying the transaction."),
-                        observations.ToImmutable());
+                            remediation: "Fix the operation registry before retrying the transaction."));
                 }
 
                 operationsExecuted++;
@@ -507,42 +611,34 @@ public sealed class CadTransactionEngine(
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                return Failure(
-                    operationId,
-                    new OperationError(ErrorCodes.Cancelled, "The CAD transaction was cancelled by its caller.", ErrorCategories.Execution),
-                    observations.ToImmutable());
+                return await FailWithRecoveryAsync(
+                    new OperationError(ErrorCodes.Cancelled, "The CAD transaction was cancelled by its caller.", ErrorCategories.Execution));
             }
             catch (OperationCanceledException)
             {
-                return Failure(
-                    operationId,
+                return await FailWithRecoveryAsync(
                     new OperationError(
                         ErrorCodes.Timeout,
                         "The CAD transaction exceeded its finite timeout budget during verification.",
                         ErrorCategories.Execution,
-                        remediation: "Inspect the CAD session and start a new bounded transaction."),
-                    observations.ToImmutable());
+                        remediation: "Inspect the CAD session and start a new bounded transaction."));
             }
 
             if (verification is null || !verification.IsSuccess || verification.Value is null)
             {
-                return Failure(
-                    operationId,
-                    verification?.Error ?? new OperationError(ErrorCodes.InvariantViolation, "The verifier returned no result.", ErrorCategories.Invariant),
-                    observations.ToImmutable());
+                return await FailWithRecoveryAsync(
+                    verification?.Error ?? new OperationError(ErrorCodes.InvariantViolation, "The verifier returned no result.", ErrorCategories.Invariant));
             }
 
             observations.AddRange(verification.Evidence?.Observations ?? []);
             if (!verification.Value.Passed)
             {
-                return Failure(
-                    operationId,
+                return await FailWithRecoveryAsync(
                     new OperationError(
                         ErrorCodes.InvariantViolation,
                         "One or more transaction invariants were not proven.",
                         ErrorCategories.Invariant,
-                        remediation: "Inspect the target state and reconcile or roll back before retrying."),
-                    observations.ToImmutable());
+                        remediation: "Inspect the target state and reconcile or roll back before retrying."));
             }
 
             var receipt = new CadTransactionReceipt

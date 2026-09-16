@@ -21,7 +21,7 @@ public sealed class CadTransactionEngineTests
     {
         var executor = new RecordingExecutor();
         var verifier = new RecordingVerifier(passed: true);
-        var engine = new CadTransactionEngine(executor, verifier);
+        var engine = new CadTransactionEngine(executor, verifier, suppliedCheckpointCoordinator: new InMemoryCadCheckpointCoordinator());
 
         OperationResult<CadTransactionReceipt> result = await engine.ExecuteAsync(CreatePlan("not-allowlisted"));
 
@@ -40,7 +40,7 @@ public sealed class CadTransactionEngineTests
             Failure(ErrorCodes.Timeout, retryable: true),
             Success("sha256:post-state"),
         ]);
-        var engine = new CadTransactionEngine(executor, new RecordingVerifier(passed: true));
+        var engine = new CadTransactionEngine(executor, new RecordingVerifier(passed: true), suppliedCheckpointCoordinator: new InMemoryCadCheckpointCoordinator());
 
         OperationResult<CadTransactionReceipt> result = await engine.ExecuteAsync(CreatePlan("part.create", maxRetries: 1));
 
@@ -55,7 +55,7 @@ public sealed class CadTransactionEngineTests
     public async Task DuplicateIdempotencyKeyReconcilesInsteadOfDuplicating()
     {
         var executor = new RecordingExecutor();
-        var engine = new CadTransactionEngine(executor, new RecordingVerifier(passed: true));
+        var engine = new CadTransactionEngine(executor, new RecordingVerifier(passed: true), suppliedCheckpointCoordinator: new InMemoryCadCheckpointCoordinator());
         CadTransactionPlan plan = CreatePlan("part.create");
 
         OperationResult<CadTransactionReceipt>[] results = await Task.WhenAll(
@@ -75,7 +75,7 @@ public sealed class CadTransactionEngineTests
     {
         var executor = new RecordingExecutor();
         var verifier = new RecordingVerifier(passed: false);
-        var engine = new CadTransactionEngine(executor, verifier);
+        var engine = new CadTransactionEngine(executor, verifier, suppliedCheckpointCoordinator: new InMemoryCadCheckpointCoordinator());
 
         OperationResult<CadTransactionReceipt> result = await engine.ExecuteAsync(CreatePlan("part.mutate"));
 
@@ -90,7 +90,7 @@ public sealed class CadTransactionEngineTests
     public async Task ProviderCallBudgetIsFinite()
     {
         var executor = new RecordingExecutor([Failure(ErrorCodes.Timeout, retryable: true)]);
-        var engine = new CadTransactionEngine(executor, new RecordingVerifier(passed: true));
+        var engine = new CadTransactionEngine(executor, new RecordingVerifier(passed: true), suppliedCheckpointCoordinator: new InMemoryCadCheckpointCoordinator());
         CadTransactionPlan plan = CreatePlan("part.create", maxRetries: 8) with
         {
             Budget = new CadOperationBudget { MaxOperations = 1, MaxRetries = 8, MaxProviderCalls = 1, Timeout = TimeSpan.FromSeconds(5) },

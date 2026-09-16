@@ -267,5 +267,42 @@ Evidence command and result:
     dotnet build SolidWorksMcp.slnx -c Release --no-restore                                     # exit 0; 0 warnings; 0 errors
     dotnet test SolidWorksMcp.slnx -c Release --no-restore --no-build --logger "console;verbosity=minimal" # exit 0; 52 passed; 0 failed; 1 skipped
 
-Status is intentionally partial: no checkpoint copy, restore manifest or rollback claim is made until F02, and no
-real COM mutation has been routed through the engine yet. Revert `2ea6409` to remove F01 without touching user CAD.
+Status is intentionally partial: no real COM mutation has been routed through the engine yet. F02 recovery contracts
+below provide the fail-closed boundary, but the native provider still has to supply a SOLIDWORKS-aware state verifier.
+Revert `2ea6409` to remove F01 without touching user CAD.
+
+## F02 checkpoint and recovery foundation evidence (partial)
+
+Issue #44/F02 is implemented locally as a vendor-neutral recovery boundary. The implementation is deliberately split
+between policy, an injectable provider coordinator, and a durable local file coordinator so Core never references a
+SOLIDWORKS COM type.
+
+- `src/SolidWorksMcp.Core/CadRecoveryContracts.cs` defines versioned checkpoint manifests carrying transaction,
+  idempotency, session/document, source state hash, provider/MCP versions, intended operation codes and retention
+  metadata. `CadCheckpointPolicy` requires a checkpoint for model, assembly, drawing, release and destructive-save
+  risk levels.
+- `CadTransactionEngine` now calls the checkpoint coordinator before any high-risk handler. Missing/failed checkpoint
+  creation returns `CHECKPOINT_FAILED` and the handler is not invoked. Operation, cancellation, timeout and invariant
+  failures enter one bounded recovery path; only `PreStateVerified=true` allows the original error to be returned.
+  Otherwise the terminal result is `ROLLBACK_FAILED` with explicit `recovery.status=Unrecovered` or an equivalent
+  unverified state.
+- `src/SolidWorksMcp.Core/FileCadCheckpointCoordinator.cs` creates GUID-scoped manifest/snapshot directories,
+  copies and hashes a persisted source file, writes the manifest atomically, restores only the manifest source path,
+  verifies restored bytes, and prunes only expired checkpoint children under its configured root. File-byte equality is
+  intentionally reported as `file-bytes-only`, not as proof of opaque SOLIDWORKS model state.
+- `InMemoryCadCheckpointCoordinator` is a deterministic test double only; it is not a production durability claim.
+  A future native coordinator must use the provider's inspection/reopen path to prove the pre-state hash, and may use
+  `ICadLogicalRollbackHandler` before snapshot restoration.
+- `tests/SolidWorksMcp.UnitTests/CadRecoveryTests.cs` injects failures at checkpoint, operation and verification
+  stages, checks fail-closed behavior for unverified recovery, proves read-only plans do not require a checkpoint, and
+  verifies manifest/snapshot persistence plus retention cleanup.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info                 # exit 0
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore                                         # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.slnx -c Release --no-restore --no-build --logger "console;verbosity=minimal" # exit 0; 59 passed; 0 failed; 1 skipped
+
+F02 remains intentionally partial until a native SOLIDWORKS checkpoint coordinator can restore/reopen an isolated
+document and verify the provider state hash. The Live suite still has no real mutation evidence; its four dispatcher
+tests pass and its one explicit placeholder remains skipped when no opt-in Live session is available.
