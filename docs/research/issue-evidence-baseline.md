@@ -136,7 +136,7 @@ Live SOLIDWORKS was not used for A03; the native implementation and shared-suite
 
 ## A02 local implementation evidence
 
-Issue #13/A02 is implemented locally in the pending server-host commit; the final commit SHA will be recorded immediately after verification.
+Issue #13/A02 is implemented locally in commit `a440996`.
 
 - `src/SolidWorksMcp.Server/Program.cs` uses the official Model Context Protocol C# SDK with the standard DI host and stdio transport. Console logging is directed to stderr so stdout remains an unpolluted MCP wire.
 - `src/SolidWorksMcp.Server/ServerComposition.cs` registers an explicitly supplied provider for tests/native hosting, or a safe unavailable provider that reports `UNSUPPORTED_CAPABILITY` instead of pretending that SOLIDWORKS is connected.
