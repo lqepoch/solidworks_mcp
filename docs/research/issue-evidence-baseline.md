@@ -242,3 +242,30 @@ Evidence command and result:
 
 Status is intentionally partial: the native selection capability remains `UNSUPPORTED_CAPABILITY` until document
 identity, persistent-reference resolution and minimal real SOLIDWORKS verification are delivered with B03/B05 follow-up.
+
+## F01 transaction foundation evidence (partial)
+
+Issue #43/F01 is implemented locally in commit `2ea6409` as the first transaction-policy layer; checkpoint and
+rollback are intentionally deferred to F02.
+
+- `src/SolidWorksMcp.Core/CadTransactionEngine.cs` defines a serializable `CadTransactionPlan` with process/session,
+  document, path, type, configuration and expected-state target binding; risk levels; allowlisted operation codes;
+  explicit preconditions/invariants; finite provider-call, retry and timeout budgets; and evidence-bearing receipts.
+- `CadTransactionPlanValidator` rejects unknown operation codes, missing identities, unbounded/invalid budgets and
+  model-or-higher mutation plans without an expected state hash. No arbitrary delegate, eval, PowerShell or macro input
+  is represented in the plan.
+- `CadTransactionEngine` serializes duplicate idempotency keys, reconciles an existing committed receipt, retries only
+  registered retryable failures within the finite budget, maps timeout/cancellation deterministically and verifies the
+  named `provider.inspect` strategy before commit. It also rejects a handler response for a different operation code.
+- `tests/SolidWorksMcp.UnitTests/CadTransactionEngineTests.cs` covers pre-handler allowlist rejection, finite timeout
+  retry, concurrent idempotency reconciliation, non-committed invariant failure and provider-call budget exhaustion.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info             # exit 0
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                         # exit 0; 0 warnings/0 errors; Unit 35 + Contract 7 + FakeCad 6 passed
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore                                     # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.slnx -c Release --no-restore --no-build --logger "console;verbosity=minimal" # exit 0; 52 passed; 0 failed; 1 skipped
+
+Status is intentionally partial: no checkpoint copy, restore manifest or rollback claim is made until F02, and no
+real COM mutation has been routed through the engine yet. Revert `2ea6409` to remove F01 without touching user CAD.
