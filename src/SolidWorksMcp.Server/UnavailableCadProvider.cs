@@ -17,6 +17,7 @@ internal sealed class UnavailableCadProvider : ICadProvider
         new CadCapability(CadCapabilityNames.DrawingMutation, supported: false, "Native SOLIDWORKS provider is not configured yet."),
         new CadCapability(CadCapabilityNames.Inspection, supported: false, "Native SOLIDWORKS provider is not configured yet."),
         new CadCapability(CadCapabilityNames.Export, supported: false, "Native SOLIDWORKS provider is not configured yet."),
+        new CadCapability(CadCapabilityNames.Selection, supported: false, "Native SOLIDWORKS provider is not configured yet."),
     ]);
 
     /// <inheritdoc />

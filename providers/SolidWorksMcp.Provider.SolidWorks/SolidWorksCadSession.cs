@@ -31,6 +31,10 @@ internal sealed class SolidWorksCadSession : ICadSession
             Capabilities,
             () => Volatile.Read(ref lifecycleState) == 2,
             SessionId);
+        Selection = new UnsupportedSolidWorksSelectionService(
+            Capabilities,
+            () => Volatile.Read(ref lifecycleState) == 2,
+            SessionId);
     }
 
     public SessionId SessionId { get; }
@@ -40,6 +44,8 @@ internal sealed class SolidWorksCadSession : ICadSession
     public ICadInspectionService Inspection { get; }
 
     public ICadExportService Export { get; }
+
+    public ICadSelectionService Selection { get; }
 
     /// <summary>Gets whether this logical session has completed its detach lifecycle.</summary>
     internal bool IsClosed => Volatile.Read(ref lifecycleState) == 2;
@@ -181,5 +187,38 @@ internal sealed class UnsupportedSolidWorksExportService(
         CadCapability capability = capabilities.Find(CadCapabilityNames.Export)
             ?? new CadCapability(CadCapabilityNames.Export, supported: false, "The native capability was not declared.");
         return Task.FromResult(SolidWorksProviderResults.Unsupported<ExportReceipt>("export", capability));
+    }
+}
+
+/// <summary>Native selection placeholder kept explicit until B03 registers verified document handles.</summary>
+internal sealed class UnsupportedSolidWorksSelectionService(
+    CadCapabilitySet capabilities,
+    Func<bool> isClosed,
+    SessionId sessionId) : ICadSelectionService
+{
+    public Task<OperationResult<CadSelectionSnapshot>> ResolveAsync(
+        CadEntitySelector selector,
+        CancellationToken cancellationToken = default)
+    {
+        if (selector is null)
+        {
+            return Task.FromResult(SolidWorksProviderResults.Failure<CadSelectionSnapshot>(
+                "selection.resolve",
+                new OperationError(ErrorCodes.InvalidRequest, "The declarative entity selector is required.", ErrorCategories.Validation)));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(SolidWorksProviderResults.Cancelled<CadSelectionSnapshot>("selection.resolve"));
+        }
+
+        if (isClosed())
+        {
+            return Task.FromResult(SolidWorksProviderResults.Closed<CadSelectionSnapshot>("selection.resolve", sessionId));
+        }
+
+        CadCapability capability = capabilities.Find(CadCapabilityNames.Selection)
+            ?? new CadCapability(CadCapabilityNames.Selection, supported: false, "The native capability was not declared.");
+        return Task.FromResult(SolidWorksProviderResults.Unsupported<CadSelectionSnapshot>("selection.resolve", capability));
     }
 }

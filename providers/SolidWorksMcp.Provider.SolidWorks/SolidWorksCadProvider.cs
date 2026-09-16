@@ -20,6 +20,7 @@ public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
         new CadCapability(CadCapabilityNames.DrawingMutation, supported: false, "Native drawing mutation is planned after the B02 session foundation."),
         new CadCapability(CadCapabilityNames.Inspection, supported: false, "Native inspection is enabled by a later provider issue after COM identity guards are complete."),
         new CadCapability(CadCapabilityNames.Export, supported: false, "Native export is enabled by a later provider issue after COM identity guards are complete."),
+        new CadCapability(CadCapabilityNames.Selection, supported: false, "Native selection is enabled after the B03 document registry can bind selectors to documents."),
         new CadCapability(CadCapabilityNames.PatternSemantics, supported: false, "Pattern semantics are owned by the engineering layer and are not implemented in B02."),
     ]);
 

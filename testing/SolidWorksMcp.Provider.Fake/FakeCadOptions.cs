@@ -24,6 +24,7 @@ public sealed record FakeCadOptions
         new CadCapability(CadCapabilityNames.DrawingMutation, supported: true),
         new CadCapability(CadCapabilityNames.Inspection, supported: true),
         new CadCapability(CadCapabilityNames.Export, supported: true),
+        new CadCapability(CadCapabilityNames.Selection, supported: true),
         new CadCapability(CadCapabilityNames.PatternSemantics, supported: false, "Pattern semantics are not implemented in this A03 fake.")
     ]);
 }

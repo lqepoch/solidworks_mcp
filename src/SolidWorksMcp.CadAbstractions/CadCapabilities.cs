@@ -64,6 +64,9 @@ public static class CadCapabilityNames
 
     /// <summary>Native pattern/feature semantic extraction capability.</summary>
     public const string PatternSemantics = "semantic.patterns";
+
+    /// <summary>Declarative entity resolution without client-managed global selection marks.</summary>
+    public const string Selection = "selection.declarative";
 }
 
 /// <summary>Describes whether one provider capability is supported or explicitly unavailable.</summary>

@@ -33,6 +33,9 @@ public interface ICadSession : IAsyncDisposable
     /// <summary>Gets the export facade for this session.</summary>
     ICadExportService Export { get; }
 
+    /// <summary>Gets the declarative selection facade for this session.</summary>
+    ICadSelectionService Selection { get; }
+
     /// <summary>Creates a new part document.</summary>
     Task<OperationResult<ICadPartDocument>> CreatePartAsync(
         CreatePartRequest request,
@@ -138,5 +141,14 @@ public interface ICadExportService
     Task<OperationResult<ExportReceipt>> ExportAsync(
         DocumentId documentId,
         CadExportRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Resolves declarative entity selectors without exposing vendor selection marks or RCWs.</summary>
+public interface ICadSelectionService
+{
+    /// <summary>Resolves one selector against the current document state.</summary>
+    Task<OperationResult<CadSelectionSnapshot>> ResolveAsync(
+        CadEntitySelector selector,
         CancellationToken cancellationToken = default);
 }

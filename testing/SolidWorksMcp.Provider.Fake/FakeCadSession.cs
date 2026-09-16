@@ -22,6 +22,7 @@ internal sealed class FakeCadSession : ICadSession
         SessionId = sessionId;
         Inspection = new FakeCadInspectionService(this);
         Export = new FakeCadExportService(this);
+        Selection = new FakeCadSelectionService(this);
     }
 
     /// <inheritdoc />
@@ -35,6 +36,9 @@ internal sealed class FakeCadSession : ICadSession
 
     /// <inheritdoc />
     public ICadExportService Export { get; }
+
+    /// <inheritdoc />
+    public ICadSelectionService Selection { get; }
 
     internal FakeCadFailureInjector Failures => options.Failures;
 

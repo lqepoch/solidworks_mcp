@@ -101,6 +101,71 @@ public sealed class FakeCadProviderTests
         Assert.Equal(mate.MateId, inspection.Mates[0].MateId);
     }
 
+    /// <summary>Selectors resolve through semantic identity and never require a client-managed selection mark.</summary>
+    [Fact]
+    public async Task DeclarativeSelectionResolvesSemanticAndGeometryHints()
+    {
+        await using var provider = new FakeCadProvider();
+        await using ICadSession session = (await provider.StartSessionAsync(new CadSessionOptions())).RequireSuccess();
+        ICadPartDocument part = (await session.CreatePartAsync(new CreatePartRequest())).RequireSuccess();
+        BodySnapshot body = (await part.CreateBodyAsync(new CreateBodyRequest { Name = "Plate" })).RequireSuccess();
+        FeatureSnapshot feature = (await part.AddExtrusionAsync(new ExtrusionRequest
+        {
+            Name = "Plate thickness",
+            Depth = Length.FromMillimeters(12d),
+            TargetBodyId = body.BodyId,
+        })).RequireSuccess();
+        string stateHash = part.StateHash;
+
+        CadSelectionSnapshot semantic = (await session.Selection.ResolveAsync(new CadEntitySelector
+        {
+            DocumentId = part.DocumentId,
+            EntityKind = CadEntityKind.Feature,
+            SemanticName = feature.Name,
+            ExpectedStateHash = stateHash,
+        })).RequireSuccess();
+        Assert.Equal(feature.FeatureId.Value, semantic.Entity.Identity);
+        Assert.Equal(CadSelectionResolution.SemanticSelector, semantic.Resolution);
+
+        CadSelectionSnapshot geometry = (await session.Selection.ResolveAsync(new CadEntitySelector
+        {
+            DocumentId = part.DocumentId,
+            EntityKind = CadEntityKind.Feature,
+            GeometrySignature = new CadGeometrySignature { Value = $"fake|{part.DocumentId.Value}|Feature|{feature.FeatureId.Value}" },
+            ExpectedStateHash = stateHash,
+        })).RequireSuccess();
+        Assert.Equal(feature.FeatureId.Value, geometry.Entity.Identity);
+        Assert.Equal(CadSelectionResolution.GeometrySignature, geometry.Resolution);
+    }
+
+    /// <summary>A selector captured before a mutation must fail explicitly instead of following a changed topology.</summary>
+    [Fact]
+    public async Task DeclarativeSelectionRejectsStaleExpectedState()
+    {
+        await using var provider = new FakeCadProvider();
+        await using ICadSession session = (await provider.StartSessionAsync(new CadSessionOptions())).RequireSuccess();
+        ICadPartDocument part = (await session.CreatePartAsync(new CreatePartRequest())).RequireSuccess();
+        BodySnapshot body = (await part.CreateBodyAsync(new CreateBodyRequest { Name = "Plate" })).RequireSuccess();
+        string oldStateHash = part.StateHash;
+        _ = (await part.AddExtrusionAsync(new ExtrusionRequest
+        {
+            Name = "Changed after selector capture",
+            Depth = Length.FromMillimeters(12d),
+            TargetBodyId = body.BodyId,
+        })).RequireSuccess();
+
+        OperationResult<CadSelectionSnapshot> result = await session.Selection.ResolveAsync(new CadEntitySelector
+        {
+            DocumentId = part.DocumentId,
+            EntityKind = CadEntityKind.Body,
+            SemanticName = body.Name,
+            ExpectedStateHash = oldStateHash,
+        });
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ErrorCodes.SelectionStale, result.Error!.Code);
+    }
+
 }
 
 /// <summary>Local assertion extension shared by FakeCad tests.</summary>
