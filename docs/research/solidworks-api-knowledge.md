@@ -28,6 +28,29 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
 - All COM RCW release occurs on the owning STA. No COM interface appears in `SolidWorksMcp.CadAbstractions` or MCP
   payloads.
 
+## B03 native part loop / B03 原生零件闭环
+
+| Interface / method | Verified signature | Version evidence | Official source | Runtime note |
+| --- | --- | --- | --- | --- |
+| `ISldWorks.GetDocumentTemplate` | `System.String GetDocumentTemplate(System.Int32 DocumentType, System.String TemplateName, System.Int32 PaperSize, System.Double Width, System.Double Height)` | SOLIDWORKS 2022 Interop reflection; `swDocPART=1` | [GetDocumentTemplate Method](https://help.solidworks.com/2017/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.isldworks~getdocumenttemplate.html) | The provider validates the returned template path before creating a document. |
+| `ISldWorks.INewDocument2` | `ModelDoc2 INewDocument2(System.String TemplateName, System.Int32 Options, System.Double Width, System.Double Height)` | SOLIDWORKS 2022 Interop reflection | [INewDocument2 Method](https://help.solidworks.com/2020/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SolidWorks.Interop.sldworks.ISldWorks~INewDocument2.html) | The provider uses the discovered part template and does not depend on ActiveDoc. |
+| `ISketchManager.CreateCircleByRadius` | `SketchSegment CreateCircleByRadius(System.Double X, System.Double Y, System.Double Z, System.Double Radius)` | SOLIDWORKS 2022 Interop reflection; coordinates/radius converted from mm to meters | [ISketchManager Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SolidWorks.Interop.sldworks.ISketchManager.html) | The first B03 fixture uses a circle on the verified Front Plane. |
+| `IFeatureManager.FeatureExtrusion3` | `Feature FeatureExtrusion3(Boolean Sd, Boolean Flip, Boolean Dir, Int32 T1, Int32 T2, Double D1, Double D2, Boolean Dchk1, Boolean Dchk2, Boolean Ddir1, Boolean Ddir2, Double Dang1, Double Dang2, Boolean OffsetReverse1, Boolean OffsetReverse2, Boolean TranslateSurface1, Boolean TranslateSurface2, Boolean Merge, Boolean UseFeatScope, Boolean UseAutoSelect, Int32 T0, Double StartOffset, Boolean FlipStartOffset)` | SOLIDWORKS 2022 Interop reflection; `swEndCondBlind=0` | [FeatureExtrusion3 Method](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IFeatureManager~FeatureExtrusion3.html) | The adapter checks the returned feature, rebuild result and positive measured volume. |
+| `IModelDoc2.SaveAs3` | `System.Int32 SaveAs3(System.String NewName, System.Int32 SaveAsVersion, System.Int32 Options)` | SOLIDWORKS 2022 Interop reflection; `swSaveAsCurrentVersion=0`, `swSaveAsOptions_Silent=1` | [SaveAs3 Method](https://help.solidworks.com/2024/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IModelDoc2~SaveAs3.html) | The second argument is the save version and the third is the options bitmask; swapping them produced verified error 32 (`swFileSaveFormatNotAvailable`) during the first Live attempt. |
+| `IModelDoc2.ForceRebuild3` | `System.Boolean ForceRebuild3(System.Boolean TopOnly)` | SOLIDWORKS 2022 Interop reflection | [ForceRebuild3 Method](https://help.solidworks.com/2022/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.imodeldoc2~forcerebuild3.html) | A `true` return is necessary but not sufficient; B03 follows it with native inspection and invariant checks. |
+| `ISldWorks.IActivateDoc3` | `ModelDoc2 IActivateDoc3(System.String Name, System.Boolean Silent, out System.Int32 Errors)` | SOLIDWORKS 2022 Interop reflection | [IActivateDoc3 Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISldWorks~IActivateDoc3.html) | Mutation paths activate the exact extension-qualified registered path, reject activation errors, and then re-check path/type/configuration/state hash. |
+
+- B03 initially passed `(SaveAsOptions=Silent, Options=0)` to `SaveAs3`, which returned `swFileSaveFormatNotAvailable=32`. The
+  correction is now `(SaveAsVersion=swSaveAsCurrentVersion, Options=swSaveAsOptions_Silent)` and is protected by the
+  real Live test.
+- B03 首次把 `(SaveAsOptions=Silent, Options=0)` 传给 `SaveAs3`，真实返回 `swFileSaveFormatNotAvailable=32`；现已修正为
+  `(SaveAsVersion=swSaveAsCurrentVersion, Options=swSaveAsOptions_Silent)`，并由真实 Live 测试保护。
+- The first mutation retry showed that a document obtained with `GetOpenDocument` was not necessarily the foreground
+  document required by feature creation.  B03 now uses `IActivateDoc3` for mutation, while inspection remains able to
+  read by path without changing the user's active document.
+- 第二次 mutation retry 证明 `GetOpenDocument` 得到的文档不一定是 feature creation 所需的前台文档；B03 现对 mutation
+  使用 `IActivateDoc3`，而 inspection 仍可按 path 读取，不改变用户的 active document。
+
 - `RotSolidWorksConnector` 在 Provider STA 上枚举 COM ROT，只接受能转换为 `ISldWorks`、通过 `GetProcessID()` 报告
   存活的 `SLDWORKS` 进程、且符合请求 PID 的对象。
 - 未限定 PID 时只有恰好一个候选才附着；多个候选返回 `STATE_CONFLICT`，绝不根据 ActiveDoc 或文件名猜测。

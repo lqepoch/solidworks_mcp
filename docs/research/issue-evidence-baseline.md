@@ -306,3 +306,67 @@ Evidence command and result:
 F02 remains intentionally partial until a native SOLIDWORKS checkpoint coordinator can restore/reopen an isolated
 document and verify the provider state hash. The Live suite still has no real mutation evidence; its four dispatcher
 tests pass and its one explicit placeholder remains skipped when no opt-in Live session is available.
+
+## B03 native part foundation evidence (partial)
+
+Issue #19/B03 has a buildable native-provider foundation in the current working change, but it is not complete: the
+real SOLIDWORKS extrusion step still returns no feature in the local Live run and is therefore recorded as failed,
+never as passed or skipped.
+
+- `providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksDocumentRegistry.cs` binds a document identity to path,
+  type, configuration, state hash, dirty state and the verified profile feature name. Routing rejects a missing,
+  wrong-type, wrong-configuration or stale document before mutation.
+- `SolidWorksComSessionHost.InvokeOnStaAsync` is the only native mutation entry point. The callback runs on the
+  dedicated STA and returns vendor-neutral results; COM child objects are released inside that callback so RCWs do
+  not cross the provider boundary.
+- `SolidWorksPartFactory` uses the discovered local part template, creates a part with `INewDocument2`, creates an
+  optional sketch circle through `SketchManager.CreateCircleByRadius`, and persists it with the verified
+  `SaveAs3(CurrentVersion, Silent)` argument order. No vendor DLL or template is committed.
+- `SolidWorksNativePartDocument` re-resolves and verifies the document before rebuild/save, calls
+  `FeatureExtrusion3` only after a named sketch selection, and performs inspection after mutation. Inspection reads
+  bodies, bounding box, feature identity/type and mass/volume through native APIs, then converts the evidence to
+  `CadAbstractions` records.
+- `src/SolidWorksMcp.EngineeringModel/PartDrawingRequirements.cs` adds the first immutable, vendor-neutral drawing
+  requirement set. It models orthographic/isometric coverage, holes, bend radius, thickness, section/detail need,
+  material, general tolerance, surface finish and title-block requirements. Private visual review creates only
+  `ReviewRequired` proposals with `private_drawing_review` provenance; explicit approval is required before release.
+
+Official API evidence recorded in `docs/research/solidworks-api-knowledge.md` covers `GetDocumentTemplate`,
+`INewDocument2`, `CreateCircleByRadius`, `FeatureExtrusion3`, `ForceRebuild3`, `SaveAs3` and `IActivateDoc3`. The
+current local Live run proved session attachment, sketch creation and persisted part creation, but the extrusion
+returned `null`; therefore geometry inspection and the final create-part → rebuild → measure → reopen proof remain
+blocked on a further official-signature/parameter investigation. The isolated test preserves its own failure
+artifact for diagnosis and does not touch user design directories.
+
+Evidence command and result:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 45 + Contract 7 + FakeCad 6 passed; Live 4 passed + 2 skipped
+
+Live status: session/STA and native sketch/save probes passed in the local SOLIDWORKS environment; the extrusion
+probe failed. No Live geometry pass is claimed. The explicit opt-in Live test is skipped when
+`SOLIDWORKS_MCP_LIVE_PROCESS_ID` and `SOLIDWORKS_MCP_LIVE_WORKSPACE` are absent.
+
+## Private drawing fixture review evidence (redacted)
+
+The user-supplied local drawing corpus is treated as confidential research input, not as a repository fixture. The
+corpus remains Git-ignored; source PDFs, extracted text, titles, part numbers, dimensions, screenshots, rendered
+images, manifests and CAD artifacts are not committed, uploaded or written to Issues, PRs, logs or release notes.
+
+- `skills/private-drawing-fixtures/SKILL.md` defines the disclosure boundary and requires every reference-driven
+  iteration to sample exactly two PDFs at random, select only single-part candidates for the current scope, and
+  record generic engineering classes instead of source content.
+- `scripts/Invoke-PrivateDrawingSample.ps1` performs content/layout classification, uses a cryptographically seeded
+  random selection, renders only into a user-local temporary evidence directory, and prints only redacted slot
+  status. It rejects a corpus path that is not Git-ignored when it is under the repository.
+- A local invocation completed with exit code 0 and reported exactly two selected/rendered single-part candidate
+  slots. The redacted visual review identified recurring classes only: orthographic/isometric coverage, holes,
+  formed/bend features, thickness, material/general-tolerance metadata, section/detail consideration and title-block
+  requirements. This is design input and coverage planning evidence, not proof that any CAD drawing passed QA.
+- `PartDrawingRequirementSet.FromReviewedClasses` turns those classes into deterministic requirement identities while
+  preserving `ReviewRequired` status and `private_drawing_review` provenance. A release gate cannot be satisfied by
+  visual review or AI inference alone.
+
+The two sampled slots are intentionally not named here. A future iteration must run the same script again and sample
+exactly two new candidates (or two new random candidates) before making a reference-driven design decision.

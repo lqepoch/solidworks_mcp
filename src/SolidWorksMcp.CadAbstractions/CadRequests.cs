@@ -23,6 +23,12 @@ public sealed record CreatePartRequest
 
     /// <summary>Configuration name used for the new document.</summary>
     public string Configuration { get; init; } = "Default";
+
+    /// <summary>
+    /// Optional canonical radius for an initial circle sketch in the new part.
+    /// 新建零件时可选的初始圆草图半径；使用显式 Length，避免 MCP/UI 把毫米误当成 SOLIDWORKS 米。
+    /// </summary>
+    public Length? InitialCircleRadius { get; init; }
 }
 
 /// <summary>Request to create an assembly document.</summary>

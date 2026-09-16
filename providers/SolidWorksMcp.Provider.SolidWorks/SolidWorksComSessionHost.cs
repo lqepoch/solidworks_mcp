@@ -1,4 +1,5 @@
-﻿using SolidWorksMcp.CadAbstractions;
+﻿using SolidWorks.Interop.sldworks;
+using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Protocol;
 
 namespace SolidWorksMcp.Provider.SolidWorks;
@@ -96,6 +97,63 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
         }
     }
 
+    /// <summary>
+    /// Executes a vendor adapter callback on the owned STA after re-checking the process identity.
+    /// 在重新校验进程 identity 后，于当前 owned STA 执行 vendor adapter callback。
+    /// </summary>
+    /// <remarks>
+    /// The callback must consume and release every COM child it obtains before returning a vendor-neutral result.
+    /// This method deliberately returns only <typeparamref name="T"/> and never a COM interface, so RCWs cannot leak
+    /// into the session or MCP layers.  callback 必须在返回 vendor-neutral result 前释放所有 COM 子对象；本方法只返回
+    /// T，禁止返回 COM interface，避免 RCW 泄漏到 session/MCP 层。
+    /// </remarks>
+    internal async Task<OperationResult<T>> InvokeOnStaAsync<T>(
+        SessionId expectedSessionId,
+        Func<ISldWorks, OperationResult<T>> callback,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return SolidWorksProviderResults.Cancelled<T>("session.invoke");
+        }
+
+        try
+        {
+            return await dispatcher.InvokeAsync(
+                () =>
+                {
+                    dispatcher.AssertDispatcherThread();
+                    OperationResult<SolidWorksSessionInfo> verification = VerifyOnSta(expectedSessionId);
+                    if (!verification.IsSuccess || attachment is null)
+                    {
+                        return verification.Error is null
+                            ? SolidWorksProviderResults.Failure<T>(
+                                "session.invoke",
+                                new OperationError(
+                                    ErrorCodes.StateConflict,
+                                    "The SOLIDWORKS session disappeared before the operation started.",
+                                    ErrorCategories.State))
+                            : OperationResults.Failure<T>(verification.OperationId, verification.Error, verification.Evidence);
+                    }
+
+                    return callback(attachment.Application);
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return SolidWorksProviderResults.Cancelled<T>("session.invoke");
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<T>(
+                "session.invoke",
+                exception,
+                "The SOLIDWORKS STA operation failed before a verified vendor-neutral result was returned.");
+        }
+    }
+
     /// <summary>Detaches the COM RCW without terminating the user's SOLIDWORKS process.</summary>
     /// <remarks>
     /// Detach releases only the provider-owned RCW.  It deliberately does not call ISldWorks.ExitApp(), because an
@@ -188,7 +246,7 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
             new EvidenceObservation("session.revision", attachment.Info.Revision),
             new EvidenceObservation("session.user-control", attachment.Info.UserControl.ToString()),
             new EvidenceObservation("session.visible", attachment.Info.Visible.ToString()),
-            new EvidenceObservation("com.thread-id", Environment.CurrentManagedThreadId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new EvidenceObservation("com.thread-id", System.Environment.CurrentManagedThreadId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             new EvidenceObservation("com.apartment", Thread.CurrentThread.GetApartmentState().ToString()));
     }
 
@@ -233,7 +291,7 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
             new EvidenceObservation("session.id", attachment.Info.SessionId.Value),
             new EvidenceObservation("session.process-id", attachment.Info.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             new EvidenceObservation("session.revision", attachment.Info.Revision),
-            new EvidenceObservation("com.thread-id", Environment.CurrentManagedThreadId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new EvidenceObservation("com.thread-id", System.Environment.CurrentManagedThreadId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             new EvidenceObservation("com.apartment", Thread.CurrentThread.GetApartmentState().ToString()));
     }
 

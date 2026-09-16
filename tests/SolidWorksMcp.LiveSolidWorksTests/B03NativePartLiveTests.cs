@@ -1,0 +1,145 @@
+﻿using System.Globalization;
+using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Protocol;
+using SolidWorksMcp.Provider.SolidWorks;
+
+namespace SolidWorksMcp.LiveSolidWorksTests;
+
+/// <summary>
+/// Opt-in real SOLIDWORKS B03 proof: create a persisted part, create a circle sketch, extrude, rebuild and inspect.
+/// 显式 opt-in 的真实 SOLIDWORKS B03 证明：创建持久化零件、圆草图、拉伸、重建并 inspection。
+/// </summary>
+/// <remarks>
+/// Hosted CI never runs this test because it needs a user-authorized interactive SOLIDWORKS process.  The test does
+/// not launch or close SOLIDWORKS; it requires a specific PID, an explicit isolated workspace, and leaves failed
+/// artifacts for diagnosis. Hosted CI 不运行此测试，因为它需要用户授权的交互式 SOLIDWORKS；测试不启动/关闭
+/// SOLIDWORKS，而是要求明确 PID 和隔离 workspace，并在失败时保留 artifact 供诊断。
+/// </remarks>
+public sealed class B03NativePartLiveTests
+{
+    /// <summary>Runs this test only when the operator explicitly supplied the native Live inputs.</summary>
+    [OptInLiveFact]
+    public async Task CreateSketchExtrudeRebuildInspectAndSave()
+    {
+        string? pidText = Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_PROCESS_ID");
+        string? workspaceText = Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_WORKSPACE");
+        if (!int.TryParse(pidText, NumberStyles.None, CultureInfo.InvariantCulture, out int processId)
+            || processId <= 0
+            || string.IsNullOrWhiteSpace(workspaceText))
+        {
+            throw new InvalidOperationException(
+                "The opt-in Live test was discovered as runnable, but its required process/workspace inputs disappeared.");
+        }
+
+        string workspace = Path.GetFullPath(workspaceText.Trim());
+        Directory.CreateDirectory(workspace);
+        string partPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.sldprt");
+        bool completed = false;
+        try
+        {
+            await using var provider = new SolidWorksCadProvider();
+            OperationResult<ICadSession> sessionResult = await provider.StartSessionAsync(
+                new CadSessionOptions { RequestedProcessId = processId });
+            Assert.True(sessionResult.IsSuccess, FormatError(sessionResult.Error));
+            ICadSession session = sessionResult.Value!;
+
+            OperationResult<ICadPartDocument> createResult = await session.CreatePartAsync(
+                new CreatePartRequest
+                {
+                    Path = partPath,
+                    InitialCircleRadius = Length.FromMillimeters(25d),
+                });
+            Assert.True(createResult.IsSuccess, FormatError(createResult.Error));
+            ICadPartDocument part = createResult.Value!;
+
+            OperationResult<CadInspectionSnapshot> beforeExtrusion = await session.Inspection.InspectAsync(part.DocumentId);
+            Assert.True(beforeExtrusion.IsSuccess, FormatError(beforeExtrusion.Error));
+
+            OperationResult<FeatureSnapshot> extrusion = await part.AddExtrusionAsync(
+                new ExtrusionRequest
+                {
+                    Name = "B03-Circle-Extrusion",
+                    Depth = Length.FromMillimeters(10d),
+                });
+            Assert.True(
+                extrusion.IsSuccess,
+                $"{FormatError(extrusion.Error)} pre-extrusion-features="
+                + string.Join(
+                    ",",
+                    beforeExtrusion.Value!.Features.Select(feature => $"{feature.Name}:{feature.Kind}"))
+                + $" pre-extrusion-bodies={beforeExtrusion.Value.Bodies.Length}");
+            Assert.Equal(10d, extrusion.Value!.Depth!.Value.Millimeters, precision: 8);
+
+            OperationResult<RebuildReceipt> rebuild = await part.RebuildAsync();
+            Assert.True(rebuild.IsSuccess, FormatError(rebuild.Error));
+            Assert.False(rebuild.Value!.HasErrors);
+
+            OperationResult<CadInspectionSnapshot> inspection = await session.Inspection.InspectAsync(part.DocumentId);
+            Assert.True(inspection.IsSuccess, FormatError(inspection.Error));
+            Assert.Single(inspection.Value!.Bodies);
+            Assert.Contains(inspection.Value.Features, feature => feature.Name == extrusion.Value.Name);
+            Assert.True(inspection.Value.Bodies[0].Volume.CubicMillimeters > 0d);
+            Assert.NotEqual("", inspection.Value.Document.StateHash);
+
+            OperationResult<SaveReceipt> save = await part.SaveAsync();
+            Assert.True(save.IsSuccess, FormatError(save.Error));
+            Assert.True(File.Exists(partPath));
+            completed = true;
+            await session.CloseAsync();
+        }
+        finally
+        {
+            // A failed run intentionally preserves the isolated artifact; a successful run cleans only its own file
+            // unless the operator asks to keep it for manual inspection.
+            // 失败运行故意保留隔离 artifact；成功运行只清理自己创建的文件，除非操作者要求保留。
+            bool keepArtifact = string.Equals(
+                Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_KEEP_ARTIFACT"),
+                "1",
+                StringComparison.Ordinal);
+            if (completed && !keepArtifact && File.Exists(partPath))
+            {
+                File.Delete(partPath);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Keeps provider error-code/details visible in Live evidence instead of reducing a failure to one sentence.
+    /// 在 Live evidence 中保留 provider error-code/details，避免把失败压缩成单句消息。
+    /// </summary>
+    private static string FormatError(OperationError? error)
+    {
+        if (error is null)
+        {
+            return "<no-operation-error>";
+        }
+
+        string details = error.Details.Count == 0
+            ? string.Empty
+            : $" details={string.Join(';', error.Details.Select(pair => $"{pair.Key}={pair.Value}"))}";
+        return $"code={error.Code}; category={error.Category}; message={error.Message};{details}";
+    }
+}
+
+/// <summary>Fact attribute that turns an absent explicit Live configuration into a discovery-time skip.</summary>
+/// <remarks>
+/// xUnit 2.9 does not treat a runtime <c>SkipException</c> as a skip in this repository's runner.  Setting the static
+/// Fact metadata at discovery keeps hosted CI honest: the test is skipped, never counted as passed. xUnit 2.9 在此
+/// runner 中不会把运行时 SkipException 稳定识别成 skip；发现阶段设置 Fact metadata 才能保证 Hosted CI 真实记录。
+/// </remarks>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+internal sealed class OptInLiveFactAttribute : FactAttribute
+{
+    /// <summary>Marks the test skipped unless both an exact PID and isolated workspace are present.</summary>
+    public OptInLiveFactAttribute()
+    {
+        string? pid = Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_PROCESS_ID");
+        string? workspace = Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_WORKSPACE");
+        if (!int.TryParse(pid, NumberStyles.None, CultureInfo.InvariantCulture, out int processId)
+            || processId <= 0
+            || string.IsNullOrWhiteSpace(workspace))
+        {
+            Skip = "Set SOLIDWORKS_MCP_LIVE_PROCESS_ID and SOLIDWORKS_MCP_LIVE_WORKSPACE to run the real B03 loop.";
+        }
+    }
+}

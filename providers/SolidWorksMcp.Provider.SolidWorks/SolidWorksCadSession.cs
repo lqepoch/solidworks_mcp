@@ -12,6 +12,7 @@ namespace SolidWorksMcp.Provider.SolidWorks;
 internal sealed class SolidWorksCadSession : ICadSession
 {
     private readonly SolidWorksComSessionHost host;
+    private readonly SolidWorksDocumentRegistry registry = new();
     private int lifecycleState;
 
     public SolidWorksCadSession(
@@ -23,10 +24,11 @@ internal sealed class SolidWorksCadSession : ICadSession
         ArgumentNullException.ThrowIfNull(info);
         Capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
         SessionId = info.SessionId;
-        Inspection = new UnsupportedSolidWorksInspectionService(
-            Capabilities,
-            () => Volatile.Read(ref lifecycleState) == 2,
-            SessionId);
+        Inspection = new SolidWorksInspectionService(
+            host,
+            registry,
+            SessionId,
+            () => Volatile.Read(ref lifecycleState) == 2);
         Export = new UnsupportedSolidWorksExportService(
             Capabilities,
             () => Volatile.Read(ref lifecycleState) == 2,
@@ -50,16 +52,37 @@ internal sealed class SolidWorksCadSession : ICadSession
     /// <summary>Gets whether this logical session has completed its detach lifecycle.</summary>
     internal bool IsClosed => Volatile.Read(ref lifecycleState) == 2;
 
-    public Task<OperationResult<ICadPartDocument>> CreatePartAsync(
+    public async Task<OperationResult<ICadPartDocument>> CreatePartAsync(
         CreatePartRequest request,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(
-            request is null
-                ? SolidWorksProviderResults.Failure<ICadPartDocument>(
-                    "create-part",
-                    new OperationError(ErrorCodes.InvalidRequest, "The part request is required.", ErrorCategories.Validation))
-                : UnsupportedOrClosed<ICadPartDocument>(CadCapabilityNames.PartMutation, "create-part"));
+        if (request is null)
+        {
+            return SolidWorksProviderResults.Failure<ICadPartDocument>(
+                "part.create",
+                new OperationError(ErrorCodes.InvalidRequest, "The part request is required.", ErrorCategories.Validation));
+        }
+
+        if (IsClosed)
+        {
+            return SolidWorksProviderResults.Closed<ICadPartDocument>("part.create", SessionId);
+        }
+
+        OperationResult<SolidWorksCreatedPart> created = await host.InvokeOnStaAsync(
+            SessionId,
+            application => SolidWorksPartFactory.CreateOnSta(application, SessionId, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!created.IsSuccess || created.Value is null)
+        {
+            return OperationResults.Failure<ICadPartDocument>(created.OperationId, created.Error!, created.Evidence);
+        }
+
+        registry.Add(created.Value.Descriptor);
+        var document = new SolidWorksNativePartDocument(host, registry, SessionId, created.Value.Descriptor);
+        return OperationResults.Success<ICadPartDocument>(
+            document,
+            created.OperationId,
+            created.Evidence ?? new OperationEvidence("solidworks-provider"));
     }
 
     public Task<OperationResult<ICadAssemblyDocument>> CreateAssemblyAsync(

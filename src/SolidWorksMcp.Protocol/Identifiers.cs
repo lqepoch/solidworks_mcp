@@ -45,6 +45,21 @@ public readonly record struct FeatureId
     public string Value { get; }
 }
 
+/// <summary>Stable identity of an engineering requirement independent of a CAD feature or drawing annotation.</summary>
+/// <remarks>
+/// A requirement remains the same logical object when its model feature, view or annotation is regenerated.  工程要求的
+/// identity 独立于 CAD feature 和 drawing annotation；重新生成模型或图纸不能因此创建一个新的逻辑要求。
+/// </remarks>
+public readonly record struct EngineeringRequirementId
+{
+    /// <summary>Creates an opaque engineering-requirement identity.</summary>
+    [System.Text.Json.Serialization.JsonConstructor]
+    public EngineeringRequirementId(string value) => Value = IdentifierValidation.RequireValue(value, nameof(value));
+
+    /// <summary>Gets the stable serialized value.</summary>
+    public string Value { get; }
+}
+
 /// <summary>Stable identity of a solid body.</summary>
 public readonly record struct BodyId
 {

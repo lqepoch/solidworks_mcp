@@ -1,0 +1,258 @@
+﻿using SolidWorks.Interop.sldworks;
+using SolidWorks.Interop.swconst;
+using SolidWorksMcp.CadAbstractions;
+using SolidWorksMcp.Protocol;
+
+namespace SolidWorksMcp.Provider.SolidWorks;
+
+/// <summary>Creates one persisted native part and returns only vendor-neutral metadata across the STA boundary.</summary>
+/// <remarks>
+/// B03 deliberately requires a persisted <c>.sldprt</c> path.  An unsaved document cannot be safely reacquired later
+/// without trusting the current ActiveDoc, which is forbidden by the session/document binding contract.  B03 故意要求
+/// 已持久化的 <c>.sldprt</c> path；未保存文档无法安全重获，若依赖当前 ActiveDoc 会违反 session/document binding。
+/// </remarks>
+internal static class SolidWorksPartFactory
+{
+    /// <summary>Creates a new part, optionally adds a deterministic initial circle sketch, saves and verifies it.</summary>
+    public static OperationResult<SolidWorksCreatedPart> CreateOnSta(
+        ISldWorks application,
+        SessionId sessionId,
+        CreatePartRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(application);
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (string.IsNullOrWhiteSpace(request.Path))
+        {
+            return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                "part.create",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "The native B03 part path is required so the document can be rebound safely.",
+                    ErrorCategories.Validation,
+                    remediation: "Use an isolated test/workspace path and pass it explicitly."));
+        }
+
+        string path = Path.GetFullPath(request.Path.Trim());
+        if (!path.EndsWith(".sldprt", StringComparison.OrdinalIgnoreCase))
+        {
+            return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                "part.create",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "The native part target must use the .sldprt extension.",
+                    ErrorCategories.Validation));
+        }
+
+        if (File.Exists(path))
+        {
+            return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                "part.create",
+                new OperationError(
+                    ErrorCodes.StateConflict,
+                    "The native B03 create path already exists; overwrite is not enabled by this operation.",
+                    ErrorCategories.State,
+                    remediation: "Choose a new isolated output path or use the future governed overwrite operation."));
+        }
+
+        if (!string.Equals(request.Configuration, "Default", StringComparison.Ordinal))
+        {
+            return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                "part.create",
+                new OperationError(
+                    ErrorCodes.UnsupportedCapability,
+                    "B03 initial part creation currently supports only the default configuration.",
+                    ErrorCategories.Capability));
+        }
+
+        ModelDoc2? model = null;
+        try
+        {
+            string template = application.GetDocumentTemplate(
+                (int)swDocumentTypes_e.swDocPART,
+                string.Empty,
+                0,
+                0d,
+                0d);
+            if (string.IsNullOrWhiteSpace(template) || !File.Exists(template))
+            {
+                return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                    "part.create",
+                    new OperationError(
+                        ErrorCodes.NotFound,
+                        "SOLIDWORKS did not return an existing part document template.",
+                        ErrorCategories.Provider,
+                        remediation: "Run the Windows doctor and configure a valid native part template."));
+            }
+
+            model = application.INewDocument2(
+                template,
+                (int)swDocumentTypes_e.swDocPART,
+                0d,
+                0d);
+            if (model is null)
+            {
+                return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                    "part.create",
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS returned no ModelDoc2 for the new part.",
+                        ErrorCategories.Provider));
+            }
+
+            string? profileFeatureName = null;
+            if (request.InitialCircleRadius is Length radius)
+            {
+                if (radius.Millimeters <= 0d)
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.InvalidRequest,
+                            "The initial circle radius must be greater than zero.",
+                            ErrorCategories.Validation));
+                }
+
+                bool planeSelected = model.Extension.SelectByID2(
+                    "Front Plane",
+                    "PLANE",
+                    0d,
+                    0d,
+                    0d,
+                    false,
+                    0,
+                    null,
+                    0);
+                if (!planeSelected)
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.ProviderFailure,
+                            "The SOLIDWORKS Front Plane could not be selected for the initial sketch.",
+                            ErrorCategories.Provider));
+                }
+
+                model.SketchManager.InsertSketch(true);
+                SketchSegment? circle = model.SketchManager.CreateCircleByRadius(0d, 0d, 0d, radius.ToMeters());
+                model.SketchManager.InsertSketch(true);
+                SolidWorksDocumentRouting.Release(circle);
+                model.ClearSelection2(true);
+                profileFeatureName = FindFirstSketchFeatureName(model);
+                if (string.IsNullOrWhiteSpace(profileFeatureName))
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "The initial sketch was created but could not be identified in the feature tree.",
+                            ErrorCategories.Invariant,
+                            remediation: "Preserve the test artifact and inspect the SOLIDWORKS feature tree."));
+                }
+            }
+
+            // SaveAs3(NewName, SaveAsVersion, Options) is an old but available SOLIDWORKS API.  The second argument
+            // is the file-format version, while the third is the bitmask containing Silent; mixing these values
+            // produces swFileSaveFormatNotAvailable (32) even for a valid native .sldprt target.
+            // SaveAs3(NewName, SaveAsVersion, Options) 是仍可用的旧 SOLIDWORKS API：第二参数是文件格式版本，
+            // 第三参数才是包含 Silent 的选项位掩码；交换它们会让有效的 .sldprt 目标返回 32。
+            int saveError = model.SaveAs3(
+                path,
+                (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
+                (int)swSaveAsOptions_e.swSaveAsOptions_Silent);
+            if (saveError != 0)
+            {
+                return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                    "part.create",
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS could not save the newly created part.",
+                        ErrorCategories.Provider,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["save-error-code"] = saveError.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            ["target-path"] = path,
+                        },
+                        remediation: "Preserve the test artifact and inspect the save error code before retrying."));
+            }
+
+            string actualPath = Path.GetFullPath(model.GetPathName()?.Trim() ?? string.Empty);
+            if (!actualPath.Equals(path, StringComparison.OrdinalIgnoreCase)
+                || !SolidWorksDocumentRouting.MatchesType(model, CadDocumentType.Part))
+            {
+                return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                    "part.create",
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The newly created document did not reopen with the expected path and part type identity.",
+                        ErrorCategories.State));
+            }
+
+            var descriptor = new SolidWorksDocumentDescriptor(
+                new DocumentId($"{sessionId.Value}:document:{Guid.NewGuid():N}"),
+                CadDocumentType.Part,
+                path,
+                model.GetTitle()?.Trim() ?? Path.GetFileNameWithoutExtension(path),
+                SolidWorksDocumentRouting.ReadConfiguration(model),
+                SolidWorksDocumentRouting.ComputeStateHash(model),
+                model.GetSaveFlag(),
+                profileFeatureName);
+            return SolidWorksProviderResults.Success(
+                "part.create",
+                new SolidWorksCreatedPart(descriptor),
+                new EvidenceObservation("document.id", descriptor.DocumentId.Value),
+                new EvidenceObservation("document.path", descriptor.Path),
+                new EvidenceObservation("document.type", descriptor.DocumentType.ToString()),
+                new EvidenceObservation("document.configuration", descriptor.Configuration),
+                new EvidenceObservation("state.hash", descriptor.StateHash),
+                new EvidenceObservation("initial.sketch", profileFeatureName ?? "none"));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<SolidWorksCreatedPart>(
+                "part.create",
+                exception,
+                "SOLIDWORKS part creation failed before a verified document identity was returned.");
+        }
+        finally
+        {
+            // The document remains open in SOLIDWORKS, but this provider-owned RCW is released on the STA.  Future
+            // operations reacquire it by descriptor.Path and verify identity again.
+            // 文档仍保持在 SOLIDWORKS 中打开，但 Provider-owned RCW 在 STA 上释放；后续操作按 path 重获并再次校验。
+            SolidWorksDocumentRouting.Release(model);
+        }
+    }
+
+    private static string? FindFirstSketchFeatureName(ModelDoc2 model)
+    {
+        var current = model.FirstFeature() as IFeature;
+        try
+        {
+            while (current is not null)
+            {
+                string typeName = current.GetTypeName2()?.Trim() ?? string.Empty;
+                string name = current.Name?.Trim() ?? string.Empty;
+                // SW2022 reports the origin as OriginProfileFeature, so a broad "Profile" match selects Origin and
+                // makes FeatureExtrusion3 return null.  The real feature-tree evidence is Sketch1:ProfileFeature;
+                // require both parts of that observed identity for this deterministic first-sketch workflow.
+                // SW2022 会把原点报告为 OriginProfileFeature，宽泛的 Profile 匹配会选中 Origin 并令
+                // FeatureExtrusion3 返回 null。真实 feature tree 证据是 Sketch1:ProfileFeature，故本流程要求两者同时满足。
+                if (typeName.Equals("ProfileFeature", StringComparison.OrdinalIgnoreCase)
+                    && name.StartsWith("Sketch", StringComparison.OrdinalIgnoreCase))
+                {
+                    return name;
+                }
+
+                var next = current.GetNextFeature() as IFeature;
+                SolidWorksDocumentRouting.Release(current);
+                current = next;
+            }
+
+            return null;
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(current);
+        }
+    }
+}

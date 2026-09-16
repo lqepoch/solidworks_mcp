@@ -46,3 +46,28 @@ The doctor is read-only by default. Use -Initialize only to create user-local co
 All future mutating CAD operations must use the transaction engine: plan, preflight, acquire single writer, verify target/state, checkpoint, execute, rebuild, inspect, verify invariants, commit or rollback. High-risk checkpoint failure is fail-closed. Unknown SOLIDWORKS modal dialogs return a human-action-required state; never blind-click.
 
 The MCP surface stays compact and high-level. Low-level CAD primitives are internal/debug-tier operations with explicit read/write/destructive metadata. Do not add a generic eval, PowerShell or macro execution escape hatch.
+
+## Private drawing fixture policy / 私密图纸 fixture 规则
+
+The local `图纸/` directory is a confidential, user-supplied reference corpus. It is ignored by Git and must never be
+copied, renamed into a tracked file, embedded as a test resource, uploaded, attached to an Issue/PR, rendered into a
+committed image, or quoted in logs, comments, commit messages or final reports. The same prohibition applies to title
+block text, part numbers, customer names, exact dimensions, screenshots and extracted PDF text unless the user explicitly
+authorizes publication.  `图纸/` 是用户提供的机密参考 corpus，已由 Git 忽略；禁止复制、改名后纳入 tracked file、嵌入
+测试资源、上传、附加到 Issue/PR、提交渲染图片，或把标题栏、料号、客户名、精确尺寸、截图、PDF 提取文本写入日志、
+评论、commit message 或最终报告。除非用户明确授权，不得公开任何派生原文。
+
+Each local reference-driven iteration must randomly sample exactly two PDFs, classify them from document content/layout,
+and use only single-part drawings until the assembly drawing compiler is explicitly enabled. A sample is not a passing
+test merely because it renders: record only redacted slot IDs and engineering feature classes (for example, orthographic
+coverage, hole pattern, section/detail need, tolerance/provenance and title-block requirements). Do not use a filename or
+an assembly-looking title as CAD model classification. 每轮本地参考驱动迭代必须随机抽取恰好两张 PDF，依据内容/版式分类；在
+明确开启总成编译器前，只允许单零件图。渲染成功不等于测试通过；只记录脱敏 slot ID 和工程特征类别（如正投影视图覆盖、
+孔系、剖视/局部放大需求、公差来源和标题栏要求）。不得依据文件名或标题外观判定 CAD 模型类型。
+
+Use the private drawing sampling skill/script for local review. Keep the random selection manifest, extracted text, rendered
+PNG/PDF and any CAD artifacts under user-local temp/evidence folders, never under tracked `docs/`, `tests/`, `references/`
+or `artifacts/`. Every generated requirement must carry `provenance=private_drawing_review` and remain a proposal until
+validated against provider inspection or human approval. 使用私密图纸抽样 skill/script 做本地复核；随机 manifest、提取文本、PNG/PDF
+和 CAD artifact 必须留在 user-local temp/evidence 目录，不能写入 tracked 目录。派生工程要求必须标注
+`provenance=private_drawing_review`，在 Provider inspection 或人工批准前只能作为 proposal。

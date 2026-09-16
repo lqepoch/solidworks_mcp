@@ -23,6 +23,10 @@ live-evidence/
 
 图纸/
 
+# SOLIDWORKS may emit a machine-local diagnostic log when launched from the repository.
+# SOLIDWORKS 从仓库工作目录启动时可能生成机器本地诊断日志；它不属于产品源码或测试证据。
+console.log
+
 # IDE/editor state
 .vs/
 .vscode/

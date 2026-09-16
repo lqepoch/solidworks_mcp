@@ -4,21 +4,21 @@ using SolidWorksMcp.Protocol;
 namespace SolidWorksMcp.Provider.SolidWorks;
 
 /// <summary>
-/// Native SOLIDWORKS provider foundation: attach to one existing process and expose explicit future capabilities.
+/// Native SOLIDWORKS provider: attach to one existing process and expose only the verified B03 part slice.
 /// </summary>
 /// <remarks>
-/// B02 intentionally does not claim part, assembly, drawing, inspection or export support yet.  Returning an
-/// attached session with those capabilities disabled is safer than exposing a half-implemented mutation path.
-/// #18/B02 目前只完成安全附着，不宣称零件、装配、工程图、检查或导出能力；显式 disabled 比半成品 mutation 更安全。
+/// B03 enables only the persisted part create/sketch/extrusion/rebuild/inspection path. Assembly, drawing and export
+/// remain explicitly disabled until their API and Live evidence gates are complete.  B03 只启用已持久化的零件
+/// create/sketch/extrusion/rebuild/inspection 路径；装配、工程图和 export 在 API/Live 证据完成前继续 disabled。
 /// </remarks>
 public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
 {
     private static readonly CadCapabilitySet capabilities = new(
     [
-        new CadCapability(CadCapabilityNames.PartMutation, supported: false, "Native part mutation is planned after the B02 session foundation."),
+        new CadCapability(CadCapabilityNames.PartMutation, supported: true),
         new CadCapability(CadCapabilityNames.AssemblyMutation, supported: false, "Native assembly mutation is planned after the B02 session foundation."),
         new CadCapability(CadCapabilityNames.DrawingMutation, supported: false, "Native drawing mutation is planned after the B02 session foundation."),
-        new CadCapability(CadCapabilityNames.Inspection, supported: false, "Native inspection is enabled by a later provider issue after COM identity guards are complete."),
+        new CadCapability(CadCapabilityNames.Inspection, supported: true),
         new CadCapability(CadCapabilityNames.Export, supported: false, "Native export is enabled by a later provider issue after COM identity guards are complete."),
         new CadCapability(CadCapabilityNames.Selection, supported: false, "Native selection is enabled after the B03 document registry can bind selectors to documents."),
         new CadCapability(CadCapabilityNames.PatternSemantics, supported: false, "Pattern semantics are owned by the engineering layer and are not implemented in B02."),
