@@ -89,16 +89,30 @@ public sealed class B03NativePartLiveTests
         }
         finally
         {
-            // A failed run intentionally preserves the isolated artifact; a successful run cleans only its own file
-            // unless the operator asks to keep it for manual inspection.
-            // 失败运行故意保留隔离 artifact；成功运行只清理自己创建的文件，除非操作者要求保留。
+            // A failed run intentionally preserves the isolated artifact.  A successful run attempts to clean only
+            // its own file; SOLIDWORKS may still hold the saved document open after provider detach, in which case
+            // the artifact remains quarantined in the explicit test workspace rather than turning a CAD pass into a
+            // cleanup failure.  失败运行故意保留隔离 artifact；成功运行只尝试清理自己创建的文件。Provider
+            // detach 后 SOLIDWORKS 可能仍保持文档打开，此时 artifact 留在显式 test workspace 中作为 quarantine，
+            // 不把 CAD 通过误判成清理失败。
             bool keepArtifact = string.Equals(
                 Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_KEEP_ARTIFACT"),
                 "1",
                 StringComparison.Ordinal);
             if (completed && !keepArtifact && File.Exists(partPath))
             {
-                File.Delete(partPath);
+                try
+                {
+                    File.Delete(partPath);
+                }
+                catch (IOException)
+                {
+                    Console.Error.WriteLine("live-artifact-cleanup=deferred; reason=document-still-open");
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    Console.Error.WriteLine("live-artifact-cleanup=deferred; reason=filesystem-lock");
+                }
             }
         }
     }

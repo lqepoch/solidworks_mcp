@@ -309,9 +309,8 @@ tests pass and its one explicit placeholder remains skipped when no opt-in Live 
 
 ## B03 native part foundation evidence (partial)
 
-Issue #19/B03 has a buildable native-provider foundation in the current working change, but it is not complete: the
-real SOLIDWORKS extrusion step still returns no feature in the local Live run and is therefore recorded as failed,
-never as passed or skipped.
+Issue #19/B03 now has a verified native-provider geometry slice, but it is not complete: the current Live proof does
+not yet close/reopen the document, and the mutation is not yet routed through the F01/F02 transaction coordinator.
 
 - `providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksDocumentRegistry.cs` binds a document identity to path,
   type, configuration, state hash, dirty state and the verified profile feature name. Routing rejects a missing,
@@ -325,7 +324,8 @@ never as passed or skipped.
 - `SolidWorksNativePartDocument` re-resolves and verifies the document before rebuild/save, calls
   `FeatureExtrusion3` only after a named sketch selection, and performs inspection after mutation. Inspection reads
   bodies, bounding box, feature identity/type and mass/volume through native APIs, then converts the evidence to
-  `CadAbstractions` records.
+  `CadAbstractions` records. Feature metadata is copied before the inspection reader releases potentially shared
+  feature RCWs, avoiding a real `InvalidComObjectException` found by Live testing.
 - `src/SolidWorksMcp.EngineeringModel/PartDrawingRequirements.cs` adds the first immutable, vendor-neutral drawing
   requirement set. It models orthographic/isometric coverage, holes, bend radius, thickness, section/detail need,
   material, general tolerance, surface finish and title-block requirements. Private visual review creates only
@@ -333,20 +333,31 @@ never as passed or skipped.
 
 Official API evidence recorded in `docs/research/solidworks-api-knowledge.md` covers `GetDocumentTemplate`,
 `INewDocument2`, `CreateCircleByRadius`, `FeatureExtrusion3`, `ForceRebuild3`, `SaveAs3` and `IActivateDoc3`. The
-current local Live run proved session attachment, sketch creation and persisted part creation, but the extrusion
-returned `null`; therefore geometry inspection and the final create-part → rebuild → measure → reopen proof remain
-blocked on a further official-signature/parameter investigation. The isolated test preserves its own failure
-artifact for diagnosis and does not touch user design directories.
+latest local Live run passed session attachment, sketch creation, persisted part creation, non-null extrusion,
+rebuild, positive body/volume inspection, feature identity inspection and save. The test reports cleanup as deferred
+when SOLIDWORKS still owns the document file handle and leaves that artifact in the explicit isolated quarantine.
+Close/reopen/re-inspect and transaction-engine routing remain the next B03/F01 follow-up; no complete B03 release
+claim is made.
 
 Evidence command and result:
 
     dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 45 + Contract 7 + FakeCad 6 passed; Live 4 passed + 2 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 52 + Contract 7 + FakeCad 6 passed; Live 4 passed + 2 skipped
 
-Live status: session/STA and native sketch/save probes passed in the local SOLIDWORKS environment; the extrusion
-probe failed. No Live geometry pass is claimed. The explicit opt-in Live test is skipped when
+Live status: the explicit opt-in B03 test passed in the local SOLIDWORKS environment, including native sketch,
+extrusion, rebuild, inspection and save. Cleanup was deferred because the interactive document remained open; this
+is a quarantine status, not a geometry failure. The explicit opt-in Live test is skipped when
 `SOLIDWORKS_MCP_LIVE_PROCESS_ID` and `SOLIDWORKS_MCP_LIVE_WORKSPACE` are absent.
+
+Additional local Live evidence:
+
+    SOLIDWORKS_MCP_LIVE_PROCESS_ID=<explicit-local-pid>; SOLIDWORKS_MCP_LIVE_WORKSPACE=<isolated-user-local-workspace>
+    dotnet test tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-build --filter FullyQualifiedName~B03NativePartLiveTests # exit 0; 1 passed; 0 failed; 0 skipped
+
+The command above is shown with placeholders so a machine-specific PID or local workspace is not treated as a source
+contract. The running SOLIDWORKS process was not closed by the test; only the provider-owned COM attachment was
+detached, and the saved test document remained quarantined because the interactive process retained its file handle.
 
 ## Private drawing fixture review evidence (redacted)
 

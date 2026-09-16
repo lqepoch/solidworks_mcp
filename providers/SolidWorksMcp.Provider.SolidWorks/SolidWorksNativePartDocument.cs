@@ -159,6 +159,7 @@ internal sealed class SolidWorksNativePartDocument(
                 new OperationError(ErrorCodes.NotFound, "The native document identity is no longer registered.", ErrorCategories.State));
         }
 
+        string stage = "resolve-document";
         OperationResult<ModelDoc2> resolved = SolidWorksDocumentRouting.ResolveOpenDocument(
             application,
             current,
@@ -174,7 +175,9 @@ internal sealed class SolidWorksNativePartDocument(
         try
         {
             string profileFeatureName = current.ProfileFeatureName!;
+            stage = "clear-selection";
             model.ClearSelection2(true);
+            stage = "select-profile";
             bool sketchSelected = model.Extension.SelectByID2(
                 profileFeatureName,
                 "SKETCH",
@@ -196,6 +199,7 @@ internal sealed class SolidWorksNativePartDocument(
                         remediation: "Re-inspect the document and do not reuse a stale profile identity."));
             }
 
+            stage = "feature-extrusion3";
             feature = model.FeatureManager.FeatureExtrusion3(
                 // SOLIDWORKS calls Sd the single-direction switch.  A blind extrusion with D2=0 must set it to true;
                 // UseAutoSelect lets SOLIDWORKS resolve the selected closed sketch into the new solid body.
@@ -234,6 +238,17 @@ internal sealed class SolidWorksNativePartDocument(
                         ErrorCategories.Provider));
             }
 
+            // Feature-tree inspection may return the same COM identity as FeatureExtrusion3.  The inspection reader
+            // is allowed to release its traversal RCWs, so copy the feature metadata immediately and never
+            // dereference the feature RCW after inspection.  COM feature metadata must be snapshotted before a
+            // sibling reader can FinalReleaseComObject the shared RCW.  feature tree inspection 可能返回与
+            // FeatureExtrusion3 相同的 COM identity；reader 可以释放 traversal RCW，因此必须立即复制 metadata，
+            // inspection 后禁止再次解引用 feature RCW，避免 InvalidComObjectException。
+            stage = "read-feature-metadata";
+            string featureName = feature.Name?.Trim() ?? "Extrusion";
+            string featureKind = feature.GetTypeName2()?.Trim() ?? "Extrusion";
+
+            stage = "rebuild";
             bool rebuilt = model.ForceRebuild3(true);
             if (!rebuilt)
             {
@@ -246,6 +261,7 @@ internal sealed class SolidWorksNativePartDocument(
                         remediation: "Preserve the document and inspect the SOLIDWORKS feature error state."));
             }
 
+            stage = "inspect-result";
             OperationResult<CadInspectionSnapshot> inspection = SolidWorksNativeInspectionReader.ReadPart(model, current);
             if (!inspection.IsSuccess || inspection.Value is null)
             {
@@ -263,12 +279,11 @@ internal sealed class SolidWorksNativePartDocument(
                         remediation: "Preserve the artifact and inspect profile selection, feature errors and units."));
             }
 
-            string featureName = feature.Name?.Trim() ?? "Extrusion";
             var featureSnapshot = new FeatureSnapshot
             {
                 FeatureId = new FeatureId($"{current.DocumentId.Value}:feature:{featureName}"),
                 Name = featureName,
-                Kind = feature.GetTypeName2()?.Trim() ?? "Extrusion",
+                Kind = featureKind,
                 BodyId = inspection.Value.Bodies[0].BodyId,
                 Depth = request.Depth,
             };
@@ -286,6 +301,22 @@ internal sealed class SolidWorksNativePartDocument(
                 new EvidenceObservation("body.count", inspection.Value.Bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 new EvidenceObservation("volume.cubic-millimeters", inspection.Value.Bodies[0].Volume.CubicMillimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
                 new EvidenceObservation("state.hash", nextDescriptor.StateHash));
+        }
+        catch (System.Runtime.InteropServices.InvalidComObjectException exception)
+        {
+            return SolidWorksProviderResults.Failure<NativeExtrusionResult>(
+                "feature.extrusion",
+                new OperationError(
+                    ErrorCodes.ProviderFailure,
+                    "SOLIDWORKS separated a COM object during the native extrusion workflow.",
+                    ErrorCategories.Provider,
+                    retryable: true,
+                    details: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["stage"] = stage,
+                        ["hresult"] = $"0x{exception.HResult:X8}",
+                    },
+                    remediation: "Preserve the isolated artifact and inspect RCW lifetime at the reported stage."));
         }
         finally
         {
