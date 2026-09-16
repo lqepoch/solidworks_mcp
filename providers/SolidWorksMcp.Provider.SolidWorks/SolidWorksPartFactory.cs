@@ -69,6 +69,8 @@ internal static class SolidWorksPartFactory
         }
 
         ModelDoc2? model = null;
+        bool persistedTargetOwned = false;
+        bool ownershipTransferred = false;
         try
         {
             string template = application.GetDocumentTemplate(
@@ -180,6 +182,7 @@ internal static class SolidWorksPartFactory
             }
 
             string actualPath = Path.GetFullPath(model.GetPathName()?.Trim() ?? string.Empty);
+            persistedTargetOwned = actualPath.Equals(path, StringComparison.OrdinalIgnoreCase);
             if (!actualPath.Equals(path, StringComparison.OrdinalIgnoreCase)
                 || !SolidWorksDocumentRouting.MatchesType(model, CadDocumentType.Part))
             {
@@ -200,6 +203,7 @@ internal static class SolidWorksPartFactory
                 SolidWorksDocumentRouting.ComputeStateHash(model),
                 model.GetSaveFlag(),
                 profileFeatureName);
+            ownershipTransferred = true;
             return SolidWorksProviderResults.Success(
                 "part.create",
                 new SolidWorksCreatedPart(descriptor),
@@ -219,10 +223,61 @@ internal static class SolidWorksPartFactory
         }
         finally
         {
+            // If verification fails after SaveAs3, close only the exact clean target that this operation persisted.
+            // Never close an unknown active document, and never close a dirty document that could trigger a modal save
+            // prompt. If verification succeeds, ownership is transferred to the returned document facade.
+            // 若 SaveAs3 后的验证失败，只关闭本 operation 持久化且确认路径精确匹配、同时保持 clean 的 target。
+            // 绝不关闭未知 ActiveDoc，也不关闭可能触发 modal save prompt 的 dirty document。验证成功后 ownership
+            // 转移给返回的 document facade。
+            if (!ownershipTransferred && persistedTargetOwned && model is not null)
+            {
+                TryCloseCleanPersistedTarget(application, model, path);
+            }
+
             // The document remains open in SOLIDWORKS, but this provider-owned RCW is released on the STA.  Future
             // operations reacquire it by descriptor.Path and verify identity again.
             // 文档仍保持在 SOLIDWORKS 中打开，但 Provider-owned RCW 在 STA 上释放；后续操作按 path 重获并再次校验。
             SolidWorksDocumentRouting.Release(model);
+        }
+    }
+
+    /// <summary>
+    /// Compensates a post-save verification failure without accepting an unknown modal state.
+    /// 对保存后的验证失败执行补偿关闭，但不接受未知 modal 状态。
+    /// </summary>
+    private static void TryCloseCleanPersistedTarget(ISldWorks application, ModelDoc2 model, string expectedPath)
+    {
+        try
+        {
+            if (model.GetSaveFlag())
+            {
+                return;
+            }
+
+            string actualPath = model.GetPathName()?.Trim() ?? string.Empty;
+            if (!Path.GetFullPath(actualPath).Equals(expectedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            application.CloseDoc(expectedPath);
+            ModelDoc2? stillOpen = application.GetOpenDocument(expectedPath);
+            try
+            {
+                // The operation has no safe recovery if SOLIDWORKS retained the exact document after CloseDoc.
+                // Keep the artifact for diagnosis; do not attempt blind retry/force-close here.
+                // CloseDoc 后若 exact document 仍 open，则保留 artifact 供诊断；不 blind retry 或 force-close。
+            }
+            finally
+            {
+                SolidWorksDocumentRouting.Release(stillOpen);
+            }
+        }
+        catch
+        {
+            // Compensation is deliberately bounded and fail-closed. The original operation result remains the
+            // authoritative failure; swallowing here prevents a cleanup COM exception from masking it.
+            // 补偿操作故意 bounded 且 fail-closed；原 operation result 仍是权威 failure，避免 cleanup COM exception 覆盖原错。
         }
     }
 

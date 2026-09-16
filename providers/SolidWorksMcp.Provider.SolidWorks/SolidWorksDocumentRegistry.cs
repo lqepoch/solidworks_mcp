@@ -45,23 +45,27 @@ internal sealed class SolidWorksDocumentRegistry
 
     /// <summary>Updates provider-neutral state metadata after a verified operation.</summary>
     /// <remarks>
-    /// The descriptor update is compare-and-swap based so a stale asynchronous operation cannot overwrite a newer
-    /// document state.  使用 compare-and-swap 更新，防止过期异步操作覆盖更新后的 document state。
+    /// The descriptor update is an exact compare-and-swap: the caller must provide the descriptor observed before
+    /// the native operation. A stale operation therefore cannot overwrite a newer document state. 使用 exact
+    /// compare-and-swap 更新；调用方必须提供 native operation 前观察到的 descriptor，防止过期操作覆盖更新后的
+    /// document state。
     /// </remarks>
-    public bool TryUpdateDescriptor(SolidWorksDocumentDescriptor descriptor, out SolidWorksDocumentDescriptor? updated)
+    public bool TryUpdateDescriptor(
+        SolidWorksDocumentDescriptor expected,
+        SolidWorksDocumentDescriptor candidate,
+        out SolidWorksDocumentDescriptor? updated)
     {
-        ArgumentNullException.ThrowIfNull(descriptor);
-        while (documents.TryGetValue(descriptor.DocumentId.Value, out SolidWorksDocumentDescriptor? current))
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (!expected.DocumentId.Equals(candidate.DocumentId))
         {
-            if (documents.TryUpdate(descriptor.DocumentId.Value, descriptor, current))
-            {
-                updated = descriptor;
-                return true;
-            }
+            updated = null;
+            return false;
         }
 
-        updated = null;
-        return false;
+        bool replaced = documents.TryUpdate(expected.DocumentId.Value, candidate, expected);
+        updated = replaced ? candidate : null;
+        return replaced;
     }
 
     /// <summary>Removes a document after the provider has closed it explicitly.</summary>

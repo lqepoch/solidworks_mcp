@@ -14,6 +14,7 @@ internal sealed class SolidWorksCadSession : ICadSession
 {
     private readonly SolidWorksComSessionHost host;
     private readonly CadPathAllowlist pathAllowlist;
+    private readonly string attachmentGeneration;
     private readonly SolidWorksDocumentRegistry registry = new();
     private int lifecycleState;
 
@@ -28,10 +29,14 @@ internal sealed class SolidWorksCadSession : ICadSession
         Capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
         this.pathAllowlist = pathAllowlist ?? throw new ArgumentNullException(nameof(pathAllowlist));
         SessionId = info.SessionId;
+        attachmentGeneration = string.IsNullOrWhiteSpace(info.AttachmentGeneration)
+            ? throw new ArgumentException("The native session attachment generation is required.", nameof(info))
+            : info.AttachmentGeneration;
         Inspection = new SolidWorksInspectionService(
             host,
             registry,
             SessionId,
+            attachmentGeneration,
             () => Volatile.Read(ref lifecycleState) == 2);
         Export = new UnsupportedSolidWorksExportService(
             Capabilities,
@@ -74,6 +79,7 @@ internal sealed class SolidWorksCadSession : ICadSession
 
         OperationResult<SolidWorksCreatedPart> created = await host.InvokeOnStaAsync(
             SessionId,
+            attachmentGeneration,
             application => SolidWorksPartFactory.CreateOnSta(application, SessionId, request, pathAllowlist),
             cancellationToken).ConfigureAwait(false);
         if (!created.IsSuccess || created.Value is null)
@@ -82,7 +88,12 @@ internal sealed class SolidWorksCadSession : ICadSession
         }
 
         registry.Add(created.Value.Descriptor);
-        var document = new SolidWorksNativePartDocument(host, registry, SessionId, created.Value.Descriptor);
+        var document = new SolidWorksNativePartDocument(
+            host,
+            registry,
+            SessionId,
+            attachmentGeneration,
+            created.Value.Descriptor);
         return OperationResults.Success<ICadPartDocument>(
             document,
             created.OperationId,

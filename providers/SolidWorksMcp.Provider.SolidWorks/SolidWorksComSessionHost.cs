@@ -73,8 +73,10 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
     /// </remarks>
     public async Task<OperationResult<SolidWorksSessionInfo>> VerifyAsync(
         SessionId expectedSessionId,
+        string expectedAttachmentGeneration,
         CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedAttachmentGeneration);
         if (cancellationToken.IsCancellationRequested)
         {
             return SolidWorksProviderResults.Cancelled<SolidWorksSessionInfo>("session.verify");
@@ -82,7 +84,9 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
 
         try
         {
-            return await dispatcher.InvokeAsync(() => VerifyOnSta(expectedSessionId), cancellationToken).ConfigureAwait(false);
+            return await dispatcher.InvokeAsync(
+                () => VerifyOnSta(expectedSessionId, expectedAttachmentGeneration),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -109,10 +113,12 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
     /// </remarks>
     internal async Task<OperationResult<T>> InvokeOnStaAsync<T>(
         SessionId expectedSessionId,
+        string expectedAttachmentGeneration,
         Func<ISldWorks, OperationResult<T>> callback,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(callback);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedAttachmentGeneration);
         if (cancellationToken.IsCancellationRequested)
         {
             return SolidWorksProviderResults.Cancelled<T>("session.invoke");
@@ -124,7 +130,9 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
                 () =>
                 {
                     dispatcher.AssertDispatcherThread();
-                    OperationResult<SolidWorksSessionInfo> verification = VerifyOnSta(expectedSessionId);
+                    OperationResult<SolidWorksSessionInfo> verification = VerifyOnSta(
+                        expectedSessionId,
+                        expectedAttachmentGeneration);
                     if (!verification.IsSuccess || attachment is null)
                     {
                         return verification.Error is null
@@ -206,7 +214,9 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
 
         if (attachment is not null)
         {
-            OperationResult<SolidWorksSessionInfo> verification = VerifyOnSta(attachment.Info.SessionId);
+            OperationResult<SolidWorksSessionInfo> verification = VerifyOnSta(
+                attachment.Info.SessionId,
+                attachment.Info.AttachmentGeneration);
             if (!verification.IsSuccess)
             {
                 return verification;
@@ -250,7 +260,9 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
             new EvidenceObservation("com.apartment", Thread.CurrentThread.GetApartmentState().ToString()));
     }
 
-    private OperationResult<SolidWorksSessionInfo> VerifyOnSta(SessionId expectedSessionId)
+    private OperationResult<SolidWorksSessionInfo> VerifyOnSta(
+        SessionId expectedSessionId,
+        string expectedAttachmentGeneration)
     {
         dispatcher.AssertDispatcherThread();
         if (attachment is null)
@@ -269,7 +281,8 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
         string actualSessionId = $"sw:{actualProcessId}:{actualRevision}";
         if (actualProcessId != attachment.Info.ProcessId
             || !actualRevision.Equals(attachment.Info.Revision, StringComparison.Ordinal)
-            || !actualSessionId.Equals(expectedSessionId.Value, StringComparison.Ordinal))
+            || !actualSessionId.Equals(expectedSessionId.Value, StringComparison.Ordinal)
+            || !attachment.Info.AttachmentGeneration.Equals(expectedAttachmentGeneration, StringComparison.Ordinal))
         {
             return SolidWorksProviderResults.Failure<SolidWorksSessionInfo>(
                 "session.verify",
@@ -282,6 +295,8 @@ internal sealed class SolidWorksComSessionHost(StaComDispatcher? suppliedDispatc
                     {
                         ["expected-session-id"] = expectedSessionId.Value,
                         ["actual-session-id"] = actualSessionId,
+                        ["expected-attachment-generation"] = expectedAttachmentGeneration,
+                        ["actual-attachment-generation"] = attachment.Info.AttachmentGeneration,
                     }));
         }
 

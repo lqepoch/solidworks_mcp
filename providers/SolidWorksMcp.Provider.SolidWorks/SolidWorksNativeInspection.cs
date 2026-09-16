@@ -255,6 +255,7 @@ internal sealed class SolidWorksInspectionService(
     SolidWorksComSessionHost host,
     SolidWorksDocumentRegistry registry,
     SessionId sessionId,
+    string attachmentGeneration,
     Func<bool> isClosed) : ICadInspectionService
 {
     /// <inheritdoc />
@@ -284,6 +285,7 @@ internal sealed class SolidWorksInspectionService(
 
         return await host.InvokeOnStaAsync(
             sessionId,
+            attachmentGeneration,
             application =>
             {
                 OperationResult<ModelDoc2> resolved = SolidWorksDocumentRouting.ResolveOpenDocument(application, descriptor);
@@ -294,14 +296,50 @@ internal sealed class SolidWorksInspectionService(
 
                 try
                 {
-                    return descriptor.DocumentType == CadDocumentType.Part
-                        ? SolidWorksNativeInspectionReader.ReadPart(resolved.Value, descriptor)
-                        : SolidWorksProviderResults.Unsupported<CadInspectionSnapshot>(
+                    if (descriptor.DocumentType != CadDocumentType.Part)
+                    {
+                        return SolidWorksProviderResults.Unsupported<CadInspectionSnapshot>(
                             "inspect",
                             new CadCapability(
                                 CadCapabilityNames.Inspection,
                                 supported: false,
                                 "B03 inspection currently supports native part documents only."));
+                    }
+
+                    OperationResult<CadInspectionSnapshot> inspection = SolidWorksNativeInspectionReader.ReadPart(
+                        resolved.Value,
+                        descriptor);
+                    if (!inspection.IsSuccess || inspection.Value is null)
+                    {
+                        return inspection;
+                    }
+
+                    // Refresh the registry on the same STA callback that read the model. This keeps the state hash and
+                    // dirty flag ordered with the inspected native state before another queued operation can begin.
+                    // 在读取 model 的同一个 STA callback 中刷新 registry，确保 state hash/dirty 与 inspection 顺序一致，
+                    // 并在下一个 queued operation 开始前完成登记。
+                    var refreshed = descriptor with
+                    {
+                        Configuration = inspection.Value.Document.Configuration,
+                        StateHash = inspection.Value.Document.StateHash,
+                        IsDirty = inspection.Value.Document.IsDirty,
+                    };
+                    if (!registry.TryUpdateDescriptor(descriptor, refreshed, out _))
+                    {
+                        registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? latest);
+                        return SolidWorksProviderResults.Failure<CadInspectionSnapshot>(
+                            "inspect",
+                            new OperationError(
+                                ErrorCodes.StateConflict,
+                                "The document registry changed while native inspection was being committed.",
+                                ErrorCategories.State,
+                                remediation: "Discard this inspection result and request a fresh inspection."),
+                            new EvidenceObservation("expected-state-hash", descriptor.StateHash),
+                            new EvidenceObservation("inspected-state-hash", refreshed.StateHash),
+                            new EvidenceObservation("registered-state-hash", latest?.StateHash ?? "missing"));
+                    }
+
+                    return inspection;
                 }
                 finally
                 {

@@ -18,7 +18,8 @@ internal sealed record SolidWorksSessionInfo(
     int ProcessId,
     string Revision,
     bool UserControl,
-    bool Visible);
+    bool Visible,
+    string AttachmentGeneration);
 
 /// <summary>Owns the one COM interface returned by ROT until the STA host detaches it.</summary>
 /// <remarks>
@@ -232,7 +233,8 @@ internal static class RotSolidWorksConnector
             processId,
             revision,
             application.UserControl,
-            application.Visible);
+            application.Visible,
+            Guid.NewGuid().ToString("N"));
         return true;
     }
 

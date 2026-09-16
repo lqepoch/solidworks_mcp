@@ -16,11 +16,15 @@ internal sealed class SolidWorksNativePartDocument(
     SolidWorksComSessionHost host,
     SolidWorksDocumentRegistry registry,
     SessionId sessionId,
+    string attachmentGeneration,
     SolidWorksDocumentDescriptor initialDescriptor) : ICadPartDocument
 {
     private readonly SolidWorksComSessionHost host = host ?? throw new ArgumentNullException(nameof(host));
     private readonly SolidWorksDocumentRegistry registry = registry ?? throw new ArgumentNullException(nameof(registry));
     private readonly SessionId sessionId = sessionId;
+    private readonly string attachmentGeneration = string.IsNullOrWhiteSpace(attachmentGeneration)
+        ? throw new ArgumentException("The native session attachment generation is required.", nameof(attachmentGeneration))
+        : attachmentGeneration;
     private SolidWorksDocumentDescriptor descriptor = initialDescriptor ?? throw new ArgumentNullException(nameof(initialDescriptor));
 
     /// <inheritdoc />
@@ -81,6 +85,7 @@ internal sealed class SolidWorksNativePartDocument(
 
         OperationResult<NativeExtrusionResult> result = await host.InvokeOnStaAsync(
             sessionId,
+            attachmentGeneration,
             application => AddExtrusionOnSta(application, request),
             cancellationToken).ConfigureAwait(false);
         if (!result.IsSuccess || result.Value is null)
@@ -88,11 +93,12 @@ internal sealed class SolidWorksNativePartDocument(
             return OperationResults.Failure<FeatureSnapshot>(result.OperationId, result.Error!, result.Evidence);
         }
 
-        descriptor = result.Value.Descriptor;
-        registry.TryUpdateDescriptor(descriptor, out SolidWorksDocumentDescriptor? updated);
-        if (updated is not null)
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
         {
-            descriptor = updated;
+            return DescriptorCommitFailure<FeatureSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
         }
 
         return OperationResults.Success(
@@ -124,6 +130,7 @@ internal sealed class SolidWorksNativePartDocument(
 
         OperationResult<NativeDimensionResult> result = await host.InvokeOnStaAsync(
             sessionId,
+            attachmentGeneration,
             application => SetDimensionOnSta(application, request),
             cancellationToken).ConfigureAwait(false);
         if (!result.IsSuccess || result.Value is null)
@@ -131,11 +138,12 @@ internal sealed class SolidWorksNativePartDocument(
             return OperationResults.Failure<DimensionSnapshot>(result.OperationId, result.Error!, result.Evidence);
         }
 
-        descriptor = result.Value.Descriptor;
-        registry.TryUpdateDescriptor(descriptor, out SolidWorksDocumentDescriptor? updated);
-        if (updated is not null)
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
         {
-            descriptor = updated;
+            return DescriptorCommitFailure<DimensionSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
         }
 
         return OperationResults.Success(
@@ -149,6 +157,7 @@ internal sealed class SolidWorksNativePartDocument(
     {
         OperationResult<NativeRebuildResult> result = await host.InvokeOnStaAsync(
             sessionId,
+            attachmentGeneration,
             RebuildOnSta,
             cancellationToken).ConfigureAwait(false);
         if (!result.IsSuccess || result.Value is null)
@@ -156,11 +165,12 @@ internal sealed class SolidWorksNativePartDocument(
             return OperationResults.Failure<RebuildReceipt>(result.OperationId, result.Error!, result.Evidence);
         }
 
-        descriptor = result.Value.Descriptor;
-        registry.TryUpdateDescriptor(descriptor, out SolidWorksDocumentDescriptor? updated);
-        if (updated is not null)
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
         {
-            descriptor = updated;
+            return DescriptorCommitFailure<RebuildReceipt>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
         }
 
         return OperationResults.Success(
@@ -174,6 +184,7 @@ internal sealed class SolidWorksNativePartDocument(
     {
         OperationResult<NativeSaveResult> result = await host.InvokeOnStaAsync(
             sessionId,
+            attachmentGeneration,
             SaveOnSta,
             cancellationToken).ConfigureAwait(false);
         if (!result.IsSuccess || result.Value is null)
@@ -181,11 +192,12 @@ internal sealed class SolidWorksNativePartDocument(
             return OperationResults.Failure<SaveReceipt>(result.OperationId, result.Error!, result.Evidence);
         }
 
-        descriptor = result.Value.Descriptor;
-        registry.TryUpdateDescriptor(descriptor, out SolidWorksDocumentDescriptor? updated);
-        if (updated is not null)
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
         {
-            descriptor = updated;
+            return DescriptorCommitFailure<SaveReceipt>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
         }
 
         return OperationResults.Success(
@@ -199,6 +211,7 @@ internal sealed class SolidWorksNativePartDocument(
     {
         OperationResult<MutationReceipt> result = await host.InvokeOnStaAsync(
             sessionId,
+            attachmentGeneration,
             CloseOnSta,
             cancellationToken).ConfigureAwait(false);
         if (result.IsSuccess)
@@ -219,6 +232,7 @@ internal sealed class SolidWorksNativePartDocument(
     {
         OperationResult<NativeReopenResult> result = await host.InvokeOnStaAsync(
             sessionId,
+            attachmentGeneration,
             ReopenAndInspectOnSta,
             cancellationToken).ConfigureAwait(false);
         if (!result.IsSuccess || result.Value is null)
@@ -226,11 +240,12 @@ internal sealed class SolidWorksNativePartDocument(
             return OperationResults.Failure<CadInspectionSnapshot>(result.OperationId, result.Error!, result.Evidence);
         }
 
-        descriptor = result.Value.Descriptor;
-        registry.TryUpdateDescriptor(descriptor, out SolidWorksDocumentDescriptor? updated);
-        if (updated is not null)
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
         {
-            descriptor = updated;
+            return DescriptorCommitFailure<CadInspectionSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
         }
 
         return OperationResults.Success(
@@ -398,7 +413,7 @@ internal sealed class SolidWorksNativePartDocument(
             };
             return SolidWorksProviderResults.Success(
                 "feature.extrusion",
-                new NativeExtrusionResult(featureSnapshot, nextDescriptor),
+                new NativeExtrusionResult(featureSnapshot, nextDescriptor, current),
                 new EvidenceObservation("feature.name", featureSnapshot.Name),
                 new EvidenceObservation("feature.kind", featureSnapshot.Kind),
                 new EvidenceObservation("feature.depth", request.Depth.ToString()),
@@ -511,7 +526,7 @@ internal sealed class SolidWorksNativePartDocument(
 
             return SolidWorksProviderResults.Success(
                 "part.rebuild",
-                new NativeRebuildResult(receipt, updated),
+                new NativeRebuildResult(receipt, updated, current),
                 [.. evidence]);
         }
         finally
@@ -696,7 +711,7 @@ internal sealed class SolidWorksNativePartDocument(
             };
             return SolidWorksProviderResults.Success(
                 operation,
-                new NativeDimensionResult(snapshot, nextDescriptor),
+                new NativeDimensionResult(snapshot, nextDescriptor, current),
                 new EvidenceObservation("dimension.name", snapshot.FullName),
                 new EvidenceObservation("dimension.previous-millimeters", Length.FromMeters(previousMeters).ToString()),
                 new EvidenceObservation("dimension.value-millimeters", snapshot.Value.ToString()),
@@ -788,7 +803,7 @@ internal sealed class SolidWorksNativePartDocument(
             var receipt = new SaveReceipt { Path = current.Path, StateHash = stateHash };
             return SolidWorksProviderResults.Success(
                 "part.save",
-                new NativeSaveResult(receipt, updated),
+                new NativeSaveResult(receipt, updated, current),
                 new EvidenceObservation("save.returned", saved.ToString()),
                 new EvidenceObservation("save.errors", saveErrors.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 new EvidenceObservation("save.warnings", saveWarnings.ToString(System.Globalization.CultureInfo.InvariantCulture)),
@@ -1077,7 +1092,7 @@ internal sealed class SolidWorksNativePartDocument(
             };
             return SolidWorksProviderResults.Success(
                 operation,
-                new NativeReopenResult(inspection.Value, updated),
+                new NativeReopenResult(inspection.Value, updated, current),
                 new EvidenceObservation("document.id", current.DocumentId.Value),
                 new EvidenceObservation("document.closed", bool.TrueString),
                 new EvidenceObservation("document.reopened", bool.TrueString),
@@ -1142,19 +1157,88 @@ internal sealed class SolidWorksNativePartDocument(
 
         return observations.ToImmutable();
     }
+
+    /// <summary>
+    /// Commits a native descriptor only when the registry still contains the exact descriptor observed before the
+    /// operation. 将 native descriptor 提交到 registry，但仅当 registry 仍持有 operation 前精确观察到的 descriptor。
+    /// </summary>
+    private bool TryCommitDescriptor(
+        SolidWorksDocumentDescriptor expected,
+        SolidWorksDocumentDescriptor candidate,
+        out SolidWorksDocumentDescriptor? committed)
+    {
+        if (registry.TryUpdateDescriptor(expected, candidate, out committed) && committed is not null)
+        {
+            descriptor = committed;
+            return true;
+        }
+
+        committed = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Returns a non-retryable state conflict when native work completed but its local routing commit lost a race.
+    /// 当 native work 已完成、但本地 routing commit 发生竞争失败时，返回不可盲重试的 state conflict。
+    /// </summary>
+    private OperationResult<T> DescriptorCommitFailure<T>(
+        string operationId,
+        SolidWorksDocumentDescriptor expected,
+        SolidWorksDocumentDescriptor candidate)
+    {
+        registry.TryGet(expected.DocumentId, out SolidWorksDocumentDescriptor? latest);
+        return OperationResults.Failure<T>(
+            operationId,
+            new OperationError(
+                ErrorCodes.StateConflict,
+                "The native mutation completed but its document descriptor could not be committed without overwriting newer state.",
+                ErrorCategories.State,
+                remediation: "Do not blindly retry the mutation; re-inspect the document and create a new operation plan.",
+                details: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["native-mutation-completed"] = bool.TrueString,
+                    ["expected-state-hash"] = expected.StateHash,
+                    ["candidate-state-hash"] = candidate.StateHash,
+                    ["registered-state-hash"] = latest?.StateHash ?? "missing",
+                }),
+            new OperationEvidence(
+                "solidworks-document-registry",
+                [
+                    new EvidenceObservation("descriptor.commit", "CAS_FAILED"),
+                    new EvidenceObservation("expected-state-hash", expected.StateHash),
+                    new EvidenceObservation("candidate-state-hash", candidate.StateHash),
+                    new EvidenceObservation("registered-state-hash", latest?.StateHash ?? "missing"),
+                ],
+                stateHash: latest?.StateHash ?? candidate.StateHash));
+    }
 }
 
 /// <summary>Internal result carrying the feature and the newly inspected document metadata.</summary>
-internal sealed record NativeExtrusionResult(FeatureSnapshot Feature, SolidWorksDocumentDescriptor Descriptor);
+internal sealed record NativeExtrusionResult(
+    FeatureSnapshot Feature,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
 
 /// <summary>Internal result carrying a rebuild receipt and updated document metadata.</summary>
-internal sealed record NativeRebuildResult(RebuildReceipt Receipt, SolidWorksDocumentDescriptor Descriptor);
+internal sealed record NativeRebuildResult(
+    RebuildReceipt Receipt,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
 
 /// <summary>Internal result carrying a save receipt and updated document metadata.</summary>
-internal sealed record NativeSaveResult(SaveReceipt Receipt, SolidWorksDocumentDescriptor Descriptor);
+internal sealed record NativeSaveResult(
+    SaveReceipt Receipt,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
 
 /// <summary>Internal result carrying fresh inspection evidence after a native persisted reopen.</summary>
-internal sealed record NativeReopenResult(CadInspectionSnapshot Snapshot, SolidWorksDocumentDescriptor Descriptor);
+internal sealed record NativeReopenResult(
+    CadInspectionSnapshot Snapshot,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
 
 /// <summary>Internal result carrying a verified native dimension update and new document metadata.</summary>
-internal sealed record NativeDimensionResult(DimensionSnapshot Dimension, SolidWorksDocumentDescriptor Descriptor);
+internal sealed record NativeDimensionResult(
+    DimensionSnapshot Dimension,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);

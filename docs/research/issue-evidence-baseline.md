@@ -317,17 +317,30 @@ current session, configuration-specific coverage, the remaining part feature ser
 - `providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksDocumentRegistry.cs` binds a document identity to path,
   type, configuration, state hash, dirty state and the verified profile feature name. Routing rejects a missing,
   wrong-type, wrong-configuration or stale document before mutation.
+- The native session info now carries a per-attachment generation in addition to the PID/revision-derived `SessionId`.
+  Every STA invocation and native document facade carries that generation, so a detached/re-attached COM attachment
+  cannot satisfy an old facade merely because the operating system reused the same PID and SOLIDWORKS revision.
 - `SolidWorksComSessionHost.InvokeOnStaAsync` is the only native mutation entry point. The callback runs on the
   dedicated STA and returns vendor-neutral results; COM child objects are released inside that callback so RCWs do
   not cross the provider boundary.
 - `SolidWorksPartFactory` uses the discovered local part template, creates a part with `INewDocument2`, creates an
   optional sketch circle through `SketchManager.CreateCircleByRadius`, and persists it with the verified
   `SaveAs3(CurrentVersion, Silent)` argument order. No vendor DLL or template is committed.
+- If post-save identity verification fails, the factory attempts one bounded compensation close only when the exact
+  target path is confirmed and the new document is clean. Dirty or unknown documents are not blind-closed because a
+  modal save prompt could deadlock the STA; the failed artifact remains available for diagnosis.
 - `SolidWorksNativePartDocument` re-resolves and verifies the document before rebuild/save, calls
   `FeatureExtrusion3` only after a named sketch selection, and performs inspection after mutation. Inspection reads
   bodies, bounding box, feature identity/type and mass/volume through native APIs, then converts the evidence to
   `CadAbstractions` records. Feature metadata is copied before the inspection reader releases potentially shared
   feature RCWs, avoiding a real `InvalidComObjectException` found by Live testing.
+- Inspection commits its refreshed state hash and dirty flag to the registry on the same STA callback that read the
+  native model. Mutation results carry the exact pre-operation descriptor; the facade uses an exact registry CAS and
+  returns `STATE_CONFLICT` if committing the result would overwrite newer routing state. The failure is explicitly
+  non-blind-retry because native work may already have completed.
+- `tests/SolidWorksMcp.LiveSolidWorksTests/NativeIdentityBoundaryTests.cs` verifies exact-CAS stale-state rejection
+  and document-identity mismatch rejection without starting SOLIDWORKS; these are provider-boundary tests, not Live
+  COM geometry evidence.
 - `ICadDocument.CloseAsync` and `ICadDocument.ReopenAndInspectAsync` define a high-level persisted lifecycle contract.
   The native part facade performs a clean-state preflight, invokes `CloseDoc` with the registered canonical path,
   verifies the exact document is closed, invokes `OpenDoc6` on the provider STA with the registered part configuration,
@@ -355,7 +368,7 @@ Evidence command and result:
 
     dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 6 passed + 2 skipped
 
 Live status: the earlier explicit opt-in B03 test passed in the local SOLIDWORKS environment, including native sketch,
 extrusion, rebuild, inspection, save, exact document close, OpenDoc6 reopen, post-reopen inspection and final close.
@@ -403,7 +416,7 @@ Evidence command and result:
 
     dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build --logger "console;verbosity=minimal"     # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build --logger "console;verbosity=minimal"     # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 6 passed + 2 skipped
     dotnet build SolidWorksMcp.hosted.slnx --configuration Release --no-restore -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
     dotnet test SolidWorksMcp.hosted.slnx --configuration Release --no-build -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed
 
@@ -433,7 +446,7 @@ Evidence command and result:
 
     dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 4 passed + 2 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build -v:minimal --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed; Live 6 passed + 2 skipped
     dotnet build SolidWorksMcp.hosted.slnx --configuration Release --no-restore -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
     dotnet test SolidWorksMcp.hosted.slnx --configuration Release --no-build -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed
 
