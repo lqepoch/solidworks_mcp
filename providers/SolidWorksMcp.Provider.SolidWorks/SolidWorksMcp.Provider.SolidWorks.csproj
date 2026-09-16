@@ -7,7 +7,26 @@
     <RootNamespace>SolidWorksMcp.Provider.SolidWorks</RootNamespace>
     <AssemblyName>SolidWorksMcp.Provider.SolidWorks</AssemblyName>
     <IsSolidWorksProvider>true</IsSolidWorksProvider>
+    <SolidWorksApiRedist Condition="'$(SolidWorksApiRedist)' == '' and '$(SolidWorksInstallRoot)' != ''">$(SolidWorksInstallRoot)\api\redist</SolidWorksApiRedist>
   </PropertyGroup>
+  <!--
+    References are added only when the doctor has found the local vendor installation.
+    只有 doctor 已发现本机厂商安装时才加入引用；绝不把 DLL 复制进源码仓库。
+  -->
+  <ItemGroup Condition="Exists('$(SolidWorksApiRedist)\SolidWorks.Interop.sldworks.dll')">
+    <Reference Include="SolidWorks.Interop.sldworks">
+      <HintPath>$(SolidWorksApiRedist)\SolidWorks.Interop.sldworks.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(SolidWorksApiRedist)\SolidWorks.Interop.swconst.dll')">
+    <Reference Include="SolidWorks.Interop.swconst">
+      <HintPath>$(SolidWorksApiRedist)\SolidWorks.Interop.swconst.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\SolidWorksMcp.CadAbstractions\SolidWorksMcp.CadAbstractions.csproj" />
     <ProjectReference Include="..\..\src\SolidWorksMcp.Core\SolidWorksMcp.Core.csproj" />

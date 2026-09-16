@@ -88,7 +88,9 @@ function Get-SolidWorksInstallations {
 
     $seenExecutables = @{}
     $installations = @()
-    foreach ($root in @($rootMap.Values)) {
+    # Sort roots before probing so installation selection is stable across PowerShell/hash-table order changes.
+    # 先排序安装根目录再探测，避免 PowerShell 哈希表顺序变化导致选择不稳定。
+    foreach ($root in @($rootMap.Values | Sort-Object)) {
         Write-Verbose "Inspecting SOLIDWORKS root: $root"
         $executable = Get-ChildItem -LiteralPath $root -Filter 'SLDWORKS.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -eq $executable) {
@@ -122,10 +124,20 @@ function Get-SolidWorksInstallations {
             Select-Object -First 20 |
             ForEach-Object { $_.FullName })
 
+        # Partial installations remain visible and actionable instead of disappearing from diagnostics.
+        # 不完整安装仍要出现在诊断中并列出缺失项，不能直接从结果中消失。
+        $missing = @()
+        if (-not $redist) { $missing += 'api\redist' }
+        if ($interopPaths.Count -lt 2) { $missing += 'SolidWorks.Interop.sldworks.dll/SolidWorks.Interop.swconst.dll' }
+        if ($typeLibraryPaths.Count -eq 0) { $missing += 'sldworks.tlb' }
+        if ($templatePaths.Count -eq 0) { $missing += 'part/assembly/drawing templates' }
+
         $installations += [pscustomobject]@{
             root = $canonicalRoot
             executable = $executable.FullName
             version = $executable.VersionInfo.ProductVersion
+            status = if ($missing.Count -eq 0) { 'complete' } else { 'partial' }
+            missing = @($missing)
             apiRedist = if ($redist) { $redist.FullName } else { $null }
             interop = $interopPaths
             typeLibraries = $typeLibraryPaths
@@ -133,7 +145,11 @@ function Get-SolidWorksInstallations {
         }
     }
 
-    return $installations
+    # Prefer the highest version, then executable path, for deterministic multi-version selection.
+    # 多版本时优先最高版本，再按可执行文件路径排序，保证 selected 配置可重复。
+    return @($installations | Sort-Object `
+        @{ Expression = { try { [version]$_.version } catch { [version]'0.0' } }; Descending = $true }, `
+        @{ Expression = { $_.executable }; Descending = $false })
 }
 
 $checks = @()
