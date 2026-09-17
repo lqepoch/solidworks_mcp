@@ -151,6 +151,42 @@ public static class PartDrawingBuildService
             // Native SOLIDWORKS ignores that label and returns the associative dimension text it actually inserted.
             // model-dimensions 只为 FakeCad validation 携带非空语义 label；native SOLIDWORKS 会忽略它并返回真正
             // 插入的 associative dimension text，绝不把请求文字伪装成原生尺寸。
+            DrawingViewSnapshot? sectionView = null;
+            if (request.ThroughHolePattern is not null && views.Count > 0)
+            {
+                // A verified internal-hole group is the first deterministic section trigger. The vertical cutting line
+                // passes through the two symmetric hole centers in the Front view and the generated A-A view occupies
+                // the free upper-right region. 已验证的内部孔组是首个确定性剖视触发条件；竖直剖切线穿过 Front view
+                // 中两个对称孔中心，A-A view 放置在右上方空闲区域。
+                OperationResult<DrawingViewSnapshot> section = await drawing.AddSectionViewAsync(
+                    new DrawingSectionViewRequest
+                    {
+                        RequestedViewId = new ViewId($"{request.DrawingDocumentId.Value}:section-a-a"),
+                        ParentViewId = views[0].ViewId,
+                        Name = "Section A-A",
+                        Label = "A",
+                        // Place the section in the lower-right view band.  Y=210 mm is the sheet upper boundary for
+                        // the current landscape template and clips the section label/geometry; keeping this explicit
+                        // coordinate below the seed views makes the first deterministic layout useful before D06's
+                        // general collision/reflow planner takes ownership.
+                        // 剖视放在右下视图区。当前横向模板的 Y=210 mm 接近图幅上边界，会裁切剖视；在 D06 通用碰撞/重排
+                        // planner 接管前，先用明确的下方坐标保证首个剖视具备工程可读性。
+                        Position = new Coordinate2D(Length.FromMillimeters(210d), Length.FromMillimeters(75d)),
+                        CutLineStart = new Coordinate2D(Length.FromMillimeters(90d), Length.FromMillimeters(90d)),
+                        CutLineEnd = new Coordinate2D(Length.FromMillimeters(90d), Length.FromMillimeters(160d)),
+                        ScaleDenominator = request.ScaleDenominator,
+                        ScaleWithModel = true,
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                if (!section.IsSuccess || section.Value is null)
+                {
+                    return Failure(section);
+                }
+
+                sectionView = section.Value;
+                views.Add(section.Value);
+            }
+
             OperationResult<DrawingAnnotationSnapshot> modelDimensions = await drawing.AddAnnotationAsync(
                 new DrawingAnnotationRequest
                 {
@@ -272,6 +308,7 @@ public static class PartDrawingBuildService
                 Extrusion = extrusion.Value,
                 HolePattern = holePattern,
                 Views = views.ToImmutable(),
+                SectionView = sectionView,
                 ModelDimensions = modelDimensions.Value,
                 PatternCallout = patternCallout,
                 Pdf = pdf.Value,
@@ -286,6 +323,8 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("part.document.id", part.DocumentId.Value),
                         new EvidenceObservation("drawing.document.id", drawing.DocumentId.Value),
                         new EvidenceObservation("drawing.view.count", drawingInspection.Value.Views.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("drawing.section-view", sectionView?.Name ?? "none"),
+                        new EvidenceObservation("drawing.section-view.trigger", sectionView is null ? "not-requested" : "verified-internal-hole-group"),
                         new EvidenceObservation("drawing.annotation.count", drawingInspection.Value.Annotations.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("part.hole-pattern", holePattern?.Name ?? "none"),
                         new EvidenceObservation("part.hole-pattern.kind", holePattern?.Kind ?? "none"),
@@ -424,6 +463,9 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>Views requested by the deterministic seed plan.</summary>
     public required ImmutableArray<DrawingViewSnapshot> Views { get; init; }
+
+    /// <summary>Verified native section view generated for the internal-hole trigger, when requested.</summary>
+    public DrawingViewSnapshot? SectionView { get; init; }
 
     /// <summary>Native model-dimension annotation result.</summary>
     public required DrawingAnnotationSnapshot ModelDimensions { get; init; }

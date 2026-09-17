@@ -162,6 +162,11 @@ public interface ICadDrawingDocument : ICadDocument
         DrawingViewRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Adds a native section view from a declarative cutting-line request.</summary>
+    Task<OperationResult<DrawingViewSnapshot>> AddSectionViewAsync(
+        DrawingSectionViewRequest request,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Adds an annotation associated with an existing drawing view.</summary>
     Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
         DrawingAnnotationRequest request,

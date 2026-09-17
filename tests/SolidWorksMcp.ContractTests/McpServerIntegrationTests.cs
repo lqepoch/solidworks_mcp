@@ -155,6 +155,8 @@ public sealed class McpServerIntegrationTests
         Assert.Contains("CAD operation completed", result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
         Assert.NotNull(result.StructuredContent);
         Assert.Contains("part.hole-pattern", result.StructuredContent!.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.section-view", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Section A-A", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.pattern-callout", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.pattern-callout.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("2X", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);

@@ -220,16 +220,28 @@ internal static class SolidWorksDocumentRouting
     public static string ComputeStateHash(ModelDoc2 model)
     {
         ArgumentNullException.ThrowIfNull(model);
-        string canonical = string.Join(
-            "|",
-            model.GetPathName()?.Trim() ?? string.Empty,
-            model.GetType().ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ReadConfiguration(model),
-            model.GetTitle()?.Trim() ?? string.Empty,
-            model.GetUpdateStamp().ToString(System.Globalization.CultureInfo.InvariantCulture),
-            model.GetSaveFlag().ToString(System.Globalization.CultureInfo.InvariantCulture),
-            model.GetFeatureCount().ToString(System.Globalization.CultureInfo.InvariantCulture));
+        string canonical = ComputeStateFingerprint(model);
         return $"sha256:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))}";
+    }
+
+    /// <summary>
+    /// Reads the exact canonical state markers used by <see cref="ComputeStateHash"/>.
+    /// Keeping this diagnostic representation alongside the hash lets export audit identify the changed marker,
+    /// instead of reporting only two opaque SHA-256 values.
+    /// 这里保留与 ComputeStateHash 完全相同的可读 fingerprint，使导出审计能指出具体变化的 marker。
+    /// </summary>
+    public static string ComputeStateFingerprint(ModelDoc2 model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        return string.Join(
+            "|",
+            $"path={model.GetPathName()?.Trim() ?? string.Empty}",
+            $"type={model.GetType().ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"configuration={ReadConfiguration(model)}",
+            $"title={model.GetTitle()?.Trim() ?? string.Empty}",
+            $"updateStamp={model.GetUpdateStamp().ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"saveFlag={model.GetSaveFlag().ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+            $"featureCount={model.GetFeatureCount().ToString(System.Globalization.CultureInfo.InvariantCulture)}");
     }
 
     /// <summary>Reads the active configuration and releases the temporary configuration RCW immediately.</summary>

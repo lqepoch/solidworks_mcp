@@ -284,6 +284,48 @@ public sealed record DrawingViewRequest
     public int? ScaleDenominator { get; init; }
 }
 
+/// <summary>
+/// Request to create one native section view from an explicit parent-view cutting line.
+/// 使用明确的父视图剖切线创建一个 native section view 的请求。
+/// </summary>
+/// <remarks>
+/// Coordinates are paper-space millimetres. The provider owns the CAD sketch and selection mechanics; the request only
+/// carries deterministic engineering intent and never exposes a vendor COM type. 坐标使用纸空间毫米；Provider 负责
+/// CAD sketch 与 selection 细节，请求只承载确定性的工程意图，不暴露厂商 COM 类型。
+/// </remarks>
+public sealed record DrawingSectionViewRequest
+{
+    /// <summary>Optional stable identity for the generated section view.</summary>
+    public ViewId? RequestedViewId { get; init; }
+
+    /// <summary>Parent view whose exact native binding owns the cutting line.</summary>
+    public required ViewId ParentViewId { get; init; }
+
+    /// <summary>Semantic name such as Section A-A.</summary>
+    public string Name { get; init; } = "Section A-A";
+
+    /// <summary>Native section-label seed, for example A.</summary>
+    public string Label { get; init; } = "A";
+
+    /// <summary>Paper-space center of the generated section view in millimetres.</summary>
+    public Coordinate2D Position { get; init; }
+
+    /// <summary>Start point of the straight cutting line in parent-view paper coordinates.</summary>
+    public Coordinate2D CutLineStart { get; init; }
+
+    /// <summary>End point of the straight cutting line in parent-view paper coordinates.</summary>
+    public Coordinate2D CutLineEnd { get; init; }
+
+    /// <summary>Optional section scale denominator; null preserves provider/template scale.</summary>
+    public int? ScaleDenominator { get; init; }
+
+    /// <summary>Whether the native section view uses the reverse cut direction.</summary>
+    public bool ChangeDirection { get; init; }
+
+    /// <summary>Whether the section view should scale with the source model.</summary>
+    public bool ScaleWithModel { get; init; } = true;
+}
+
 /// <summary>Request to add one drawing annotation associated with a view.</summary>
 public sealed record DrawingAnnotationRequest
 {

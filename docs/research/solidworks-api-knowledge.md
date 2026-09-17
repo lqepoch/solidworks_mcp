@@ -172,3 +172,28 @@ Hole Callout remains behind the modal-dialog safety gate, with no blind OK/Enter
 关联 Hole Callout 仍受 modal-dialog safety gate 约束，禁止 blind OK/Enter recovery。
 
 Official source: [AddHoleCallout2 Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDrawingDoc~AddHoleCallout2.html).
+
+### D04 section-view API boundary / D04 剖视 API 边界
+
+The locally installed SOLIDWORKS 2022 interop assembly (`30.0.0.5041`) was reflected before implementation. The
+verified signatures are:
+
+| Interface / method | Verified signature | Official source | Runtime note |
+| --- | --- | --- | --- |
+| `IDrawingDoc.CreateSectionViewAt5` | `View CreateSectionViewAt5(Double X, Double Y, Double Z, String SectionLabel, Int32 Options, Object ExcludedComponents, Double SectionDepth)` | [CreateSectionViewAt5 Method](https://help.solidworks.com/2016/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDrawingDoc~CreateSectionViewAt5.html) | Requires a selected drawing section line; the provider creates/selects that line on the owning STA and rejects a null return. |
+| `IView.RemoveAlignment` | `Void RemoveAlignment()` | [RemoveAlignment Method](https://help.solidworks.com/2019/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~RemoveAlignment.html) | A created section may inherit parent alignment; the provider removes it before independent compiler placement. |
+| `IView.SetXform` | `Boolean SetXform(Object Transform)` | [SetXform Method](https://help.solidworks.com/2015/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~SetXform.html) | The transform is three doubles: X, Y and scale. The provider checks the return value and rebuilds before reading position/outline. |
+| `IView.GetAlignment` | `Int32 GetAlignment()` | [GetAlignment Method](https://help.solidworks.com/2018/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~GetAlignment.html) | Captured as evidence before `RemoveAlignment`; it is not used as a guessed placement policy. |
+| `IModelDoc2.Save3` | `Boolean Save3(Int32 Options, ref Int32 Errors, ref Int32 Warnings)` | [IModelDoc2 Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IModelDoc2.html) | Used only after PDF export when an exact fingerprint proves that the only transition was clean `saveFlag=False` to transient `saveFlag=True`; restoration is required. |
+
+The official `CreateSectionViewAt5` documentation states that X/Y/Z are the section-view center on the sheet and that a
+section line must be selected before the call. The official `IView` documentation also states that aligned views can
+move only along their alignment vector; this is why the implementation uses `RemoveAlignment` before `SetXform` instead
+of trusting the initial CreateSectionViewAt5 coordinates. This was verified in a fresh SOLIDWORKS 2022 process through
+the MCP `cad.build-part-drawing` workflow and a retained PDF artifact. No 2026 runtime was available locally, so this is
+not a 2026 runtime claim.
+
+官方 `CreateSectionViewAt5` 文档说明 X/Y/Z 是图纸上的剖视中心，并要求调用前选中 section line。官方 `IView` 文档还说明
+aligned view 只能沿 alignment vector 移动，因此实现先 `RemoveAlignment` 再 `SetXform`，不盲信 CreateSectionViewAt5 初始
+坐标。该流程已在全新 SOLIDWORKS 2022 进程中通过 MCP `cad.build-part-drawing` 和保留 PDF artifact 真实验证。本机没有
+可验证的 2026 runtime，因此不把它表述为 2026 运行时证据。

@@ -107,6 +107,69 @@ internal sealed class SolidWorksNativeDrawingDocument(
     }
 
     /// <summary>
+    /// Creates one native section view from a declarative cutting line bound to an exact parent view.
+    /// 根据绑定到精确父视图的声明式剖切线创建一个 native section view。
+    /// </summary>
+    /// <remarks>
+    /// SOLIDWORKS requires a drawing sketch segment to be selected before CreateSectionViewAt5. The adapter performs
+    /// that selection on the owning STA and verifies the returned view outline; no global active view is guessed.
+    /// SOLIDWORKS 要求在 CreateSectionViewAt5 前选中 drawing sketch segment；adapter 在所属 STA 完成选择并验证
+    /// 返回 view 的 outline，不猜测全局 active view。
+    /// </remarks>
+    public async Task<OperationResult<DrawingViewSnapshot>> AddSectionViewAsync(
+        DrawingSectionViewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.Name)
+            || string.IsNullOrWhiteSpace(request.Label)
+            || string.IsNullOrWhiteSpace(request.ParentViewId.Value)
+            || request.CutLineStart == request.CutLineEnd)
+        {
+            return SolidWorksProviderResults.Failure<DrawingViewSnapshot>(
+                "drawing.section-view.create",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "A section name, label, parent ViewId and non-zero cutting line are required.",
+                    ErrorCategories.Validation));
+        }
+
+        if (request.ScaleDenominator is <= 0)
+        {
+            return SolidWorksProviderResults.Failure<DrawingViewSnapshot>(
+                "drawing.section-view.create",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "The section-view scale denominator must be greater than zero.",
+                    ErrorCategories.Validation));
+        }
+
+        OperationResult<NativeDrawingViewResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => AddSectionViewOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<DrawingViewSnapshot>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<DrawingViewSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        nativeViewNames[result.Value.View.ViewId.Value] = result.Value.NativeName;
+        return OperationResults.Success(
+            result.Value.View,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-drawing"));
+    }
+
+    /// <summary>
     /// Creates a native SOLIDWORKS note in the requested drawing view.
     /// 创建真实 SOLIDWORKS 原生 note，并绑定到请求的 drawing view。
     /// </summary>
@@ -260,6 +323,203 @@ internal sealed class SolidWorksNativeDrawingDocument(
             result.Value.Snapshot,
             result.OperationId,
             result.Evidence ?? new OperationEvidence("solidworks-drawing"));
+    }
+
+    private OperationResult<NativeDrawingViewResult> AddSectionViewOnSta(
+        ISldWorks application,
+        DrawingSectionViewRequest request)
+    {
+        const string operation = "drawing.section-view.create";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native drawing identity is no longer registered.", ErrorCategories.State));
+        }
+
+        if (!nativeViewNames.TryGetValue(request.ParentViewId.Value, out string? parentNativeName)
+            || string.IsNullOrWhiteSpace(parentNativeName))
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.SelectionStale,
+                    "The section parent ViewId is not bound to a current native drawing view.",
+                    ErrorCategories.State,
+                    remediation: "Re-inspect the drawing and use the current declarative parent ViewId."));
+        }
+
+        OperationResult<ModelDoc2> resolvedDrawing = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolvedDrawing.IsSuccess || resolvedDrawing.Value is null)
+        {
+            return OperationResults.Failure<NativeDrawingViewResult>(
+                resolvedDrawing.OperationId,
+                resolvedDrawing.Error!,
+                resolvedDrawing.Evidence);
+        }
+
+        SketchSegment? cutLine = null;
+        View? sectionView = null;
+        try
+        {
+            var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            if (!drawing.ActivateView(parentNativeName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "SOLIDWORKS did not activate the exact section parent view.",
+                        ErrorCategories.State,
+                        remediation: "Preserve the drawing and inspect the parent view binding before retrying."));
+            }
+
+            resolvedDrawing.Value.ClearSelection2(true);
+            cutLine = resolvedDrawing.Value.SketchManager.CreateLine(
+                request.CutLineStart.X.ToMeters(),
+                request.CutLineStart.Y.ToMeters(),
+                0d,
+                request.CutLineEnd.X.ToMeters(),
+                request.CutLineEnd.Y.ToMeters(),
+                0d);
+            if (cutLine is null || !cutLine.Select4(false, null))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS did not create and select the exact section cutting line.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the parent-view sketch selection."));
+            }
+
+            int options = request.ScaleWithModel
+                ? (int)swCreateSectionViewAtOptions_e.swCreateSectionView_ScaleWithModel
+                : 0;
+            if (request.ChangeDirection)
+            {
+                options |= (int)swCreateSectionViewAtOptions_e.swCreateSectionView_ChangeDirection;
+            }
+
+            sectionView = drawing.CreateSectionViewAt5(
+                request.Position.X.ToMeters(),
+                request.Position.Y.ToMeters(),
+                0d,
+                request.Label.Trim(),
+                options,
+                null,
+                0d);
+            if (sectionView is null)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS returned no native section view from CreateSectionViewAt5.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the selected cutting line and section options."));
+            }
+
+            // CreateSectionViewAt5 creates a dependent view and may retain the parent's alignment constraint. The
+            // official IView::Position contract says an aligned view can move only along its alignment vector, so
+            // remove that dependency before applying the compiler's explicit sheet-space transform.
+            // CreateSectionViewAt5 会创建 dependent view，并可能保留 parent alignment constraint。官方 IView::Position
+            // 说明 aligned view 只能沿 alignment vector 移动，因此先 RemoveAlignment，再应用 compiler 的明确纸面 transform。
+            int inheritedAlignment = sectionView.GetAlignment();
+            sectionView.RemoveAlignment();
+            sectionView.PositionLocked = false;
+            double requestedScale = sectionView.ScaleDecimal;
+            if (request.ScaleDenominator is int denominator)
+            {
+                requestedScale = 1d / denominator;
+            }
+
+            bool positioned = sectionView.SetXform(
+                new[]
+                {
+                    request.Position.X.ToMeters(),
+                    request.Position.Y.ToMeters(),
+                    requestedScale,
+                });
+            if (!positioned)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS rejected the explicit section-view placement transform.",
+                        ErrorCategories.Provider,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["requested-position-meters"] = $"{request.Position.X.ToMeters():G17},{request.Position.Y.ToMeters():G17}",
+                            ["inherited-alignment"] = inheritedAlignment.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        },
+                        remediation: "Preserve the drawing and inspect native section-view alignment before retrying."));
+            }
+
+            drawing.ForceRebuild();
+            string nativeName = sectionView.GetName2()?.Trim() ?? request.Name.Trim();
+            double[] position = ReadNumbers(sectionView.Position);
+            double[] outline = ReadNumbers(sectionView.GetOutline());
+            if (outline.Length < 4 || outline[2] <= outline[0] || outline[3] <= outline[1])
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS created a section view without a positive paper-space outline.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the section view and template layout."));
+            }
+
+            var snapshot = new DrawingViewSnapshot
+            {
+                ViewId = request.RequestedViewId ?? new ViewId($"{current.DocumentId.Value}:section-view:{Guid.NewGuid():N}"),
+                Name = request.Name.Trim(),
+                Orientation = $"Section {request.Label.Trim()}-{request.Label.Trim()}",
+                Position = new Coordinate2D(
+                    Length.FromMeters(position.Length > 0 ? position[0] : request.Position.X.ToMeters()),
+                    Length.FromMeters(position.Length > 1 ? position[1] : request.Position.Y.ToMeters())),
+                ScaleDenominator = request.ScaleDenominator,
+            };
+            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
+            var updated = current with
+            {
+                StateHash = stateHash,
+                IsDirty = resolvedDrawing.Value.GetSaveFlag(),
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeDrawingViewResult(snapshot, updated, current, nativeName),
+                new EvidenceObservation("view.id", snapshot.ViewId.Value),
+                new EvidenceObservation("view.kind", "section"),
+                new EvidenceObservation("view.parent-id", request.ParentViewId.Value),
+                new EvidenceObservation("view.label", request.Label.Trim()),
+                new EvidenceObservation("view.native-name", nativeName),
+                new EvidenceObservation("view.inherited-alignment", inheritedAlignment.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.alignment-removed", bool.TrueString),
+                new EvidenceObservation("view.position.requested-meters", $"{request.Position.X.ToMeters():G17},{request.Position.Y.ToMeters():G17}"),
+                new EvidenceObservation("view.position.actual-meters", string.Join(',', position.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("view.outline.meters", string.Join(',', outline.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("state.hash", stateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<NativeDrawingViewResult>(
+                operation,
+                exception,
+                "SOLIDWORKS native section-view creation failed before a complete view proof was returned.");
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(sectionView);
+            SolidWorksDocumentRouting.Release(cutLine);
+            SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
+        }
     }
 
     private OperationResult<NativeDrawingViewResult> AddViewOnSta(

@@ -80,6 +80,73 @@ internal sealed class FakeCadDrawingDocument(
     }
 
     /// <inheritdoc />
+    public Task<OperationResult<DrawingViewSnapshot>> AddSectionViewAsync(
+        DrawingSectionViewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "add-section-view";
+        if (request is null)
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingViewSnapshot>(operation, "The section-view request is required."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<DrawingViewSnapshot>(operation));
+        }
+
+        if (!Session.Supports(CadCapabilityNames.DrawingMutation, out CadCapability capability))
+        {
+            return Task.FromResult(FakeCadResults.Unsupported<DrawingViewSnapshot>(operation, capability));
+        }
+
+        if (Session.IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Closed<DrawingViewSnapshot>(operation));
+        }
+
+        if (!views.Any(view => view.ViewId == request.ParentViewId))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<DrawingViewSnapshot>(operation, request.ParentViewId.Value));
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Name)
+            || string.IsNullOrWhiteSpace(request.Label)
+            || request.CutLineStart == request.CutLineEnd)
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingViewSnapshot>(
+                operation,
+                "Section name, label and a non-zero cutting line are required."));
+        }
+
+        ViewId viewId = request.RequestedViewId ?? new ViewId($"section-view-{++viewSequence:000}");
+        if (views.Any(view => view.ViewId == viewId))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingViewSnapshot>(operation, $"View identity '{viewId.Value}' already exists."));
+        }
+
+        var snapshot = new DrawingViewSnapshot
+        {
+            ViewId = viewId,
+            Name = request.Name.Trim(),
+            Orientation = $"Section {request.Label.Trim()}-{request.Label.Trim()}",
+            Position = request.Position,
+            ScaleDenominator = request.ScaleDenominator,
+        };
+        views.Add(snapshot);
+        MarkMutated();
+        return Task.FromResult(
+            FakeCadResults.Success(
+                snapshot,
+                operation,
+                new EvidenceObservation("view.id", viewId.Value),
+                new EvidenceObservation("view.kind", "section"),
+                new EvidenceObservation("view.parent-id", request.ParentViewId.Value),
+                new EvidenceObservation("view.label", request.Label.Trim()),
+                new EvidenceObservation("state.hash", StateHash)));
+    }
+
+    /// <inheritdoc />
     public Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
         DrawingAnnotationRequest request,
         CancellationToken cancellationToken = default)

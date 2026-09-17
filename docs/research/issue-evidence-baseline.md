@@ -779,3 +779,49 @@ is now proven, while native Hole Callout association, position-dimension coverag
 真实通孔的零件、Front/Top/Isometric native views、native `40.00` model dimension，以及下方保留区内的紧凑 pattern callout。
 产物未提交。Issue #31 目前只完成部分：quantity/pitch/symmetry 的确定性压缩已通过真实验证，native Hole Callout 关联、位置尺寸覆盖和
 编辑后重新生成仍未完成。
+
+## D04 native section-view slice / D04 原生剖视切片
+
+D04 now has a bounded provider-neutral `DrawingSectionViewRequest` and a native implementation. The request binds the
+section to an exact declarative parent `ViewId`, carries a deterministic paper-space cutting line and placement, and
+does not expose SOLIDWORKS selection marks to MCP. The native adapter activates the registered parent view, creates and
+selects the drawing sketch line on the owning STA, calls `IDrawingDoc.CreateSectionViewAt5`, removes the inherited child
+alignment, applies `IView.SetXform`, rebuilds and verifies a positive native outline. FakeCad and Contract tests cover
+the same request boundary; the high-level part compiler triggers the section only when the verified internal-hole group
+is present. This is the first real section candidate, not a claim that the complete Section/Detail/Auxiliary/Multi-Sheet
+planner is finished.
+
+D04 目前已形成 bounded provider-neutral `DrawingSectionViewRequest` 和 native implementation。请求绑定精确的声明式
+parent `ViewId`，携带确定性的纸面剖切线与位置，不把 SOLIDWORKS selection mark 暴露给 MCP。Native adapter 在所属
+STA 激活已登记 parent view，创建并选中 drawing sketch line，调用 `IDrawingDoc.CreateSectionViewAt5`，移除创建后
+继承的 child alignment，通过 `IView.SetXform` 定位，rebuild 后验证 native outline 为正值。FakeCad 和 Contract 覆盖
+相同 request boundary；高层 part compiler 仅在已验证 internal-hole group 存在时生成 section。这里证明的是首个真实
+剖视 candidate，不代表完整 Section/Detail/Auxiliary/Multi-Sheet planner 已完成。
+
+The first Live attempt intentionally failed closed: SOLIDWORKS 2022's PDF SaveAs changed only `saveFlag` from `False`
+to `True`; path, type, configuration, title, update stamp and feature count were unchanged. The export adapter now
+allows only that exact clean-to-dirty transition, calls silent `IModelDoc2.Save3`, and requires the original fingerprint
+to be restored. Any other export mutation remains `STATE_CONFLICT`.
+
+首轮 Live 有意 fail closed：SOLIDWORKS 2022 的 PDF SaveAs 只把 `saveFlag` 从 `False` 变成 `True`，path、type、configuration、
+title、update stamp、feature count 均未变化。Export adapter 现在只允许这一种精确的 clean-to-dirty 转换，调用 silent
+`IModelDoc2.Save3`，并要求原始 fingerprint 恢复；任何其他 export mutation 仍返回 `STATE_CONFLICT`。
+
+Final evidence on the local SOLIDWORKS 2022 machine:
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 67 + Contract 11 + FakeCad 10 passed
+    dotnet build tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -Filter FullyQualifiedName~McpBuildPartDrawingLiveTests -NoBuild # exit 0; 1 passed; 0 failed; 1 placeholder skipped; before 0; after 0
+
+The successful retained-artifact run produced one native `.SLDPRT`, `.SLDDRW` and PDF in the isolated user-local test
+workspace. Visual inspection of the rendered PDF shows the curved plate, two real through holes, Front/Top/Isometric
+views, a native `40.00` dimension, a compact repeated-hole callout, and `SECTION A-A` with a separated lower-right
+section view. The artifacts are not committed. D04 remains partial: Detail A/B, Auxiliary View, multi-sheet planning,
+general collision/reflow QA and richer section candidate scoring are follow-ups under D04/D06.
+
+成功的保留产物运行在隔离 user-local test workspace 生成了一套 native `.SLDPRT`、`.SLDDRW` 与 PDF。渲染后的 PDF 已视觉检查，
+包含曲线边界、两个真实通孔、Front/Top/Isometric views、native `40.00` 尺寸、紧凑重复孔 callout，以及与等轴视图分离的
+右下 `SECTION A-A` 剖视。产物未提交。D04 仍是部分完成：Detail A/B、Auxiliary View、多 Sheet 规划、通用碰撞/重排 QA
+和更丰富的 section candidate scoring 仍属于 D04/D06 后续范围。

@@ -70,8 +70,14 @@ public sealed class McpBuildPartDrawingLiveTests
                     ["scaleDenominator"] = 1,
                 });
 
-            Assert.False(result.IsError, string.Join(Environment.NewLine, result.Content));
+            Assert.False(
+                result.IsError,
+                string.Join(Environment.NewLine, result.Content)
+                + Environment.NewLine
+                + result.StructuredContent.ToString());
             Assert.Contains("part.hole-pattern", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("drawing.section-view", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Section A-A", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("pattern-callout", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("drawing.pattern-callout.reopened", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("2X", result.StructuredContent.ToString(), StringComparison.Ordinal);

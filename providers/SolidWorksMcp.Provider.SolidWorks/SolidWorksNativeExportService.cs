@@ -230,6 +230,7 @@ internal sealed class SolidWorksNativeExportService(
             // selection is therefore a required export invariant, not cosmetic UI cleanup.
             // 官方 SaveAs 约定在没有选择时导出整个模型；清空 selection 是导出 invariant，而不是 UI 清理。
             model.ClearSelection2(true);
+            string stateFingerprintBeforeExport = SolidWorksDocumentRouting.ComputeStateFingerprint(model);
 
             int saveErrors = 0;
             int saveWarnings = 0;
@@ -279,9 +280,51 @@ internal sealed class SolidWorksNativeExportService(
                         remediation: "Preserve the session evidence and investigate the native export destination."));
             }
 
-            // Export must not mutate the source CAD identity. A hash change means the caller's plan is no longer
-            // truthful even though the target file exists, so the operation fails closed.
-            // 导出不能改变 source CAD identity；即使目标存在，hash 变化也说明 plan 已不再真实，必须 fail closed。
+            // Some SOLIDWORKS 2022 SaveAs PDF paths mark the source document dirty even though the persisted CAD
+            // identity did not change. That transient flag is not ignored: when it is the only changed marker and
+            // the source was clean before export, save once through the official silent Save3 API, then prove that
+            // the original fingerprint is restored. Any other marker change still fails closed.
+            // 某些 SOLIDWORKS 2022 的 PDF SaveAs 路径会把 source 标为 dirty，虽然持久化 CAD identity 没变。
+            // 这里不直接忽略 dirty flag：只有它是唯一变化且导出前 source clean 时，才通过官方 silent Save3
+            // 恢复 clean 状态并证明原始 fingerprint 恢复；任何其他 marker 变化仍然 fail closed。
+            string stateFingerprintAfterExport = SolidWorksDocumentRouting.ComputeStateFingerprint(model);
+            bool exportSavedSourceState = false;
+            if (!stateFingerprintAfterExport.Equals(stateFingerprintBeforeExport, StringComparison.Ordinal)
+                && IsOnlyExportDirtyFlagTransition(stateFingerprintBeforeExport, stateFingerprintAfterExport))
+            {
+                int sourceSaveErrors = 0;
+                int sourceSaveWarnings = 0;
+                bool sourceSaved = model.Save3(
+                    (int)swSaveAsOptions_e.swSaveAsOptions_Silent,
+                    ref sourceSaveErrors,
+                    ref sourceSaveWarnings);
+                exportSavedSourceState = sourceSaved && sourceSaveErrors == 0;
+                stateFingerprintAfterExport = SolidWorksDocumentRouting.ComputeStateFingerprint(model);
+                if (!exportSavedSourceState
+                    || !stateFingerprintAfterExport.Equals(stateFingerprintBeforeExport, StringComparison.Ordinal))
+                {
+                    return SolidWorksProviderResults.Failure<ExportReceipt>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.StateConflict,
+                            "SOLIDWORKS export dirtied the source and the provider could not prove restoration.",
+                            ErrorCategories.State,
+                            details: new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["format"] = format.CanonicalName,
+                                ["pre-export-fingerprint"] = stateFingerprintBeforeExport,
+                                ["post-export-fingerprint"] = stateFingerprintAfterExport,
+                                ["source-save-returned"] = sourceSaved.ToString(),
+                                ["source-save-errors"] = sourceSaveErrors.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                ["source-save-warnings"] = sourceSaveWarnings.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            },
+                            remediation: "Preserve the export artifact and inspect the source document before retrying."));
+                }
+            }
+
+            // Export must not mutate the source CAD identity. A remaining hash change means the caller's plan is no
+            // longer truthful even though the target file exists, so the operation fails closed.
+            // 导出不能改变 source CAD identity；仍存在 hash 变化说明 plan 不再真实，必须 fail closed。
             string stateHashAfterExport = SolidWorksDocumentRouting.ComputeStateHash(model);
             if (!stateHashAfterExport.Equals(descriptor.StateHash, StringComparison.Ordinal))
             {
@@ -295,6 +338,9 @@ internal sealed class SolidWorksNativeExportService(
                         {
                             ["expected-state-hash"] = descriptor.StateHash,
                             ["actual-state-hash"] = stateHashAfterExport,
+                            ["pre-export-fingerprint"] = stateFingerprintBeforeExport,
+                            ["post-export-fingerprint"] = stateFingerprintAfterExport,
+                            ["source-save-after-export"] = exportSavedSourceState.ToString(),
                             ["format"] = format.CanonicalName,
                         },
                         remediation: "Re-inspect the source document and create a new export plan."));
@@ -314,6 +360,9 @@ internal sealed class SolidWorksNativeExportService(
                 new EvidenceObservation("export.target.exists", output.Exists.ToString()),
                 new EvidenceObservation("export.target.bytes", output.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 new EvidenceObservation("export.source-state-hash", descriptor.StateHash),
+                new EvidenceObservation("export.pre-state-fingerprint", stateFingerprintBeforeExport),
+                new EvidenceObservation("export.post-state-fingerprint", stateFingerprintAfterExport),
+                new EvidenceObservation("export.source-save-after-export", exportSavedSourceState.ToString()),
                 new EvidenceObservation("save.errors", saveErrors.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 new EvidenceObservation("save.warnings", saveWarnings.ToString(System.Globalization.CultureInfo.InvariantCulture)));
         }
@@ -329,6 +378,19 @@ internal sealed class SolidWorksNativeExportService(
             SolidWorksDocumentRouting.Release(model);
         }
     }
+
+    /// <summary>
+    /// Returns true only for the documented-safe export transition from a clean source to the same source with its
+    /// native save flag set. The comparison is deliberately exact so an update stamp, feature count, path, title, or
+    /// configuration change can never be normalized as a harmless export side effect.
+    /// 只允许 clean source 到相同 identity 但 save flag 变为 true 的精确转换；其他 marker 变化绝不放行。
+    /// </summary>
+    private static bool IsOnlyExportDirtyFlagTransition(string before, string after) =>
+        before.Contains("|saveFlag=False|", StringComparison.Ordinal)
+        && after.Contains("|saveFlag=True|", StringComparison.Ordinal)
+        && before.Equals(
+            after.Replace("|saveFlag=True|", "|saveFlag=False|", StringComparison.Ordinal),
+            StringComparison.Ordinal);
 }
 
 /// <summary>Immutable provider allowlist entry for one native export family.</summary>
