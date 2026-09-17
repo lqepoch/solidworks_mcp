@@ -494,8 +494,8 @@ images, manifests and CAD artifacts are not committed, uploaded or written to Is
   OCR/text similarity. Required approved requirements without semantic annotation coverage block release; optional
   omissions remain warnings; orphan keys are visible warnings rather than silently accepted coverage.
 - `CadAbstractions.DrawingAnnotationRequest` and `DrawingAnnotationSnapshot` preserve those coverage keys across the
-  provider boundary. FakeCad now round-trips them, while the native drawing provider remains intentionally deferred
-  until the drawing COM implementation is researched and verified.
+  provider boundary. FakeCad round-trips them, and the native drawing provider now supports an explicit `Kind=note`
+  slice with native identity/text/position read-back; associative Model Dimension/PMI insertion remains deferred.
 
 The two sampled slots are intentionally not named here. A future iteration must run the same script again and sample
 exactly two new candidates (or two new random candidates) before making a reference-driven design decision.
@@ -510,3 +510,30 @@ The planner tests cover approved section selection, deterministic tie-breaking, 
 orthographic blocking. Coverage tests cover explicit annotation keys, optional warnings, unresolved review state,
 orphan keys and blocking missing coverage. These tests use only generic semantic classes and synthetic
 provider-neutral candidates.
+
+## Native reference-driven drawing annotation evidence (partial)
+
+The current native slice is intentionally narrow but real: it creates a non-cylindrical L-profile part, cuts a semantic
+through-hole group, creates native drawing views, inserts one explicit native Note, saves, closes, reopens and verifies
+the annotation through `IView.GetAnnotations`. This is not a release-ready drawing compiler and does not claim model
+dimensions, PMI, GD&T or manufacturing coverage.
+
+- `SolidWorksNativeDrawingDocument.AddAnnotationAsync` accepts only explicit `Kind=note`, activates the exact view
+  binding, calls `IDrawingDoc.CreateText2`, reads back `INote.GetText`, `IAnnotation.GetType`, `IAnnotation.GetPosition`
+  and persists a stable annotation identity with `IAnnotation.SetName`.
+- `SolidWorksNativeInspectionReader.ReadDrawing` classifies native Note/DisplayDimension/GDT/surface-finish/weld
+  annotations without exposing COM objects. Coverage keys are not guessed from visible text after reopen.
+- `B04ReferenceDrivenPartLiveTests` verifies the native note before save and after persisted drawing reopen. The test
+  uses a generic redacted feature class and never reads or commits the confidential PDF corpus.
+
+Evidence command and result from the current local machine:
+
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                 # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.slnx -c Release --no-build --logger "console;verbosity=minimal" # exit 0; Unit 62 + Contract 7 + Fake 8 passed; Live 6 passed + 3 skipped
+    dotnet test tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-build --filter FullyQualifiedName~B04ReferenceDrivenPartLiveTests # exit 0; 1 passed; 0 failed; 0 skipped
+    dotnet test tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-build --logger "console;verbosity=minimal" # exit 0; 8 passed; 1 skipped
+
+Official API evidence for this slice is recorded in `docs/research/solidworks-api-knowledge.md`, including
+`CreateText2`, `GetAnnotations`, `GetSpecificAnnotation`, `CreateDrawViewFromModelView3`, `GetViews`, and
+`GetOutline`. The native model-item insertion path remains a separate follow-up because it requires verified source
+dimension/PMI provenance and a coverage-aware release gate.

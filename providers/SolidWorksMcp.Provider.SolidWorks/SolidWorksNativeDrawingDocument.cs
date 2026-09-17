@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
 using SolidWorksMcp.CadAbstractions;
@@ -36,6 +37,10 @@ internal sealed class SolidWorksNativeDrawingDocument(
         ? throw new ArgumentException("The source document path is required.", nameof(sourceDocumentPath))
         : sourceDocumentPath;
     private SolidWorksDocumentDescriptor descriptor = initialDescriptor ?? throw new ArgumentNullException(nameof(initialDescriptor));
+    // A requested provider ViewId is not a SOLIDWORKS COM name. Keep the short-lived binding in the facade and
+    // reconstruct ordinal bindings from persisted drawing inspection after reopen. Provider ViewId 不是 SOLIDWORKS
+    // COM name；facade 保留短期绑定，重开后再从 persisted drawing inspection 重建 ordinal binding。
+    private readonly ConcurrentDictionary<string, string> nativeViewNames = new(StringComparer.Ordinal);
 
     public DocumentId DocumentId => descriptor.DocumentId;
 
@@ -93,6 +98,8 @@ internal sealed class SolidWorksNativeDrawingDocument(
                 result.Value.Descriptor);
         }
 
+        nativeViewNames[result.Value.View.ViewId.Value] = result.Value.NativeName;
+
         return OperationResults.Success(
             result.Value.View,
             result.OperationId,
@@ -100,21 +107,55 @@ internal sealed class SolidWorksNativeDrawingDocument(
     }
 
     /// <summary>
-    /// Annotation mutation remains explicit until model-item/PMI association is proven; no fake note is emitted.
-    /// 在证明 Model Item/PMI 关联前，annotation mutation 显式保持未实现；绝不伪造一个看似成功的 note。
+    /// Creates a native SOLIDWORKS note in the requested drawing view.
+    /// 创建真实 SOLIDWORKS 原生 note，并绑定到请求的 drawing view。
     /// </summary>
-    public Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
+    /// <remarks>
+    /// This first annotation slice intentionally supports only explicit notes. It does not pretend a note is a model
+    /// dimension; associative model-item insertion remains a separate operation with its own provenance and coverage
+    /// checks. 首个 annotation slice 只支持显式 note，不把 note 冒充成模型尺寸；关联 Model Item 仍需独立的来源和
+    /// coverage 验证。
+    /// </remarks>
+    public async Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
         DrawingAnnotationRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return Task.FromResult(
-            SolidWorksProviderResults.Unsupported<DrawingAnnotationSnapshot>(
+        if (!request.Kind.Trim().Equals("note", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(request.Text)
+            || string.IsNullOrWhiteSpace(request.ViewId.Value))
+        {
+            return SolidWorksProviderResults.Failure<DrawingAnnotationSnapshot>(
                 "drawing.annotation.create",
-                new CadCapability(
-                    CadCapabilityNames.DrawingMutation,
-                    supported: false,
-                    "Native view creation is verified; associative model-item/PMI annotation is a later drawing slice.")));
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "The native drawing annotation slice requires a non-empty note and ViewId.",
+                    ErrorCategories.Validation,
+                    remediation: "Use Kind='note'; associative model dimensions require the future model-item operation."));
+        }
+
+        OperationResult<NativeDrawingAnnotationResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => AddNoteOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<DrawingAnnotationSnapshot>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<DrawingAnnotationSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        return OperationResults.Success(
+            result.Value.Annotation,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-drawing"));
     }
 
     /// <summary>Rebuilds the actual drawing and returns a native view evidence snapshot.</summary>
@@ -323,7 +364,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
             };
             return SolidWorksProviderResults.Success(
                 operation,
-                new NativeDrawingViewResult(snapshot, updated, current),
+                new NativeDrawingViewResult(snapshot, updated, current, nativeName),
                 new EvidenceObservation("view.id", snapshot.ViewId.Value),
                 new EvidenceObservation("view.name", nativeName),
                 new EvidenceObservation("view.orientation", request.Orientation.Trim()),
@@ -341,6 +382,166 @@ internal sealed class SolidWorksNativeDrawingDocument(
         {
             SolidWorksDocumentRouting.Release(view);
             SolidWorksDocumentRouting.Release(resolvedSource.Value);
+            SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
+        }
+    }
+
+    private OperationResult<NativeDrawingAnnotationResult> AddNoteOnSta(
+        ISldWorks application,
+        DrawingAnnotationRequest request)
+    {
+        const string operation = "drawing.annotation.create";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native drawing identity is no longer registered.", ErrorCategories.State));
+        }
+
+        OperationResult<ModelDoc2> resolvedDrawing = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolvedDrawing.IsSuccess || resolvedDrawing.Value is null)
+        {
+            return OperationResults.Failure<NativeDrawingAnnotationResult>(
+                resolvedDrawing.OperationId,
+                resolvedDrawing.Error!,
+                resolvedDrawing.Evidence);
+        }
+
+        View? view = null;
+        Note? note = null;
+        Annotation? annotation = null;
+        try
+        {
+            var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            view = FindNativeView(
+                drawing,
+                current.DocumentId.Value,
+                request.ViewId.Value,
+                nativeViewNames.TryGetValue(request.ViewId.Value, out string? boundName) ? boundName : null,
+                out string? nativeViewName);
+            if (view is null || string.IsNullOrWhiteSpace(nativeViewName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The requested drawing view identity could not be resolved to a current native view.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and use the current declarative ViewId."));
+            }
+
+            if (!drawing.ActivateView(nativeViewName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS did not activate the exact drawing view before note creation.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the native view identity before retrying."));
+            }
+
+            resolvedDrawing.Value.ClearSelection2(true);
+            // CreateText2 is the verified native note primitive. The paper-space coordinates are already canonical
+            // millimetres at the abstraction boundary and are converted to SOLIDWORKS metres exactly once here.
+            // CreateText2 是已核对的原生 note primitive；抽象层坐标为毫米，只在这里一次性转换为 SOLIDWORKS 米。
+            note = drawing.CreateText2(
+                request.Text.Trim(),
+                request.Position.X.ToMeters(),
+                request.Position.Y.ToMeters(),
+                0d,
+                0.005d,
+                0d) as Note;
+            if (note is null)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS returned no native Note from CreateText2.",
+                        ErrorCategories.Provider));
+            }
+
+            annotation = note.GetAnnotation() as Annotation;
+            if (annotation is null || annotation.GetType() != (int)swAnnotationType_e.swNote)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The created object was not verified as a native note annotation.",
+                        ErrorCategories.Invariant));
+            }
+
+            string annotationIdentity = request.RequestedAnnotationId?.Value
+                ?? $"{current.DocumentId.Value}:annotation:{Guid.NewGuid():N}";
+            if (!annotation.SetName(annotationIdentity))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS did not persist the requested stable annotation identity.",
+                        ErrorCategories.Provider,
+                        remediation: "Use a new annotation identity and preserve the artifact for diagnosis."));
+            }
+
+            string actualText = note.GetText()?.Trim() ?? string.Empty;
+            if (!actualText.Equals(request.Text.Trim(), StringComparison.Ordinal))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not read back the exact native note text.",
+                        ErrorCategories.Invariant));
+            }
+
+            drawing.ForceRebuild();
+            double[] position = ReadNumbers(annotation.GetPosition());
+            var snapshot = new DrawingAnnotationSnapshot
+            {
+                AnnotationId = new AnnotationId(annotationIdentity),
+                ViewId = request.ViewId,
+                Kind = "note",
+                Text = actualText,
+                CoverageKeys = request.CoverageKeys,
+                Position = new Coordinate2D(
+                    Length.FromMeters(position.Length > 0 ? position[0] : request.Position.X.ToMeters()),
+                    Length.FromMeters(position.Length > 1 ? position[1] : request.Position.Y.ToMeters())),
+            };
+            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
+            var updated = current with
+            {
+                StateHash = stateHash,
+                IsDirty = resolvedDrawing.Value.GetSaveFlag(),
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeDrawingAnnotationResult(snapshot, updated, current),
+                new EvidenceObservation("annotation.id", annotationIdentity),
+                new EvidenceObservation("annotation.kind", "note"),
+                new EvidenceObservation("annotation.native-type", ((int)swAnnotationType_e.swNote).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("annotation.view-id", request.ViewId.Value),
+                new EvidenceObservation("annotation.native-view", nativeViewName),
+                new EvidenceObservation("state.hash", stateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<NativeDrawingAnnotationResult>(
+                operation,
+                exception,
+                "SOLIDWORKS native note creation failed before a complete annotation proof was returned.");
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(annotation);
+            SolidWorksDocumentRouting.Release(note);
+            SolidWorksDocumentRouting.Release(view);
             SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
         }
     }
@@ -706,6 +907,59 @@ internal sealed class SolidWorksNativeDrawingDocument(
                 stateHash: latest?.StateHash ?? candidate.StateHash));
     }
 
+    /// <summary>
+    /// Resolves a vendor-neutral ViewId to one current native drawing view and releases every non-selected RCW.
+    /// 将 vendor-neutral ViewId 解析为当前 native drawing view，并释放所有未选中的 RCW。
+    /// </summary>
+    private static View? FindNativeView(
+        IDrawingDoc drawing,
+        string documentIdentity,
+        string requestedViewId,
+        string? boundNativeName,
+        out string? nativeName)
+    {
+        nativeName = null;
+        object? raw = drawing.GetViews();
+        if (raw is not Array sheets)
+        {
+            return null;
+        }
+
+        int ordinal = 0;
+        for (int sheetIndex = 0; sheetIndex < sheets.Length; sheetIndex++)
+        {
+            if (sheets.GetValue(sheetIndex) is not Array sheetViews)
+            {
+                continue;
+            }
+
+            for (int viewIndex = 0; viewIndex < sheetViews.Length; viewIndex++)
+            {
+                if (sheetViews.GetValue(viewIndex) is not View candidate)
+                {
+                    continue;
+                }
+
+                ordinal++;
+                string candidateName = candidate.GetName2()?.Trim() ?? string.Empty;
+                bool isOrdinalMatch = requestedViewId.Equals(
+                    $"{documentIdentity}:view:{ordinal}",
+                    StringComparison.Ordinal);
+                bool isNameMatch = !string.IsNullOrWhiteSpace(boundNativeName)
+                    && candidateName.Equals(boundNativeName, StringComparison.Ordinal);
+                if (isOrdinalMatch || isNameMatch)
+                {
+                    nativeName = candidateName;
+                    return candidate;
+                }
+
+                SolidWorksDocumentRouting.Release(candidate);
+            }
+        }
+
+        return null;
+    }
+
     private static string ToNativeModelViewName(string orientation)
     {
         return orientation.Trim().ToLowerInvariant() switch
@@ -746,7 +1000,8 @@ internal sealed class SolidWorksNativeDrawingDocument(
 internal sealed record NativeDrawingViewResult(
     DrawingViewSnapshot View,
     SolidWorksDocumentDescriptor Descriptor,
-    SolidWorksDocumentDescriptor ExpectedDescriptor);
+    SolidWorksDocumentDescriptor ExpectedDescriptor,
+    string NativeName);
 
 /// <summary>Internal result carrying a drawing rebuild receipt and descriptor update.</summary>
 internal sealed record NativeDrawingRebuildResult(
@@ -763,5 +1018,11 @@ internal sealed record NativeDrawingSaveResult(
 /// <summary>Internal result carrying verified drawing evidence after close/open persistence proof.</summary>
 internal sealed record NativeDrawingReopenResult(
     CadInspectionSnapshot Snapshot,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
+
+/// <summary>Internal result carrying a verified native note annotation and descriptor update.</summary>
+internal sealed record NativeDrawingAnnotationResult(
+    DrawingAnnotationSnapshot Annotation,
     SolidWorksDocumentDescriptor Descriptor,
     SolidWorksDocumentDescriptor ExpectedDescriptor);

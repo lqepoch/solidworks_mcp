@@ -110,6 +110,8 @@ internal static class SolidWorksNativeInspectionReader
 
             var drawing = (IDrawingDoc)model;
             var views = ImmutableArray.CreateBuilder<DrawingViewSnapshot>();
+            var annotations = ImmutableArray.CreateBuilder<DrawingAnnotationSnapshot>();
+            var annotationIdentities = new HashSet<string>(StringComparer.Ordinal);
             var outlines = ImmutableArray.CreateBuilder<string>();
             int ordinal = 0;
             foreach (View view in EnumerateDrawingViews(drawing))
@@ -149,6 +151,12 @@ internal static class SolidWorksNativeInspectionReader
                             Position = new Coordinate2D(Length.FromMeters(x), Length.FromMeters(y)),
                             ScaleDenominator = denominator,
                         });
+                    ReadDrawingAnnotations(
+                        view,
+                        descriptor.DocumentId.Value,
+                        ordinal,
+                        annotations,
+                        annotationIdentities);
                 }
                 finally
                 {
@@ -169,6 +177,7 @@ internal static class SolidWorksNativeInspectionReader
                     IsDirty = model.GetSaveFlag(),
                 },
                 Views = views.ToImmutable(),
+                Annotations = annotations.ToImmutable(),
             };
             return OperationResults.Success(
                 snapshot,
@@ -179,6 +188,7 @@ internal static class SolidWorksNativeInspectionReader
                         new EvidenceObservation("document.id", descriptor.DocumentId.Value),
                         new EvidenceObservation("sheet.count", drawing.GetSheetCount().ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("view.count", views.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("annotation.count", annotations.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("view.outlines", string.Join('|', outlines)),
                         new EvidenceObservation("state.hash", stateHash),
                     ],
@@ -192,6 +202,86 @@ internal static class SolidWorksNativeInspectionReader
                 "SOLIDWORKS drawing inspection failed before a complete view evidence snapshot was returned.");
         }
     }
+
+    /// <summary>Reads native annotations exposed by each view without converting them into guessed text.</summary>
+    /// <remarks>
+    /// SOLIDWORKS exposes the high-level IAnnotation plus a type-specific Note or DisplayDimension. We preserve the
+    /// native annotation kind and stable native name; coverage keys are deliberately empty after reopen because they
+    /// belong to the higher-level requirement graph, not to arbitrary visible text. SOLIDWORKS 同时暴露通用
+    /// IAnnotation 和具体 Note/DisplayDimension；这里保留 native kind/name，重开后不从可见文字猜 coverage。
+    /// </remarks>
+    private static void ReadDrawingAnnotations(
+        View view,
+        string documentIdentity,
+        int viewOrdinal,
+        ImmutableArray<DrawingAnnotationSnapshot>.Builder annotations,
+        HashSet<string> annotationIdentities)
+    {
+        object? raw = view.GetAnnotations();
+        if (raw is not Array nativeAnnotations)
+        {
+            return;
+        }
+
+        int localOrdinal = 0;
+        for (int index = 0; index < nativeAnnotations.Length; index++)
+        {
+            if (nativeAnnotations.GetValue(index) is not Annotation annotation)
+            {
+                continue;
+            }
+
+            object? specific = null;
+            try
+            {
+                localOrdinal++;
+                string nativeName = annotation.GetName()?.Trim() ?? string.Empty;
+                string identity = string.IsNullOrWhiteSpace(nativeName)
+                    ? $"{documentIdentity}:annotation:view-{viewOrdinal}:{localOrdinal}"
+                    : nativeName;
+                if (!annotationIdentities.Add(identity))
+                {
+                    continue;
+                }
+
+                int nativeType = annotation.GetType();
+                specific = annotation.GetSpecificAnnotation();
+                string text = specific switch
+                {
+                    Note note => note.GetText()?.Trim() ?? string.Empty,
+                    DisplayDimension dimension => dimension.GetText(0)?.Trim() ?? string.Empty,
+                    _ => string.Empty,
+                };
+                double[] position = ReadNumbers(annotation.GetPosition());
+                annotations.Add(
+                    new DrawingAnnotationSnapshot
+                    {
+                        AnnotationId = new AnnotationId(identity),
+                        ViewId = new ViewId($"{documentIdentity}:view:{viewOrdinal}"),
+                        Kind = ToAnnotationKind(nativeType),
+                        Text = text,
+                        Position = new Coordinate2D(
+                            Length.FromMeters(position.Length > 0 ? position[0] : 0d),
+                            Length.FromMeters(position.Length > 1 ? position[1] : 0d)),
+                    });
+            }
+            finally
+            {
+                SolidWorksDocumentRouting.Release(specific);
+                SolidWorksDocumentRouting.Release(annotation);
+            }
+        }
+    }
+
+    private static string ToAnnotationKind(int nativeType) => nativeType switch
+    {
+        (int)swAnnotationType_e.swNote => "note",
+        (int)swAnnotationType_e.swDisplayDimension => "model-dimension",
+        (int)swAnnotationType_e.swGTol => "gdt",
+        (int)swAnnotationType_e.swSFSymbol => "surface-finish",
+        (int)swAnnotationType_e.swWeldSymbol => "weld",
+        _ => $"native:{nativeType.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+    };
 
     /// <summary>Enumerates drawing views without exposing the sheet sentinel returned by GetViews.</summary>
     private static IEnumerable<View> EnumerateDrawingViews(IDrawingDoc drawing)

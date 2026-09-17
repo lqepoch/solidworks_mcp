@@ -121,6 +121,7 @@ public sealed class B04ReferenceDrivenPartLiveTests
             Assert.True(drawingCreate.IsSuccess, FormatError(drawingCreate.Error));
             ICadDrawingDocument drawing = drawingCreate.Value!;
 
+            DrawingViewSnapshot? frontView = null;
             foreach ((string orientation, double x, double y) in new[]
                      {
                          ("Front", 90d, 125d),
@@ -137,7 +138,26 @@ public sealed class B04ReferenceDrivenPartLiveTests
                         ScaleDenominator = 1,
                     });
                 Assert.True(view.IsSuccess, $"{orientation}: {FormatError(view.Error)}");
+                if (orientation.Equals("Front", StringComparison.OrdinalIgnoreCase))
+                {
+                    frontView = view.Value;
+                }
             }
+
+            Assert.NotNull(frontView);
+            OperationResult<DrawingAnnotationSnapshot> note = await drawing.AddAnnotationAsync(
+                new DrawingAnnotationRequest
+                {
+                    RequestedAnnotationId = new AnnotationId("ReferenceBracket-note"),
+                    ViewId = frontView!.ViewId,
+                    Kind = "note",
+                    Text = "REFERENCE BRACKET",
+                    CoverageKeys = ["reference-bracket.semantic-note"],
+                    Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(235d)),
+                });
+            Assert.True(note.IsSuccess, FormatError(note.Error));
+            Assert.Equal("note", note.Value!.Kind);
+            Assert.Equal("REFERENCE BRACKET", note.Value.Text);
 
             OperationResult<RebuildReceipt> drawingRebuild = await drawing.RebuildAsync();
             Assert.True(drawingRebuild.IsSuccess, FormatError(drawingRebuild.Error));
@@ -149,6 +169,11 @@ public sealed class B04ReferenceDrivenPartLiveTests
             Assert.Contains(drawingInspection.Value.Views, view => view.Orientation.Contains("Front", StringComparison.OrdinalIgnoreCase));
             Assert.Contains(drawingInspection.Value.Views, view => view.Orientation.Contains("Top", StringComparison.OrdinalIgnoreCase));
             Assert.Contains(drawingInspection.Value.Views, view => view.Orientation.Contains("Isometric", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                drawingInspection.Value.Annotations,
+                annotation => annotation.AnnotationId == note.Value.AnnotationId
+                    && annotation.Kind == "note"
+                    && annotation.Text == "REFERENCE BRACKET");
 
             OperationResult<SaveReceipt> drawingSave = await drawing.SaveAsync();
             Assert.True(drawingSave.IsSuccess, FormatError(drawingSave.Error));
@@ -157,6 +182,11 @@ public sealed class B04ReferenceDrivenPartLiveTests
             OperationResult<CadInspectionSnapshot> reopenedDrawing = await drawing.ReopenAndInspectAsync();
             Assert.True(reopenedDrawing.IsSuccess, FormatError(reopenedDrawing.Error));
             Assert.True(reopenedDrawing.Value!.Views.Length >= 3);
+            Assert.Contains(
+                reopenedDrawing.Value.Annotations,
+                annotation => annotation.AnnotationId == note.Value.AnnotationId
+                    && annotation.Kind == "note"
+                    && annotation.Text == "REFERENCE BRACKET");
             Assert.Equal(drawingSave.Value!.StateHash, reopenedDrawing.Value.Document.StateHash);
 
             Assert.True((await drawing.CloseAsync()).IsSuccess);
