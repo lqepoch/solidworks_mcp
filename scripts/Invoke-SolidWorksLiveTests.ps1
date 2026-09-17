@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$RepositoryRoot,
     [string]$SolidWorksPath,
@@ -123,6 +123,7 @@ New-Item -ItemType Directory -Force -Path $workspacePath | Out-Null
 # 用户明确要求每轮使用一个全新的 SOLIDWORKS。这里只处理当前 Get-Process 返回的具体进程；若无法正常关闭，
 # 在启动新进程前直接阻断，避免 session 累积。
 $oldProcesses = @(Get-RunningSolidWorks)
+Write-Output "SLDWORKS_COUNT_BEFORE=$($oldProcesses.Count)"
 foreach ($oldProcess in $oldProcesses) {
     try {
         Close-SolidWorksGracefully -Process $oldProcess
@@ -130,6 +131,12 @@ foreach ($oldProcess in $oldProcesses) {
     finally {
         $oldProcess.Dispose()
     }
+}
+
+$remainingBeforeStart = @(Get-RunningSolidWorks)
+Write-Output "SLDWORKS_COUNT_AFTER_OLD=$($remainingBeforeStart.Count)"
+if ($remainingBeforeStart.Count -ne 0) {
+    throw 'BLOCKED_HUMAN_ACTION_REQUIRED: an old SLDWORKS process remains after graceful cleanup; no new process was started.'
 }
 
 $executable = Resolve-SolidWorksExecutable -Candidate $SolidWorksPath
@@ -174,14 +181,38 @@ finally {
     # build failures and test-discovery failures before the fixture is constructed.
     # xUnit collection fixture 通常会在所有 Live test 后关闭精确进程；这里的 fallback 覆盖 build/test discovery
     # 在 fixture 创建前失败的情况。
-    $started.Refresh()
-    if (-not $started.HasExited) {
-        Close-SolidWorksGracefully -Process $started
+    $cleanupError = $null
+    try {
+        $started.Refresh()
+        if (-not $started.HasExited) {
+            Close-SolidWorksGracefully -Process $started
+        }
     }
-    $started.Dispose()
+    catch {
+        $cleanupError = $_.Exception.Message
+    }
+    finally {
+        $started.Dispose()
+    }
     Remove-Item Env:SOLIDWORKS_MCP_LIVE_PROCESS_ID -ErrorAction SilentlyContinue
     Remove-Item Env:SOLIDWORKS_MCP_LIVE_WORKSPACE -ErrorAction SilentlyContinue
     Remove-Item Env:SOLIDWORKS_MCP_LIVE_CLOSE_PROCESS -ErrorAction SilentlyContinue
+
+    $remainingAfterRun = @(Get-RunningSolidWorks)
+    Write-Output "SLDWORKS_COUNT_AFTER=$($remainingAfterRun.Count)"
+    if ($remainingAfterRun.Count -ne 0) {
+        $cleanupError = if ($cleanupError) {
+            "$cleanupError; SLDWORKS_COUNT_AFTER=$($remainingAfterRun.Count)"
+        }
+        else {
+            "SLDWORKS_COUNT_AFTER=$($remainingAfterRun.Count); a SOLIDWORKS process remains after cleanup."
+        }
+    }
+
+    if ($cleanupError) {
+        Write-Error "BLOCKED_HUMAN_ACTION_REQUIRED: $cleanupError"
+        $exitCode = 1
+    }
 }
 
 exit $exitCode
