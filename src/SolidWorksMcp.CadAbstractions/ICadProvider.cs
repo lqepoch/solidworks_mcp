@@ -171,6 +171,14 @@ public interface ICadDrawingDocument : ICadDocument
     Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
         DrawingAnnotationRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Applies one exact annotation-position repair after state and current-position preflight.
+    /// 在 state 与当前坐标 preflight 通过后，应用一个精确的 annotation-position repair。
+    /// </summary>
+    Task<OperationResult<DrawingRepairReceipt>> RepositionAnnotationAsync(
+        DrawingAnnotationPositionRepairRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Read-only inspection facade shared by all providers.</summary>

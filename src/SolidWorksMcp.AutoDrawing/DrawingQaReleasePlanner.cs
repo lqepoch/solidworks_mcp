@@ -75,6 +75,12 @@ public sealed record DrawingRepairAction
 
     /// <summary>Safe rationale for the targeted action.</summary>
     public required string Rationale { get; init; }
+
+    /// <summary>
+    /// Planned paper-space position when this is a layout-position action; null for other action classes.
+    /// 当 action 是布局位置 action 时的纸空间目标坐标；其它 action 为 null。
+    /// </summary>
+    public Coordinate2D? PlannedPosition { get; init; }
 }
 
 /// <summary>Deterministic set of targeted repair actions.</summary>
@@ -234,7 +240,7 @@ public static class DrawingQaReleasePlanner
             .ThenBy(finding => finding.Scope, StringComparer.Ordinal)
             .ThenBy(finding => finding.Code, StringComparer.Ordinal)
             .ThenBy(finding => finding.TargetId, StringComparer.Ordinal)];
-        DrawingRepairPlan repairPlan = BuildRepairPlan(orderedFindings);
+        DrawingRepairPlan repairPlan = BuildRepairPlan(orderedFindings, request.Coverage.LayoutPlan);
         string fingerprint = Fingerprint(request.Drawing.Document, orderedFindings, repairPlan);
         return new DrawingQaPlan
         {
@@ -579,7 +585,9 @@ public static class DrawingQaReleasePlanner
         }
     }
 
-    private static DrawingRepairPlan BuildRepairPlan(IEnumerable<DrawingQaFinding> findings)
+    private static DrawingRepairPlan BuildRepairPlan(
+        IEnumerable<DrawingQaFinding> findings,
+        DrawingLayoutPlan? layout)
     {
         DrawingRepairAction[] actions = [.. findings
             .Where(finding => finding.IsRepairable)
@@ -595,6 +603,13 @@ public static class DrawingQaReleasePlanner
                 FindingCode = finding.Code,
                 PreconditionFingerprint = FindingFingerprint(finding),
                 Rationale = finding.Explanation,
+                PlannedPosition = finding.Code == "annotation-repositioned"
+                    ? layout?.Placements
+                        .FirstOrDefault(placement => placement.ItemId.Equals(finding.TargetId, StringComparison.Ordinal))
+                        ?.Bounds.Center is DrawingLayoutPoint center
+                            ? new Coordinate2D(center.X, center.Y)
+                            : null
+                    : null,
             })
             .OrderBy(action => action.ActionCode, StringComparer.Ordinal)
             .ThenBy(action => action.TargetId, StringComparer.Ordinal)];
@@ -665,7 +680,8 @@ public static class DrawingQaReleasePlanner
             action.TargetId,
             action.FindingCode,
             action.PreconditionFingerprint,
-            action.Rationale))));
+            action.Rationale,
+            action.PlannedPosition?.ToString() ?? string.Empty))));
 
     private static string Fingerprint(
         CadDocumentSummary document,

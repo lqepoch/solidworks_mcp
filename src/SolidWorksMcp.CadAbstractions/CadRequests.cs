@@ -327,6 +327,34 @@ public sealed record DrawingSectionViewRequest
 }
 
 /// <summary>
+/// Request to apply one verified annotation-position repair.
+/// 应用一个经过验证的标注位置修复请求。
+/// </summary>
+/// <remarks>
+/// This contract is intentionally narrower than a generic drawing editor. The provider resolves the exact stable
+/// annotation identity, checks the expected document state and current paper-space position, then reads the native
+/// position back after mutation. 该 contract 刻意窄于通用 drawing editor：Provider 必须解析稳定 annotation identity，
+/// 校验期望 document state 与当前纸空间位置，并在 mutation 后读回 native position。
+/// </remarks>
+public sealed record DrawingAnnotationPositionRepairRequest
+{
+    /// <summary>Exact stable annotation identity returned by inspection.</summary>
+    public required AnnotationId AnnotationId { get; init; }
+
+    /// <summary>State hash captured when the repair plan was created.</summary>
+    public required string ExpectedDocumentStateHash { get; init; }
+
+    /// <summary>Planner precondition fingerprint retained for audit correlation.</summary>
+    public required string PreconditionFingerprint { get; init; }
+
+    /// <summary>Paper-space position that inspection observed before planning the repair.</summary>
+    public required Coordinate2D ExpectedCurrentPosition { get; init; }
+
+    /// <summary>Deterministic paper-space position selected by the layout compiler.</summary>
+    public required Coordinate2D NewPosition { get; init; }
+}
+
+/// <summary>
 /// Allowlisted model-item annotation categories that SOLIDWORKS can insert through IDrawingDoc.InsertModelAnnotations3.
 /// 允许通过 IDrawingDoc.InsertModelAnnotations3 导入的模型标注类别；枚举值属于 vendor-neutral contract。
 /// </summary>

@@ -281,6 +281,22 @@ public sealed record ExportReceipt
     public required string SourceStateHash { get; init; }
 }
 
+/// <summary>Evidence returned after a native annotation-position repair.</summary>
+public sealed record DrawingRepairReceipt
+{
+    /// <summary>Stable action code materialized by the provider.</summary>
+    public required string ActionCode { get; init; }
+
+    /// <summary>Exact annotation identity changed by the provider.</summary>
+    public required AnnotationId AnnotationId { get; init; }
+
+    /// <summary>Position read back from the native drawing after rebuild.</summary>
+    public required Coordinate2D Position { get; init; }
+
+    /// <summary>Resulting document state hash after the verified mutation.</summary>
+    public required string StateHash { get; init; }
+}
+
 /// <summary>Evidence-bearing completion receipt for a successful mutation.</summary>
 public sealed record MutationReceipt
 {

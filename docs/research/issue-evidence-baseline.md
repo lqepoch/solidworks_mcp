@@ -1013,21 +1013,40 @@ Blocked manifest 只是拒绝证据，不能冒充已 release 的工程图。
 
 Focused D08 unit evidence:
 
-    dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~DrawingQaReleasePlannerTests --logger "console;verbosity=minimal" # exit 0; 4 passed; 0 failed; 0 skipped
+    dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~DrawingQaReleasePlannerTests --logger "console;verbosity=minimal" # exit 0; 5 passed; 0 failed; 0 skipped
     dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 88 + Contract 12 + FakeCad 10 passed
+    dotnet build providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksMcp.Provider.SolidWorks.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 89 + Contract 12 + FakeCad 11 passed
     git diff --check # exit 0
 
-This slice intentionally stops before exposing a new public MCP mutation endpoint. The next D08 slice must bind this plan
-to the exact inspected drawing, materialize only precondition-matching repair actions through the transaction engine,
-export SLDDrw plus configured PDF/DWG/DXF outputs, write the evidence manifest, then run the same native 3D-to-2D Live
-workflow. Any native run must continue through `scripts/Invoke-SolidWorksLiveTests.ps1`, which closes old SOLIDWORKS before
-launch and verifies `SLDWORKS_COUNT=0` after cleanup. The existing native baseline remains the actual curved-part,
-through-hole, multi-view, section-view and PDF proof; this pure D08 slice does not claim a new native process run.
+Native D08 repair evidence on the local SOLIDWORKS 2022 machine:
 
-本切片有意还没有暴露新的 public MCP mutation endpoint。下一步 D08 必须把该 plan 绑定到精确 inspection drawing，只通过
-transaction engine 执行满足 precondition 的 repair action，导出 SLDDrw 与配置的 PDF/DWG/DXF，写 evidence manifest，然后运行
-同一条真实 3D-to-2D Live workflow。任何 native run 仍必须通过 `scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭旧
-SOLIDWORKS，清理后验证 `SLDWORKS_COUNT=0`。现有 native baseline 仍是真实曲面零件、通孔、多视图、剖视和 PDF 证明；本次
-纯 D08 slice 没有宣称启动新的 native process。
+    dotnet build tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~D08AnnotationRepairLiveTests -NoBuild # exit 0; 1 passed; 0 failed; 0 skipped
+    SLDWORKS_COUNT_AFTER=0
+
+This slice also adds a narrow `ICadDrawingDocument.RepositionAnnotationAsync` contract. FakeCad proves exact
+annotation identity, expected document state and expected current position are checked before mutation, and the new
+position is read back. The native Provider uses the locally reflected `IAnnotation.SetPosition2(Double, Double, Double)`
+signature on its STA, resolves a persisted annotation name rather than an enumeration index, rebuilds, reads the native
+position back and commits the descriptor only after that proof. The isolated native Live fixture now proves the same
+stale-precondition rejection and position persistence through save/reopen; it does not use private drawing PDFs.
+
+The public MCP mutation endpoint and transaction-engine orchestration remain the next D08 slice. It must bind this plan
+to the exact inspected drawing, materialize only precondition-matching repair actions, export SLDDrw plus configured
+PDF/DWG/DXF outputs, write the evidence manifest, then run the same native 3D-to-2D Live workflow. Any native run must
+continue through `scripts/Invoke-SolidWorksLiveTests.ps1`, which closes old SOLIDWORKS before launch and verifies
+`SLDWORKS_COUNT=0` after cleanup. The existing native baseline remains the actual curved-part, through-hole,
+multi-view, section-view and PDF proof.
+
+本切片同时增加了窄范围的 `ICadDrawingDocument.RepositionAnnotationAsync` contract。FakeCad 已证明 mutation 前会校验精确
+annotation identity、expected document state 和 expected current position，并读回新位置。Native Provider 在 STA 上使用本机
+反射核对的 `IAnnotation.SetPosition2(Double, Double, Double)` 签名，通过持久化 annotation name 而不是 enumeration index
+解析对象，执行 rebuild、读回 native position，只有证据成功才提交 descriptor。隔离 Native Live fixture 已进一步证明 stale
+precondition 会被拒绝，位置可以 save/reopen 后读回；测试不使用秘密图纸 PDF。
+
+Public MCP mutation endpoint 和 transaction-engine 编排仍是下一步 D08 slice：必须把 plan 绑定到精确 inspection drawing，只执行
+满足 precondition 的 repair action，导出 SLDDrw 与配置的 PDF/DWG/DXF，写 evidence manifest，再运行同一条真实 3D-to-2D Live
+workflow。任何 native run 仍必须通过 `scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭旧 SOLIDWORKS，清理后验证
+`SLDWORKS_COUNT=0`。现有 native baseline 仍是真实曲面零件、通孔、多视图、剖视和 PDF 证明。

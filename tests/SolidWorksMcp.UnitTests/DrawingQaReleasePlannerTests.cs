@@ -73,6 +73,52 @@ public sealed class DrawingQaReleasePlannerTests
         Assert.DoesNotContain(plan.RepairPlan.Actions, value => value.TargetId.Contains("unrelated", StringComparison.Ordinal));
     }
 
+    /// <summary>A layout reflow action carries only the moved annotation identity and its planned paper position.</summary>
+    [Fact]
+    public void LayoutReflowProducesTargetedPositionRepair()
+    {
+        DrawingQaRequest request = CreateRequest(
+            layout: new DrawingLayoutPlan
+            {
+                SheetId = "sheet-1",
+                Fingerprint = "layout-reflow-001",
+                Placements =
+                [
+                    new DrawingLayoutPlacement
+                    {
+                        ItemId = "annotation-001",
+                        Kind = DrawingLayoutItemKind.Label,
+                        Bounds = new DrawingLayoutRect(
+                            Length.FromMillimeters(118d),
+                            Length.FromMillimeters(68d),
+                            Length.FromMillimeters(8d),
+                            Length.FromMillimeters(4d)),
+                        WasRepositioned = true,
+                        Rationale = "shift-right",
+                    },
+                ],
+                Findings =
+                [
+                    new DrawingLayoutFinding
+                    {
+                        Status = DrawingLayoutFindingStatus.Warning,
+                        Code = "annotation-repositioned",
+                        ItemIds = ["annotation-001"],
+                        Explanation = "The annotation was moved by deterministic reflow.",
+                    },
+                ],
+            });
+
+        DrawingQaPlan plan = DrawingQaReleasePlanner.Analyze(request);
+
+        DrawingRepairAction action = Assert.Single(plan.RepairPlan.Actions);
+        Assert.Equal("layout.apply-planned-position", action.ActionCode);
+        Assert.Equal("annotation-001", action.TargetId);
+        Assert.NotNull(action.PlannedPosition);
+        Assert.Equal(122d, action.PlannedPosition.Value.X.Millimeters, precision: 8);
+        Assert.Equal(70d, action.PlannedPosition.Value.Y.Millimeters, precision: 8);
+    }
+
     /// <summary>Missing layout or annotation proofs are unavailable checks and fail closed.</summary>
     [Fact]
     public void SkippedLayoutAndAnnotationChecksBlockRelease()

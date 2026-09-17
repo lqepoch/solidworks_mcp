@@ -240,6 +240,69 @@ internal sealed class SolidWorksNativeDrawingDocument(
             result.Evidence ?? new OperationEvidence("solidworks-drawing"));
     }
 
+    /// <summary>
+    /// Applies the narrow D08 layout-position repair to one exact named native annotation.
+    /// 对一个精确命名的 native annotation 应用 D08 窄范围布局位置修复。
+    /// </summary>
+    /// <remarks>
+    /// SOLIDWORKS exposes <c>IAnnotation.SetPosition2</c> as a typed three-double method. The adapter uses it only
+    /// after exact document-state and current-position checks, then reads <c>IAnnotation.GetPosition</c> back after
+    /// rebuild. It never selects by a transient annotation enumeration index. SOLIDWORKS 暴露了强类型的
+    /// <c>IAnnotation.SetPosition2</c>；本 adapter 只在 document state/current position 精确匹配后调用，并在 rebuild 后
+    /// 通过 <c>GetPosition</c> 读回，绝不使用临时 annotation enumeration index。
+    /// </remarks>
+    public async Task<OperationResult<DrawingRepairReceipt>> RepositionAnnotationAsync(
+        DrawingAnnotationPositionRepairRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.AnnotationId.Value)
+            || string.IsNullOrWhiteSpace(request.ExpectedDocumentStateHash)
+            || string.IsNullOrWhiteSpace(request.PreconditionFingerprint))
+        {
+            return SolidWorksProviderResults.Failure<DrawingRepairReceipt>(
+                "drawing.annotation.reposition",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "Annotation identity, expected state hash and repair precondition fingerprint are required.",
+                    ErrorCategories.Validation));
+        }
+
+        if (!descriptor.StateHash.Equals(request.ExpectedDocumentStateHash.Trim(), StringComparison.Ordinal))
+        {
+            return SolidWorksProviderResults.Failure<DrawingRepairReceipt>(
+                "drawing.annotation.reposition",
+                new OperationError(
+                    ErrorCodes.StateConflict,
+                    "The native drawing descriptor no longer matches the repair plan state hash.",
+                    ErrorCategories.State,
+                    remediation: "Inspect the drawing again and create a new targeted repair plan."));
+        }
+
+        OperationResult<NativeDrawingRepairResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => RepositionAnnotationOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<DrawingRepairReceipt>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<DrawingRepairReceipt>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        return OperationResults.Success(
+            result.Value.Receipt,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-drawing"));
+    }
+
     /// <summary>Rebuilds the actual drawing and returns a native view evidence snapshot.</summary>
     public async Task<OperationResult<RebuildReceipt>> RebuildAsync(CancellationToken cancellationToken = default)
     {
@@ -821,6 +884,134 @@ internal sealed class SolidWorksNativeDrawingDocument(
             SolidWorksDocumentRouting.Release(annotation);
             SolidWorksDocumentRouting.Release(note);
             SolidWorksDocumentRouting.Release(view);
+            SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
+        }
+    }
+
+    private OperationResult<NativeDrawingRepairResult> RepositionAnnotationOnSta(
+        ISldWorks application,
+        DrawingAnnotationPositionRepairRequest request)
+    {
+        const string operation = "drawing.annotation.reposition";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingRepairResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native drawing identity is no longer registered.", ErrorCategories.State));
+        }
+
+        if (!current.StateHash.Equals(request.ExpectedDocumentStateHash.Trim(), StringComparison.Ordinal))
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingRepairResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.StateConflict,
+                    "The registered native drawing state differs from the repair precondition.",
+                    ErrorCategories.State,
+                    remediation: "Inspect the drawing again and create a new targeted repair plan."));
+        }
+
+        OperationResult<ModelDoc2> resolvedDrawing = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolvedDrawing.IsSuccess || resolvedDrawing.Value is null)
+        {
+            return OperationResults.Failure<NativeDrawingRepairResult>(
+                resolvedDrawing.OperationId,
+                resolvedDrawing.Error!,
+                resolvedDrawing.Evidence);
+        }
+
+        Annotation? annotation = null;
+        View? ownerView = null;
+        try
+        {
+            var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            annotation = FindNativeAnnotation(drawing, request.AnnotationId.Value, out ownerView);
+            if (annotation is null)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The requested stable annotation identity could not be resolved in the current drawing.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and regenerate the targeted repair plan."));
+            }
+
+            double[] currentPosition = ReadNumbers(annotation.GetPosition());
+            Coordinate2D observedPosition = PositionSnapshot(currentPosition);
+            if (!NearlyEqual(observedPosition, request.ExpectedCurrentPosition))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The native annotation position no longer matches the repair precondition.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the exact annotation and regenerate a targeted repair plan."));
+            }
+
+            if (!annotation.SetPosition2(
+                    request.NewPosition.X.ToMeters(),
+                    request.NewPosition.Y.ToMeters(),
+                    0d))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS rejected the native annotation position repair.",
+                        ErrorCategories.Provider));
+            }
+
+            drawing.ForceRebuild();
+            Coordinate2D actualPosition = PositionSnapshot(ReadNumbers(annotation.GetPosition()));
+            if (!NearlyEqual(actualPosition, request.NewPosition))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not read back the requested annotation position after rebuild.",
+                        ErrorCategories.Invariant));
+            }
+
+            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
+            var updated = current with
+            {
+                StateHash = stateHash,
+                IsDirty = resolvedDrawing.Value.GetSaveFlag(),
+            };
+            DrawingRepairReceipt receipt = new()
+            {
+                ActionCode = "layout.apply-planned-position",
+                AnnotationId = request.AnnotationId,
+                Position = actualPosition,
+                StateHash = stateHash,
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeDrawingRepairResult(receipt, updated, current),
+                new EvidenceObservation("repair.action", receipt.ActionCode),
+                new EvidenceObservation("repair.annotation-id", receipt.AnnotationId.Value),
+                new EvidenceObservation("repair.native-view", ownerView?.GetName2()?.Trim() ?? "unknown"),
+                new EvidenceObservation("repair.precondition-fingerprint", request.PreconditionFingerprint.Trim()),
+                new EvidenceObservation("state.hash", stateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<NativeDrawingRepairResult>(
+                operation,
+                exception,
+                "SOLIDWORKS annotation-position repair failed before a complete read-back proof was returned.");
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(annotation);
+            SolidWorksDocumentRouting.Release(ownerView);
             SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
         }
     }
@@ -1581,6 +1772,81 @@ internal sealed class SolidWorksNativeDrawingDocument(
         return null;
     }
 
+    /// <summary>
+    /// Resolves an annotation by its persisted native name and releases every non-selected RCW.
+    /// 通过持久化 native name 解析 annotation，并释放所有未选中的 RCW。
+    /// </summary>
+    private static Annotation? FindNativeAnnotation(IDrawingDoc drawing, string requestedIdentity, out View? ownerView)
+    {
+        ownerView = null;
+        object? rawSheets = drawing.GetViews();
+        if (rawSheets is not Array sheets)
+        {
+            return null;
+        }
+
+        for (int sheetIndex = 0; sheetIndex < sheets.Length; sheetIndex++)
+        {
+            if (sheets.GetValue(sheetIndex) is not Array sheetViews)
+            {
+                continue;
+            }
+
+            for (int viewIndex = 0; viewIndex < sheetViews.Length; viewIndex++)
+            {
+                if (sheetViews.GetValue(viewIndex) is not View candidateView)
+                {
+                    continue;
+                }
+
+                bool retainView = false;
+                try
+                {
+                    object? rawAnnotations = candidateView.GetAnnotations();
+                    if (rawAnnotations is not Array annotations)
+                    {
+                        continue;
+                    }
+
+                    for (int annotationIndex = 0; annotationIndex < annotations.Length; annotationIndex++)
+                    {
+                        if (annotations.GetValue(annotationIndex) is not Annotation candidateAnnotation)
+                        {
+                            continue;
+                        }
+
+                        string nativeIdentity = candidateAnnotation.GetName()?.Trim() ?? string.Empty;
+                        if (nativeIdentity.Equals(requestedIdentity, StringComparison.Ordinal))
+                        {
+                            ownerView = candidateView;
+                            retainView = true;
+                            return candidateAnnotation;
+                        }
+
+                        SolidWorksDocumentRouting.Release(candidateAnnotation);
+                    }
+                }
+                finally
+                {
+                    if (!retainView)
+                    {
+                        SolidWorksDocumentRouting.Release(candidateView);
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static Coordinate2D PositionSnapshot(double[] position) => new(
+        Length.FromMeters(position.Length > 0 ? position[0] : 0d),
+        Length.FromMeters(position.Length > 1 ? position[1] : 0d));
+
+    private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
+        Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d
+        && Math.Abs(first.Y.Millimeters - second.Y.Millimeters) <= 0.000001d;
+
     private static string ToNativeModelViewName(string orientation)
     {
         return orientation.Trim().ToLowerInvariant() switch
@@ -1645,5 +1911,11 @@ internal sealed record NativeDrawingReopenResult(
 /// <summary>Internal result carrying a verified native note annotation and descriptor update.</summary>
 internal sealed record NativeDrawingAnnotationResult(
     DrawingAnnotationSnapshot Annotation,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
+
+/// <summary>Internal result carrying a verified native annotation-position repair and descriptor update.</summary>
+internal sealed record NativeDrawingRepairResult(
+    DrawingRepairReceipt Receipt,
     SolidWorksDocumentDescriptor Descriptor,
     SolidWorksDocumentDescriptor ExpectedDescriptor);

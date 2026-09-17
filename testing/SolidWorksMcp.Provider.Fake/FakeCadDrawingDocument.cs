@@ -225,6 +225,92 @@ internal sealed class FakeCadDrawingDocument(
     }
 
     /// <inheritdoc />
+    public Task<OperationResult<DrawingRepairReceipt>> RepositionAnnotationAsync(
+        DrawingAnnotationPositionRepairRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "reposition-annotation";
+        if (request is null
+            || string.IsNullOrWhiteSpace(request.AnnotationId.Value)
+            || string.IsNullOrWhiteSpace(request.ExpectedDocumentStateHash)
+            || string.IsNullOrWhiteSpace(request.PreconditionFingerprint))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingRepairReceipt>(
+                operation,
+                "Annotation identity, expected state hash and repair precondition fingerprint are required."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<DrawingRepairReceipt>(operation));
+        }
+
+        if (!Session.Supports(CadCapabilityNames.DrawingMutation, out CadCapability capability))
+        {
+            return Task.FromResult(FakeCadResults.Unsupported<DrawingRepairReceipt>(operation, capability));
+        }
+
+        if (Session.IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Closed<DrawingRepairReceipt>(operation));
+        }
+
+        if (!StateHash.Equals(request.ExpectedDocumentStateHash.Trim(), StringComparison.Ordinal))
+        {
+            return Task.FromResult(
+                FakeCadResults.Failure<DrawingRepairReceipt>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The drawing state changed after the repair plan was created.",
+                        ErrorCategories.State,
+                        remediation: "Inspect the drawing again and create a new targeted repair plan.")));
+        }
+
+        int index = annotations.FindIndex(annotation => annotation.AnnotationId == request.AnnotationId);
+        if (index < 0)
+        {
+            return Task.FromResult(FakeCadResults.NotFound<DrawingRepairReceipt>(operation, request.AnnotationId.Value));
+        }
+
+        DrawingAnnotationSnapshot current = annotations[index];
+        if (!NearlyEqual(current.Position, request.ExpectedCurrentPosition))
+        {
+            return Task.FromResult(
+                FakeCadResults.Failure<DrawingRepairReceipt>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The annotation position no longer matches the repair precondition.",
+                        ErrorCategories.State,
+                        remediation: "Inspect the exact annotation and regenerate a targeted repair plan.")));
+        }
+
+        DrawingAnnotationSnapshot updated = current with { Position = request.NewPosition };
+        annotations[index] = updated;
+        MarkMutated();
+        DrawingRepairReceipt receipt = new()
+        {
+            ActionCode = "layout.apply-planned-position",
+            AnnotationId = updated.AnnotationId,
+            Position = updated.Position,
+            StateHash = StateHash,
+        };
+        return Task.FromResult(
+            FakeCadResults.Success(
+                receipt,
+                operation,
+                new EvidenceObservation("repair.action", receipt.ActionCode),
+                new EvidenceObservation("repair.annotation-id", receipt.AnnotationId.Value),
+                new EvidenceObservation("repair.precondition-fingerprint", request.PreconditionFingerprint.Trim()),
+                new EvidenceObservation("state.hash", receipt.StateHash)));
+    }
+
+    private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
+        Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d
+        && Math.Abs(first.Y.Millimeters - second.Y.Millimeters) <= 0.000001d;
+
+    /// <inheritdoc />
     internal override CadInspectionSnapshot BuildInspection() => new()
     {
         Document = CreateSummary(),

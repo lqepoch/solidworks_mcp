@@ -174,6 +174,63 @@ public sealed class FakeCadProviderTests
         Assert.Equal(ErrorCodes.SelectionStale, result.Error!.Code);
     }
 
+    /// <summary>
+    /// A layout repair must resolve one stable annotation identity and reject stale state/position preconditions.
+    /// 布局修复必须解析一个稳定 annotation identity，并拒绝过期的 state/position precondition。
+    /// </summary>
+    [Fact]
+    public async Task DrawingAnnotationPositionRepairIsTargetedAndStateBound()
+    {
+        await using var provider = new FakeCadProvider();
+        await using ICadSession session = (await provider.StartSessionAsync(new CadSessionOptions())).RequireSuccess();
+        ICadDrawingDocument drawing = (await session.CreateDrawingAsync(new CreateDrawingRequest
+        {
+            RequestedDocumentId = new DocumentId("repair-drawing-001"),
+        })).RequireSuccess();
+        DrawingViewSnapshot view = (await drawing.AddViewAsync(new DrawingViewRequest
+        {
+            RequestedViewId = new ViewId("repair-view-001"),
+            Name = "Front",
+            Orientation = "Front",
+            Position = new Coordinate2D(Length.FromMillimeters(100d), Length.FromMillimeters(80d)),
+        })).RequireSuccess();
+        _ = (await drawing.AddAnnotationAsync(new DrawingAnnotationRequest
+        {
+            RequestedAnnotationId = new AnnotationId("repair-annotation-001"),
+            ViewId = view.ViewId,
+            Kind = "note",
+            Text = "repair target",
+            Position = new Coordinate2D(Length.FromMillimeters(100d), Length.FromMillimeters(60d)),
+        })).RequireSuccess();
+
+        string plannedStateHash = drawing.StateHash;
+        DrawingRepairReceipt receipt = (await drawing.RepositionAnnotationAsync(new DrawingAnnotationPositionRepairRequest
+        {
+            AnnotationId = new AnnotationId("repair-annotation-001"),
+            ExpectedDocumentStateHash = plannedStateHash,
+            PreconditionFingerprint = "layout-precondition-001",
+            ExpectedCurrentPosition = new Coordinate2D(Length.FromMillimeters(100d), Length.FromMillimeters(60d)),
+            NewPosition = new Coordinate2D(Length.FromMillimeters(120d), Length.FromMillimeters(70d)),
+        })).RequireSuccess();
+
+        Assert.Equal("layout.apply-planned-position", receipt.ActionCode);
+        CadInspectionSnapshot inspected = (await session.Inspection.InspectAsync(drawing.DocumentId)).RequireSuccess();
+        DrawingAnnotationSnapshot annotation = Assert.Single(inspected.Annotations);
+        Assert.Equal(120d, annotation.Position.X.Millimeters, precision: 8);
+        Assert.Equal(70d, annotation.Position.Y.Millimeters, precision: 8);
+
+        OperationResult<DrawingRepairReceipt> stale = await drawing.RepositionAnnotationAsync(new DrawingAnnotationPositionRepairRequest
+        {
+            AnnotationId = annotation.AnnotationId,
+            ExpectedDocumentStateHash = plannedStateHash,
+            PreconditionFingerprint = "layout-precondition-001",
+            ExpectedCurrentPosition = new Coordinate2D(Length.FromMillimeters(100d), Length.FromMillimeters(60d)),
+            NewPosition = new Coordinate2D(Length.FromMillimeters(130d), Length.FromMillimeters(75d)),
+        });
+        Assert.False(stale.IsSuccess);
+        Assert.Equal(ErrorCodes.StateConflict, stale.Error!.Code);
+    }
+
     /// <summary>FakeCad exposes the same save/close/reopen contract while keeping private file I/O out of hosted tests.</summary>
     /// <remarks>FakeCad 在不接触私有文件 I/O 的 Hosted-safe 测试中，仍暴露与 native provider 相同的生命周期契约。</remarks>
     [Fact]
