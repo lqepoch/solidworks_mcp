@@ -20,7 +20,7 @@ Requires the .NET 10 SDK and Git. SOLIDWORKS is not required for the hosted solu
 
 Equivalent direct commands are restore, dotnet format --verify-no-changes, Release build and test against SolidWorksMcp.hosted.slnx. The complete solution is SolidWorksMcp.slnx; it includes the Windows provider and opt-in Live test project for local qualification.
 
-The Hosted script forces `SolidWorksMcpNativeProviderEnabled=false` and writes project-scoped ignored artifacts below `artifacts/hosted`, so a Hosted-safe build cannot overwrite local native assets. After running the Windows doctor with `-Initialize`, build the complete solution on the local Windows machine to produce the opt-in `net10.0-windows` server and provider sidecar. The doctor-generated MCP configuration points at that native executable; it never starts or stops `SLDWORKS.exe` automatically.
+The Hosted script forces `SolidWorksMcpNativeProviderEnabled=false` and writes project-scoped ignored artifacts below `artifacts/hosted`, so a Hosted-safe build cannot overwrite local native assets. After running the Windows doctor with `-Initialize`, build the complete solution on the local Windows machine to produce the opt-in `net10.0-windows` server and provider sidecar. The doctor-generated MCP configuration points at that native executable; it never starts or stops `SLDWORKS.exe` automatically. For a real local Live run, use `scripts/Invoke-SolidWorksLiveTests.ps1`; it closes old SOLIDWORKS sessions gracefully, starts one fresh process, passes its exact PID to the tests and closes that owned process after the run. Unknown modal dialogs or unsaved-work prompts block cleanup instead of being auto-confirmed.
 
 ## Windows doctor
 

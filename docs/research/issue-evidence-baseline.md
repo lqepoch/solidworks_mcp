@@ -511,29 +511,52 @@ orthographic blocking. Coverage tests cover explicit annotation keys, optional w
 orphan keys and blocking missing coverage. These tests use only generic semantic classes and synthetic
 provider-neutral candidates.
 
-## Native reference-driven drawing annotation evidence (partial)
+## Native reference-driven drawing annotation and selection evidence (partial)
 
 The current native slice is intentionally narrow but real: it creates a non-cylindrical L-profile part, cuts a semantic
-through-hole group, creates native drawing views, inserts one explicit native Note, saves, closes, reopens and verifies
-the annotation through `IView.GetAnnotations`. This is not a release-ready drawing compiler and does not claim model
-dimensions, PMI, GD&T or manufacturing coverage.
+through-hole group, creates native drawing views, inserts one explicit native Note and one native model DisplayDimension,
+saves, closes, reopens and verifies the drawing evidence through `IView.GetAnnotations`. It also resolves the actual
+HolePattern feature through semantic and geometry-signature selectors on the same registered document. This is not a
+release-ready drawing compiler and does not claim PMI, GD&T or manufacturing coverage.
 
 - `SolidWorksNativeDrawingDocument.AddAnnotationAsync` accepts only explicit `Kind=note`, activates the exact view
   binding, calls `IDrawingDoc.CreateText2`, reads back `INote.GetText`, `IAnnotation.GetType`, `IAnnotation.GetPosition`
   and persists a stable annotation identity with `IAnnotation.SetName`.
+- `Kind=model-dimensions` calls `IDrawingDoc.InsertModelAnnotations3` after selecting one exact drawing view and
+  accepts only a returned `swDisplayDimension`. It reads legal `IDisplayDimension.GetText` parts and the associated
+  native `IDimension.SystemValue`; it never calls the invalid `GetText(0)` path or synthesizes a dimension from request
+  text.
 - `SolidWorksNativeInspectionReader.ReadDrawing` classifies native Note/DisplayDimension/GDT/surface-finish/weld
   annotations without exposing COM objects. Coverage keys are not guessed from visible text after reopen.
-- `B04ReferenceDrivenPartLiveTests` verifies the native note before save and after persisted drawing reopen. The test
-  uses a generic redacted feature class and never reads or commits the confidential PDF corpus.
+- `SolidWorksNativeSelectionService` implements B05's fail-closed semantic and geometry-signature resolution for
+  Feature/Body, validates registered document/state identity, and validates `solidworks.persist3` references without
+  exposing COM objects. Other topology capture remains explicitly unsupported.
+- `B04ReferenceDrivenPartLiveTests` verifies native note/model-dimension evidence before save and after persisted
+  drawing reopen, plus semantic/geometry selector identity on the actual generated part. The test uses a generic
+  redacted feature class and never reads or commits the confidential PDF corpus.
 
 Evidence command and result from the current local machine:
 
     dotnet build SolidWorksMcp.slnx -c Release --no-restore -v:minimal                 # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.slnx -c Release --no-build --logger "console;verbosity=minimal" # exit 0; Unit 62 + Contract 7 + Fake 8 passed; Live 6 passed + 3 skipped
+    dotnet test SolidWorksMcp.slnx -c Release --no-build --logger "console;verbosity=minimal" # historical direct-PID run; Unit 62 + Contract 7 + Fake 8 passed; Live 2 passed + 1 skipped
     dotnet test tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-build --filter FullyQualifiedName~B04ReferenceDrivenPartLiveTests # exit 0; 1 passed; 0 failed; 0 skipped
-    dotnet test tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-build --logger "console;verbosity=minimal" # exit 0; 8 passed; 1 skipped
+    dotnet test tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-build --logger "console;verbosity=minimal" # historical direct-PID run; 8 passed; 1 skipped
+
+The supported local Live evidence now uses `scripts/Invoke-SolidWorksLiveTests.ps1`: it closed the previous SOLIDWORKS
+process, started exactly one fresh process, ran the complete solution serially, then saved generated workspace artifacts
+and requested `ISldWorks.ExitApp` for the exact owned PID. The fresh-process result was Unit 62 passed, Contract 7 passed,
+FakeCad 8 passed, Live 9 passed, 1 explicit placeholder skipped; the post-run process inventory contained zero
+`SLDWORKS.exe` processes. B03 and B04 also passed independently in fresh-process runs. This is process-lifecycle evidence,
+not a claim that the entire Epic or all drawing/compiler issues are complete.
+
+当前受支持的本机 Live 证据通过 `scripts/Invoke-SolidWorksLiveTests.ps1` 产生：先关闭旧 SOLIDWORKS，启动唯一的新进程，
+串行执行完整 solution，随后保存 test workspace artifact，并对精确 owned PID 请求 `ISldWorks.ExitApp`。干净进程结果为
+Unit 62 passed、Contract 7 passed、FakeCad 8 passed、Live 9 passed、1 个明确 placeholder skipped；结束后的进程清单为
+零个 `SLDWORKS.exe`。B03、B04 也分别在干净进程中通过。这只是进程生命周期证据，不代表整个 Epic 或所有工程图/compiler
+Issue 已完成。
 
 Official API evidence for this slice is recorded in `docs/research/solidworks-api-knowledge.md`, including
-`CreateText2`, `GetAnnotations`, `GetSpecificAnnotation`, `CreateDrawViewFromModelView3`, `GetViews`, and
-`GetOutline`. The native model-item insertion path remains a separate follow-up because it requires verified source
-dimension/PMI provenance and a coverage-aware release gate.
+`CreateText2`, `InsertModelAnnotations3`, `GetText`, `GetDimension`, `SystemValue`, `GetAnnotations`,
+`GetSpecificAnnotation`, `CreateDrawViewFromModelView3`, `GetViews`, `GetOutline`, `GetPersistReference3` and
+`GetObjectByPersistReference3`, plus the Live-only `GetDocuments`, `GetDocumentCount` and `ExitApp` lifecycle facts.
+Model-item provenance, PMI normalization and coverage-aware release gating remain separate follow-ups.

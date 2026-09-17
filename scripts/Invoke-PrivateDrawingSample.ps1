@@ -53,7 +53,13 @@ try:
 except Exception as exc:
     raise RuntimeError("pypdf is required by the private drawing sampler") from exc
 
-root = Path(sys.argv[1]).resolve()
+# Windows PowerShell 5.1 may encode a non-ASCII path as the console code page when it pipes source to Python stdin.
+# Pass the private root as an ASCII-only UTF-8 Base64 token instead; the token is never printed or persisted.
+# Windows PowerShell 5.1 把非 ASCII path 通过 stdin 传给 Python 时可能按控制台代码页编码；改用 ASCII-only 的
+# UTF-8 Base64 token，token 不打印也不持久化。
+import base64
+
+root = Path(base64.b64decode(sys.argv[1]).decode("utf-8")).resolve()
 if not root.is_dir():
     raise RuntimeError("private drawing root is not a directory")
 
@@ -108,24 +114,46 @@ selected = SystemRandom().sample(records, 2)
 print(json.dumps(selected, ensure_ascii=False))
 '@
 
-    # Windows PowerShell promotes native stderr to an error record when the caller uses Stop.  The probe's stderr is
-    # intentionally discarded, while stdout and the process exit code remain the only selection contract.
-    # Windows PowerShell 在 Stop 模式下会把 native stderr 提升为 error record；这里隔离 stderr，只信 stdout 与 exit code。
+    # Windows PowerShell 5.1 can transcode both non-ASCII source code and paths when piping them to Python stdin.
+    # Write this research-only probe as UTF-8 to a short-lived user-temp file and pass only an ASCII path token.
+    # Windows PowerShell 5.1 可能转码通过 stdin 传入的非 ASCII 源码和 path；这里把 research-only probe 以 UTF-8
+    # 写入短生命周期 user-temp 文件，并且只传递 ASCII path token。
     $previousErrorActionPreference = $ErrorActionPreference
+    $probeScriptPath = Join-Path ([IO.Path]::GetTempPath()) ("SolidWorksMcp.PrivateDrawingProbe-{0}.py" -f [Guid]::NewGuid().ToString('N'))
     try {
         $ErrorActionPreference = 'Continue'
-        $json = ($pythonCode | & $Python '-' $Root 2>$null | Out-String).Trim()
+        [IO.File]::WriteAllText($probeScriptPath, $pythonCode, [Text.UTF8Encoding]::new($false))
+        $rootToken = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Root))
+        $json = (& $Python $probeScriptPath $rootToken 2>$null | Out-String).Trim()
         $probeExitCode = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
+        if (Test-Path -LiteralPath $probeScriptPath -PathType Leaf) {
+            [IO.File]::Delete($probeScriptPath)
+        }
     }
     if ($probeExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
-        throw 'The private PDF metadata probe failed. Install pypdf or supply a compatible -PythonPath.'
+        # Keep diagnostics redacted: exit code and output length are safe; the probe output may contain source-derived
+        # hashes/classes and must never be echoed as a troubleshooting shortcut.
+        # 诊断保持脱敏：exit code 和 output length 安全；probe 输出可能含源文件派生 hash/class，绝不能直接打印。
+        throw "The private PDF metadata probe failed (exit=$probeExitCode; output-length=$($json.Length)). Install pypdf or supply a compatible -PythonPath."
     }
 
     try {
-        return @($json | ConvertFrom-Json)
+        $parsed = $json | ConvertFrom-Json
+        if ($parsed -is [Array]) {
+            # Windows PowerShell 5.1 can preserve a JSON array as one function-output object. Enumerate explicitly so
+            # the caller's exact-two invariant is stable across PowerShell generations.
+            # Windows PowerShell 5.1 可能把 JSON array 作为一个函数输出对象保留；显式逐项枚举，确保不同版本的
+            # PowerShell 都遵守 caller 的 exactly-two invariant。
+            foreach ($item in $parsed) {
+                Write-Output $item
+            }
+        }
+        else {
+            Write-Output $parsed
+        }
     }
     catch {
         throw 'The private PDF metadata probe returned invalid structured metadata.'

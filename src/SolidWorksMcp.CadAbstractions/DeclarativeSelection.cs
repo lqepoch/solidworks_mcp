@@ -147,4 +147,15 @@ public sealed record CadSelectionSnapshot
 
     /// <summary>Stable hash of the declarative selector used for audit correlation.</summary>
     public required string SelectorFingerprint { get; init; }
+
+    /// <summary>
+    /// Opaque provider reference captured during successful resolution, when the provider can persist the entity.
+    /// 成功解析时由 Provider 捕获的不透明 persistent reference；Provider 无法安全持久化时可以为空。
+    /// </summary>
+    /// <remarks>
+    /// Callers must round-trip this value without parsing the token.  The format prevents a reference from one CAD
+    /// provider or API generation from being silently sent to another. 调用方只能原样回传，不能解析 token；Format
+    /// 防止不同 CAD Provider 或 API generation 的 reference 被静默混用。
+    /// </remarks>
+    public CadPersistentReference? PersistentReference { get; init; }
 }

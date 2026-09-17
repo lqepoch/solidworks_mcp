@@ -16,6 +16,7 @@ namespace SolidWorksMcp.LiveSolidWorksTests;
 /// 本 fixture 只使用脱敏后的工程类别，不包含任何机密图纸文字或尺寸；私密图纸流程只记录特征类别，本测试验证该类别的
 /// Provider contract。
 /// </remarks>
+[Collection(LiveSolidWorksTestGroup.Name)]
 public sealed class B04ReferenceDrivenPartLiveTests
 {
     [OptInLiveFact]
@@ -106,6 +107,60 @@ public sealed class B04ReferenceDrivenPartLiveTests
             FeatureSnapshot holeFeature = holes.Value!;
             Assert.Contains(inspection.Value.Features, feature => feature.Name == extrusionFeature.Name);
             Assert.Contains(inspection.Value.Features, feature => feature.Name == holeFeature.Name);
+
+            // B05 proof: the native provider resolves an exact feature by declarative semantic identity while the
+            // document state hash is still the one observed immediately before the operation.  No global selection
+            // mark, active-document guess or feature-list index is sent to the provider.
+            // B05 证明：native provider 在 mutation 前按声明式语义 identity 解析精确 feature，并校验刚刚观察到的
+            // document state hash。调用方不发送全局 selection mark、不猜 active document，也不依赖 feature 列表索引。
+            OperationResult<CadSelectionSnapshot> semanticSelection = await session.Selection.ResolveAsync(
+                new CadEntitySelector
+                {
+                    DocumentId = part.DocumentId,
+                    EntityKind = CadEntityKind.Feature,
+                    SemanticName = holeFeature.Name,
+                    ExpectedStateHash = inspection.Value.Document.StateHash,
+                });
+            Assert.True(semanticSelection.IsSuccess, FormatError(semanticSelection.Error));
+            Assert.Equal(CadSelectionResolution.SemanticSelector, semanticSelection.Value!.Resolution);
+            Assert.Equal($"{part.DocumentId.Value}:feature:{holeFeature.Name}", semanticSelection.Value.Entity.Identity);
+            Assert.NotNull(semanticSelection.Value.PersistentReference);
+            Assert.Equal("solidworks.persist3", semanticSelection.Value.PersistentReference!.Format);
+
+            // The token is opaque to the test and to MCP callers: it is round-tripped unchanged into a second
+            // selector, proving the native persistent-reference path rather than a repeated name lookup.
+            // token 对测试和 MCP caller 都是不透明的：这里原样回传到第二个 selector，证明的是 native persistent
+            // reference path，而不是再次按名字查找。
+            OperationResult<CadSelectionSnapshot> persistentSelection = await session.Selection.ResolveAsync(
+                new CadEntitySelector
+                {
+                    DocumentId = part.DocumentId,
+                    EntityKind = CadEntityKind.Feature,
+                    PersistentReference = semanticSelection.Value.PersistentReference,
+                    ExpectedStateHash = inspection.Value.Document.StateHash,
+                });
+            Assert.True(persistentSelection.IsSuccess, FormatError(persistentSelection.Error));
+            Assert.Equal(CadSelectionResolution.PersistentReference, persistentSelection.Value!.Resolution);
+            Assert.Equal(semanticSelection.Value.Entity, persistentSelection.Value.Entity);
+
+            // The geometry-signature fallback is provider-defined and deterministic; it is still checked against the
+            // current native feature tree rather than treated as a free-form name alias.
+            // geometry-signature fallback 由 Provider 定义且确定性校验；它仍会对当前 native feature tree 做验证，
+            // 不是把任意字符串当作 name alias。
+            OperationResult<CadSelectionSnapshot> geometrySelection = await session.Selection.ResolveAsync(
+                new CadEntitySelector
+                {
+                    DocumentId = part.DocumentId,
+                    EntityKind = CadEntityKind.Feature,
+                    GeometrySignature = new CadGeometrySignature
+                    {
+                        Value = $"solidworks.geometry.v1|kind=Feature|name={holeFeature.Name}",
+                    },
+                    ExpectedStateHash = inspection.Value.Document.StateHash,
+                });
+            Assert.True(geometrySelection.IsSuccess, FormatError(geometrySelection.Error));
+            Assert.Equal(CadSelectionResolution.GeometrySignature, geometrySelection.Value!.Resolution);
+            Assert.Equal(semanticSelection.Value.Entity, geometrySelection.Value.Entity);
 
             OperationResult<SaveReceipt> save = await part.SaveAsync();
             Assert.True(save.IsSuccess, FormatError(save.Error));

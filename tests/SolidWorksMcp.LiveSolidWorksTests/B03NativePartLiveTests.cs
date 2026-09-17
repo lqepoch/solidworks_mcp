@@ -16,6 +16,7 @@ namespace SolidWorksMcp.LiveSolidWorksTests;
 /// artifacts for diagnosis. Hosted CI 不运行此测试，因为它需要用户授权的交互式 SOLIDWORKS；测试不启动/关闭
 /// SOLIDWORKS，而是要求明确 PID 和隔离 workspace，并在失败时保留 artifact 供诊断。
 /// </remarks>
+[Collection(LiveSolidWorksTestGroup.Name)]
 public sealed class B03NativePartLiveTests
 {
     /// <summary>Runs this test only when the operator explicitly supplied the native Live inputs.</summary>

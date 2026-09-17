@@ -21,7 +21,7 @@ public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
         new CadCapability(CadCapabilityNames.DrawingMutation, supported: true),
         new CadCapability(CadCapabilityNames.Inspection, supported: true),
         new CadCapability(CadCapabilityNames.Export, supported: false, "Native export is enabled by a later provider issue after COM identity guards are complete."),
-        new CadCapability(CadCapabilityNames.Selection, supported: false, "Native selection is enabled after the B03 document registry can bind selectors to documents."),
+        new CadCapability(CadCapabilityNames.Selection, supported: true),
         new CadCapability(CadCapabilityNames.PatternSemantics, supported: false, "Pattern semantics are owned by the engineering layer and are not implemented in B02."),
     ]);
 
@@ -62,6 +62,58 @@ public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
 
     /// <inheritdoc />
     public CadCapabilitySet Capabilities => capabilities;
+
+    /// <summary>
+    /// Closes generated Live-test documents under one exact workspace before the owned test process exits.
+    /// 在自有 Live 测试进程退出前，关闭一个精确 workspace 下生成的 Live-test documents。
+    /// </summary>
+    /// <remarks>
+    /// This internal hook is available only to the local Live harness through InternalsVisibleTo. It never closes
+    /// arbitrary user documents and never calls <c>CloseAllDocuments</c>. 该 internal hook 只供本机 Live harness 使用，
+    /// 不关闭任意用户 document，也不调用 <c>CloseAllDocuments</c>。
+    /// </remarks>
+    internal async Task<OperationResult<MutationReceipt>> CloseLiveWorkspaceDocumentsAsync(
+        int processId,
+        string workspace,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspace);
+        OperationResult<SolidWorksSessionInfo> attached = await host.AttachAsync(
+            new CadSessionOptions { RequestedProcessId = processId },
+            cancellationToken).ConfigureAwait(false);
+        if (!attached.IsSuccess || attached.Value is null)
+        {
+            return OperationResults.Failure<MutationReceipt>(attached.OperationId, attached.Error!, attached.Evidence);
+        }
+
+        return await host.InvokeOnStaAsync(
+            attached.Value.SessionId,
+            attached.Value.AttachmentGeneration,
+            application => SolidWorksWorkspaceCleanup.CloseOnSta(application, workspace),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Requests graceful ExitApp only for an explicitly owned Live-test process.</summary>
+    internal async Task<OperationResult<MutationReceipt>> ExitOwnedLiveProcessAsync(
+        int processId,
+        string workspace,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspace);
+        OperationResult<SolidWorksSessionInfo> attached = await host.AttachAsync(
+            new CadSessionOptions { RequestedProcessId = processId },
+            cancellationToken).ConfigureAwait(false);
+        if (!attached.IsSuccess || attached.Value is null)
+        {
+            return OperationResults.Failure<MutationReceipt>(attached.OperationId, attached.Error!, attached.Evidence);
+        }
+
+        return await host.InvokeOnStaAsync(
+            attached.Value.SessionId,
+            attached.Value.AttachmentGeneration,
+            application => SolidWorksWorkspaceCleanup.PrepareAndExitOnSta(application, workspace),
+            cancellationToken).ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public async ValueTask<OperationResult<ICadSession>> StartSessionAsync(

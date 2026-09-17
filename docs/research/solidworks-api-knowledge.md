@@ -16,7 +16,9 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
 | `ISldWorks.UserControl` | `System.Boolean UserControl { get; set; }` | SOLIDWORKS 2022 Interop reflection | [UserControl Property](https://help.solidworks.com/2019/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISldWorks~UserControl.html) | Read-only sampling in B02; provider never changes ownership of an interactive process. |
 | `ISldWorks.Visible` | `System.Boolean Visible { get; set; }` | SOLIDWORKS 2022 Interop reflection | [Visible Property](https://help.solidworks.com/2024/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.ISldWorks~Visible.html) | Read-only sampling in B02; no UI hiding/showing is performed during attach. |
 | `ISldWorks.IFrameObject` | `SolidWorks.Interop.sldworks.Frame IFrameObject()` | SOLIDWORKS 2022 Interop reflection | [ISldWorks Interface](https://help.solidworks.com/2025/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.isldworks.html) | Verified for future window/session diagnostics; B02 uses `GetProcessID()` directly, so no extra frame RCW is retained. |
-| `ISldWorks.ExitApp` | `System.Void ExitApp()` | SOLIDWORKS 2022 Interop reflection | [ExitApp Method](https://help.solidworks.com/2025/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISldWorks~ExitApp.html) | Explicitly not called on detach; an attached interactive process belongs to the user and may contain unsaved work. |
+| `ISldWorks.GetDocumentCount` | `System.Int32 GetDocumentCount()` | SOLIDWORKS 2022 Interop reflection | [GetDocumentCount Method](https://help.solidworks.com/2022/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.isldworks~getdocumentcount.html) | Live cleanup uses it as bounded close visibility evidence because `GetOpenDocument` can briefly expose a stale RCW after `CloseDoc`. |
+| `ISldWorks.GetDocuments` | `System.Object GetDocuments()` | SOLIDWORKS 2022 Interop reflection | [GetDocuments Method](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISldWorks~GetDocuments.html) | The Live-only cleanup adapter enumerates documents, canonicalizes paths and scopes all cleanup to the exact test workspace. |
+| `ISldWorks.ExitApp` | `System.Void ExitApp()` | SOLIDWORKS 2022 Interop reflection; official 2026 API page checked | [ExitApp Method](https://help.solidworks.com/2026/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISldWorks~ExitApp.html) | Never called by production detach. The Live harness calls it only after exact PID ownership, workspace scope and generated-artifact save checks succeed. |
 
 ## Discovery decision / 发现策略
 
@@ -24,7 +26,8 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
   to `ISldWorks`, report a live `SLDWORKS` process through `GetProcessID()`, and satisfy the requested PID.
 - An unqualified attach is allowed only when exactly one eligible process remains. Multiple eligible processes return
   `STATE_CONFLICT`; the provider never guesses from “active document” or filename.
-- The provider does not call `new SldWorks()`, `Activator.CreateInstance`, `Marshal.GetActiveObject` or `ExitApp`.
+- The production attach/detach path does not call `new SldWorks()`, `Activator.CreateInstance`, `Marshal.GetActiveObject` or
+  `ExitApp`; the separate Live-only owned-process harness is the sole explicit `ExitApp` caller after its workspace checks.
 - All COM RCW release occurs on the owning STA. No COM interface appears in `SolidWorksMcp.CadAbstractions` or MCP
   payloads.
 
@@ -39,7 +42,7 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
 | `IModelDoc2.SaveAs3` | `System.Int32 SaveAs3(System.String NewName, System.Int32 SaveAsVersion, System.Int32 Options)` | SOLIDWORKS 2022 Interop reflection; `swSaveAsCurrentVersion=0`, `swSaveAsOptions_Silent=1` | [SaveAs3 Method](https://help.solidworks.com/2024/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IModelDoc2~SaveAs3.html) | The second argument is the save version and the third is the options bitmask; swapping them produced verified error 32 (`swFileSaveFormatNotAvailable`) during the first Live attempt. |
 | `IModelDoc2.ForceRebuild3` | `System.Boolean ForceRebuild3(System.Boolean TopOnly)` | SOLIDWORKS 2022 Interop reflection | [ForceRebuild3 Method](https://help.solidworks.com/2022/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.imodeldoc2~forcerebuild3.html) | A `true` return is necessary but not sufficient; B03 follows it with native inspection and invariant checks. |
 | `ISldWorks.IActivateDoc3` | `ModelDoc2 IActivateDoc3(System.String Name, System.Boolean Silent, out System.Int32 Errors)` | SOLIDWORKS 2022 Interop reflection | [IActivateDoc3 Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISldWorks~IActivateDoc3.html) | Mutation paths activate the exact extension-qualified registered path, reject activation errors, and then re-check path/type/configuration/state hash. |
-| `ISldWorks.CloseDoc` | `System.Void CloseDoc(System.String FileName)` | SOLIDWORKS 2022 Interop reflection | [ISldWorks Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.ISldWorks.html) | B03 passes the registered canonical path, preflights the document as clean, and verifies `GetOpenDocument` returns null after close. |
+| `ISldWorks.CloseDoc` | `System.Void CloseDoc(System.String FileName)` | SOLIDWORKS 2022 Interop reflection | [ISldWorks Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.ISldWorks.html) | B03 passes the registered canonical path, preflights the document as clean, and uses bounded `GetOpenDocument` plus `GetDocumentCount` verification after close. |
 | `ISldWorks.OpenDoc6` | `ModelDoc2 OpenDoc6(System.String FileName, System.Int32 Type, System.Int32 Options, System.String Configuration, ref System.Int32 Errors, ref System.Int32 Warnings)` | SOLIDWORKS 2022 Interop reflection; `swDocPART=1`, `swOpenDocOptions_Silent=1` | [Open Document Example (C#)](https://help.solidworks.com/2022/english/api/sldworksapi/Open_Document_Example_CSharp.htm) | B03 uses the documented replacement for obsolete silent-open calls, passes the registered part configuration, rejects a null model or non-zero load error, then revalidates identity and inspection invariants. |
 | `IModelDoc2.Parameter` | `System.Object Parameter(System.String Name)` | SOLIDWORKS 2022 Interop reflection | [IParameter Method (IFeature)](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IFeature~IParameter.html) | The provider accepts only an explicit full parameter identity such as `D1@FeatureName`; a missing object is reported as `SELECTION_STALE`, never guessed from an enumeration index. |
 | `IDimension.SetSystemValue3` | `System.Int32 SetSystemValue3(System.Double NewValue, System.Int32 WhichConfigurations, System.Object Config_names)` | SOLIDWORKS 2022 Interop reflection; `swSetValue_InThisConfiguration=1`, successful return `swSetValue_Successful=0` | [SetSystemValue3 Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDimension~SetSystemValue3.html) | The thin adapter converts canonical millimetres to SOLIDWORKS metres, writes only the registered configuration, checks the status code, then reads back and rebuilds before reporting success. |
@@ -63,7 +66,8 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
 - `RotSolidWorksConnector` 在 Provider STA 上枚举 COM ROT，只接受能转换为 `ISldWorks`、通过 `GetProcessID()` 报告
   存活的 `SLDWORKS` 进程、且符合请求 PID 的对象。
 - 未限定 PID 时只有恰好一个候选才附着；多个候选返回 `STATE_CONFLICT`，绝不根据 ActiveDoc 或文件名猜测。
-- Provider 不调用 `new SldWorks()`、`Activator.CreateInstance`、`Marshal.GetActiveObject` 或 `ExitApp`。
+- 生产 attach/detach path 不调用 `new SldWorks()`、`Activator.CreateInstance`、`Marshal.GetActiveObject` 或 `ExitApp`；
+  只有独立的 Live owned-process harness 在完成 workspace 检查后才显式调用 `ExitApp`。
 - 所有 COM RCW 只在其所属 STA 释放；`SolidWorksMcp.CadAbstractions` 和 MCP payload 不出现 COM 接口。
 
 ## B04 non-cylindrical part and native drawing proof / B04 非圆柱零件与原生工程图证据
@@ -91,6 +95,24 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
 The B04 Live fixture is deliberately generic and redacted: it proves an L-profile, non-cylindrical bracket with a semantic repeated through-hole group can be created, rebuilt, saved, reopened, and represented by native drawing views. It does not copy dimensions, text, title blocks, or filenames from the confidential local drawing corpus. The private corpus is sampled by its local skill and remains outside Git, build inputs, logs, screenshots, and artifacts.
 
 B04 Live fixture 是刻意脱敏的通用案例：它证明 L 形非圆柱支架、带工程语义的重复通孔组可以真实创建、重建、保存、重新打开，并由原生工程图视图表达。它不复制机密本地图纸的尺寸、文字、标题栏、文件名；机密 corpus 由本地 skill 抽样，始终不进入 Git、构建输入、日志、截图或 artifact。
+
+## B05 declarative selection slice / B05 声明式选择切片
+
+| Interface / method | Verified signature | Version evidence | Official source | Runtime note |
+| --- | --- | --- | --- | --- |
+| `IModelDocExtension.GetPersistReference3` | `System.Object GetPersistReference3(System.Object DispObj)` | SOLIDWORKS 2022 Interop assembly `30.0.0.5041` | [GetPersistReference3 Method](https://help.solidworks.com/2021/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IModelDocExtension~GetPersistReference3.html) | The provider accepts only the `solidworks.persist3` token format and keeps the SAFEARRAY/RCW on the Provider STA. The opaque token is never parsed by the vendor-neutral boundary. |
+| `IModelDocExtension.GetObjectByPersistReference3` | `System.Object GetObjectByPersistReference3(System.Object PersistId, out System.Int32 ErrorCode)` | SOLIDWORKS 2022 Interop assembly `30.0.0.5041` | [GetObjectByPersistReference3 Method](https://help.solidworks.com/2023/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.imodeldocextension~getobjectbypersistreference3.html) | A non-zero native error or wrong entity kind returns `SELECTION_STALE`; the provider never falls back to an unrelated active selection. The returned COM object is released before the vendor-neutral result leaves the STA. |
+| `IFeature.Name` / `IFeature.GetNextFeature` | `System.String Name { get; }` / `System.Object GetNextFeature()` | SOLIDWORKS 2022 Interop reflection; used only for exact semantic-name resolution | [IFeature Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IFeature.html) | The semantic fallback traverses the native feature tree and requires exactly one matching name. It does not expose the traversal ordinal as identity. |
+
+The current native B05 implementation supports Feature/Body semantic resolution, the provider geometry-signature format
+`solidworks.geometry.v1|kind=Feature|name=...`, and persistent-reference validation for the supported native entity kinds.
+The request is always checked against the registered document and expected state hash. Face/edge/vertex/sketch topology
+capture and drawing-annotation capture remain explicit follow-up capabilities; they are not reported as complete.
+
+当前 native B05 实现支持 Feature/Body semantic resolution、Provider geometry-signature 格式
+`solidworks.geometry.v1|kind=Feature|name=...`，以及支持实体类型的 persistent-reference 校验。请求始终绑定已登记
+document 并校验 expected state hash。Face/edge/vertex/sketch topology capture 和 drawing annotation capture 仍是后续能力，
+不会被误报为完成。
 
 ## Provenance / 来源
 

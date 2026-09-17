@@ -41,6 +41,13 @@ From the repository root:
 
 The doctor is read-only by default. Use -Initialize only to create user-local configuration under %LOCALAPPDATA%\SolidWorksMcp; never commit generated properties or machine paths.
 
+For real local Live testing, use `scripts/Invoke-SolidWorksLiveTests.ps1`. It is the only supported fresh-process harness:
+it gracefully closes every currently running `SLDWORKS.exe` before launching one new process, passes that exact PID to the
+Live assembly, and requests graceful exit after the run. It never calls `Stop-Process`, never kills an unresponsive process,
+and never answers an unknown modal dialog. If cleanup reports `BLOCKED_HUMAN_ACTION_REQUIRED`, inspect the visible
+SOLIDWORKS dialog manually before retrying; do not start another session. 真实本机 Live 测试必须使用该脚本：它在启动
+新 SOLIDWORKS 前正常关闭旧进程，测试结束后关闭本轮自有进程；遇到未知模态框或未保存提示会阻断而不是盲点确认。
+
 Native persisted-artifact writes are deny-by-default. Configure `pathAllowlist.roots` in the user-local runtime config,
 keep the roots dedicated to generated/test CAD, and require the Provider to validate the target again immediately before
 `SaveAs3`. Never weaken the policy by accepting relative paths, string-prefix-only containment, or an MCP caller's

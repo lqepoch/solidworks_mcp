@@ -42,10 +42,13 @@ internal sealed class SolidWorksCadSession : ICadSession
             Capabilities,
             () => Volatile.Read(ref lifecycleState) == 2,
             SessionId);
-        Selection = new UnsupportedSolidWorksSelectionService(
+        Selection = new SolidWorksNativeSelectionService(
+            host,
+            registry,
+            SessionId,
+            attachmentGeneration,
             Capabilities,
-            () => Volatile.Read(ref lifecycleState) == 2,
-            SessionId);
+            () => Volatile.Read(ref lifecycleState) == 2);
     }
 
     public SessionId SessionId { get; }
@@ -229,7 +232,6 @@ internal sealed class SolidWorksCadSession : ICadSession
         return SolidWorksProviderResults.Unsupported<T>(operation, capability);
     }
 }
-
 /// <summary>Inspection facade that keeps B02 capability declarations honest until native document inspection exists.</summary>
 internal sealed class UnsupportedSolidWorksInspectionService(
     CadCapabilitySet capabilities,
@@ -255,7 +257,6 @@ internal sealed class UnsupportedSolidWorksInspectionService(
         return Task.FromResult(SolidWorksProviderResults.Unsupported<CadInspectionSnapshot>("inspect", capability));
     }
 }
-
 /// <summary>Export facade that returns an explicit capability error instead of touching the native session.</summary>
 internal sealed class UnsupportedSolidWorksExportService(
     CadCapabilitySet capabilities,
@@ -280,38 +281,5 @@ internal sealed class UnsupportedSolidWorksExportService(
         CadCapability capability = capabilities.Find(CadCapabilityNames.Export)
             ?? new CadCapability(CadCapabilityNames.Export, supported: false, "The native capability was not declared.");
         return Task.FromResult(SolidWorksProviderResults.Unsupported<ExportReceipt>("export", capability));
-    }
-}
-
-/// <summary>Native selection placeholder kept explicit until B03 registers verified document handles.</summary>
-internal sealed class UnsupportedSolidWorksSelectionService(
-    CadCapabilitySet capabilities,
-    Func<bool> isClosed,
-    SessionId sessionId) : ICadSelectionService
-{
-    public Task<OperationResult<CadSelectionSnapshot>> ResolveAsync(
-        CadEntitySelector selector,
-        CancellationToken cancellationToken = default)
-    {
-        if (selector is null)
-        {
-            return Task.FromResult(SolidWorksProviderResults.Failure<CadSelectionSnapshot>(
-                "selection.resolve",
-                new OperationError(ErrorCodes.InvalidRequest, "The declarative entity selector is required.", ErrorCategories.Validation)));
-        }
-
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return Task.FromResult(SolidWorksProviderResults.Cancelled<CadSelectionSnapshot>("selection.resolve"));
-        }
-
-        if (isClosed())
-        {
-            return Task.FromResult(SolidWorksProviderResults.Closed<CadSelectionSnapshot>("selection.resolve", sessionId));
-        }
-
-        CadCapability capability = capabilities.Find(CadCapabilityNames.Selection)
-            ?? new CadCapability(CadCapabilityNames.Selection, supported: false, "The native capability was not declared.");
-        return Task.FromResult(SolidWorksProviderResults.Unsupported<CadSelectionSnapshot>("selection.resolve", capability));
     }
 }

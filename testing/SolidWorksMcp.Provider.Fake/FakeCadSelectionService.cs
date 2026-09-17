@@ -78,6 +78,11 @@ internal sealed class FakeCadSelectionService(FakeCadSession session) : ICadSele
             Resolution = resolved.Value.Resolution,
             StateHash = stateHash,
             SelectorFingerprint = Fingerprint(selector),
+            PersistentReference = new CadPersistentReference
+            {
+                Format = "fake.persist1",
+                Token = $"fake|{selector.DocumentId.Value}|{selector.EntityKind}|{resolved.Value.Identity}",
+            },
         };
         return Task.FromResult(
             FakeCadResults.Success(
