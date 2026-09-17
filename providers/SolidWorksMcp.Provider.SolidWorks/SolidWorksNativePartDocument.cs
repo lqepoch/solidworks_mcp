@@ -148,6 +148,52 @@ internal sealed class SolidWorksNativePartDocument(
     }
 
     /// <inheritdoc />
+    public async Task<OperationResult<FeatureSnapshot>> AddSlotCutAsync(
+        SlotCutRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        double centerlineLength = Math.Sqrt(
+            Math.Pow(request.End.X.Millimeters - request.Start.X.Millimeters, 2d)
+            + Math.Pow(request.End.Y.Millimeters - request.Start.Y.Millimeters, 2d));
+        if (request.Width.Millimeters <= 0d
+            || !double.IsFinite(request.Width.Millimeters)
+            || !double.IsFinite(centerlineLength)
+            || centerlineLength <= 0d)
+        {
+            return SolidWorksProviderResults.Failure<FeatureSnapshot>(
+                "feature.slot-cut",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "A positive slot width and two distinct centerline endpoints are required.",
+                    ErrorCategories.Validation));
+        }
+
+        OperationResult<NativeSlotCutResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => AddSlotCutOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<FeatureSnapshot>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<FeatureSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        return OperationResults.Success(
+            result.Value.Feature,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-part"));
+    }
+
+    /// <inheritdoc />
     public async Task<OperationResult<DimensionSnapshot>> SetDimensionValueAsync(
         DimensionUpdateRequest request,
         CancellationToken cancellationToken = default)
@@ -832,6 +878,287 @@ internal sealed class SolidWorksNativePartDocument(
         }
         finally
         {
+            SolidWorksDocumentRouting.Release(feature);
+            SolidWorksDocumentRouting.Release(model);
+        }
+    }
+
+    /// <summary>
+    /// Creates one native SOLIDWORKS sketch slot on an explicitly probed planar face and cuts it through all.
+    /// 在显式探测到的平面面上创建一个原生 SOLIDWORKS sketch slot，并执行贯穿切除。
+    /// </summary>
+    /// <remarks>
+    /// The support-face probe is deliberately separate from the slot centerline. A slot can be located in a narrow
+    /// leg or flange where its centerline itself is already a hole, so using the centerline as a selection ray would
+    /// select empty space. SupportFaceProbe is therefore a declarative geometric selector, not an ActiveDoc guess.
+    /// 支撑面探针故意与槽中心线分开：槽可能位于窄腿或法兰内，此时中心线本身已经是要切掉的区域，射线会穿过
+    /// 空间而不是选到面。因此 SupportFaceProbe 是声明式几何选择器，而不是猜测 ActiveDoc。
+    /// </remarks>
+    private OperationResult<NativeSlotCutResult> AddSlotCutOnSta(
+        ISldWorks application,
+        SlotCutRequest request)
+    {
+        const string operation = "feature.slot-cut";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeSlotCutResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native document identity is no longer registered.", ErrorCategories.State));
+        }
+
+        OperationResult<ModelDoc2> resolved = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolved.IsSuccess || resolved.Value is null)
+        {
+            return OperationResults.Failure<NativeSlotCutResult>(resolved.OperationId, resolved.Error!, resolved.Evidence);
+        }
+
+        ModelDoc2 model = resolved.Value;
+        IFeature? feature = null;
+        SketchSlot? slot = null;
+        string stage = "select-support-face";
+        double centerlineLengthMeters = Math.Sqrt(
+            Math.Pow(request.End.X.ToMeters() - request.Start.X.ToMeters(), 2d)
+            + Math.Pow(request.End.Y.ToMeters() - request.Start.Y.ToMeters(), 2d));
+        try
+        {
+            if (request.Width.Millimeters <= 0d || centerlineLengthMeters <= 0d || !double.IsFinite(centerlineLengthMeters))
+            {
+                return OperationResults.Failure<NativeSlotCutResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvalidRequest,
+                        "A positive slot width and two distinct centerline endpoints are required.",
+                        ErrorCategories.Validation));
+            }
+
+            model.ClearSelection2(true);
+            // SelectByRay is the native equivalent of the explicit SupportFaceProbe selector. It avoids temporary
+            // face enumeration indexes and it remains deterministic for the generated profile's top planar face.
+            // SelectByRay 是显式 SupportFaceProbe selector 的 native 实现，避免临时 face enumeration index；对于
+            // 生成 profile 的顶层平面面，它保持确定性。
+            if (!model.Extension.SelectByRay(
+                    request.SupportFaceProbe.X.ToMeters(),
+                    request.SupportFaceProbe.Y.ToMeters(),
+                    1d,
+                    0d,
+                    0d,
+                    -1d,
+                    0.001d,
+                    (int)swSelectType_e.swSelFACES,
+                    false,
+                    0,
+                    0))
+            {
+                return SolidWorksProviderResults.Failure<NativeSlotCutResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The explicit support-face probe did not select a planar face for the slot cut.",
+                        ErrorCategories.State,
+                        remediation: "Provide a support-face probe that lies on the target planar face and retry."));
+            }
+
+            stage = "create-native-sketch-slot";
+            model.SketchManager.InsertSketch(true);
+            bool sketchOpen = true;
+            try
+            {
+                // SOLIDWORKS API uses metres. The abstraction remains millimetre-based until this single provider
+                // boundary, so callers cannot accidentally mix display units with COM system units.
+                // SOLIDWORKS API 使用米；抽象层一直保持毫米，只有在这个 provider 边界处转换，避免调用者混用显示单位。
+                slot = model.SketchManager.CreateSketchSlot(
+                    (int)swSketchSlotCreationType_e.swSketchSlotCreationType_line,
+                    (int)swSketchSlotLengthType_e.swSketchSlotLengthType_CenterCenter,
+                    request.Width.ToMeters(),
+                    request.Start.X.ToMeters(),
+                    request.Start.Y.ToMeters(),
+                    0d,
+                    request.End.X.ToMeters(),
+                    request.End.Y.ToMeters(),
+                    0d,
+                    0d,
+                    0d,
+                    0d,
+                    1,
+                    false);
+                if (slot is null)
+                {
+                    return SolidWorksProviderResults.Failure<NativeSlotCutResult>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.ProviderFailure,
+                            "SOLIDWORKS returned no native SketchSlot for the requested obround profile.",
+                            ErrorCategories.Provider));
+                }
+            }
+            finally
+            {
+                if (sketchOpen)
+                {
+                    model.SketchManager.InsertSketch(true);
+                }
+            }
+
+            double nativeSlotWidthMeters = slot.Width;
+            double nativeSlotLengthMeters = slot.Length;
+            model.ClearSelection2(true);
+            stage = "identify-slot-sketch";
+            string? sketchName = FindLatestProfileSketchFeatureName(model);
+            if (string.IsNullOrWhiteSpace(sketchName))
+            {
+                return SolidWorksProviderResults.Failure<NativeSlotCutResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The native slot was created but no stable ProfileFeature identity was found.",
+                        ErrorCategories.Invariant));
+            }
+
+            stage = "select-slot-sketch";
+            if (!model.Extension.SelectByID2(sketchName, "SKETCH", 0d, 0d, 0d, false, 0, null, 0))
+            {
+                return SolidWorksProviderResults.Failure<NativeSlotCutResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The newly created slot sketch could not be selected by its verified identity.",
+                        ErrorCategories.State));
+            }
+
+            stage = "feature-cut4";
+            feature = model.FeatureManager.FeatureCut4(
+                Sd: true,
+                Flip: false,
+                Dir: false,
+                T1: (int)swEndConditions_e.swEndCondThroughAll,
+                T2: (int)swEndConditions_e.swEndCondThroughAll,
+                D1: 0d,
+                D2: 0d,
+                Dchk1: false,
+                Dchk2: false,
+                Ddir1: false,
+                Ddir2: false,
+                Dang1: 0d,
+                Dang2: 0d,
+                OffsetReverse1: false,
+                OffsetReverse2: false,
+                TranslateSurface1: false,
+                TranslateSurface2: false,
+                NormalCut: false,
+                UseFeatScope: false,
+                UseAutoSelect: true,
+                AssemblyFeatureScope: false,
+                AutoSelectComponents: false,
+                PropagateFeatureToParts: false,
+                T0: 0,
+                StartOffset: 0d,
+                FlipStartOffset: false,
+                OptimizeGeometry: false);
+            if (feature is null)
+            {
+                return SolidWorksProviderResults.Failure<NativeSlotCutResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS returned no feature from the native slot FeatureCut4 operation.",
+                        ErrorCategories.Provider));
+            }
+
+            string featureName = feature.Name?.Trim() ?? request.Name.Trim();
+            string featureKind = feature.GetTypeName2()?.Trim() ?? "Cut";
+            model.ClearSelection2(true);
+
+            stage = "rebuild";
+            if (!model.ForceRebuild3(true))
+            {
+                return SolidWorksProviderResults.Failure<NativeSlotCutResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not report a successful rebuild after the slot cut.",
+                        ErrorCategories.Invariant));
+            }
+
+            stage = "inspect-result";
+            OperationResult<CadInspectionSnapshot> inspection = SolidWorksNativeInspectionReader.ReadPart(model, current);
+            if (!inspection.IsSuccess || inspection.Value is null)
+            {
+                return OperationResults.Failure<NativeSlotCutResult>(inspection.OperationId, inspection.Error!, inspection.Evidence);
+            }
+
+            if (inspection.Value.HasErrors
+                || inspection.Value.Bodies.Length != 1
+                || inspection.Value.Bodies[0].Volume.CubicMillimeters <= 0d)
+            {
+                return OperationResults.Failure<NativeSlotCutResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The slot operation did not prove one healthy positive-volume body.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the artifact and inspect the slot cut's native diagnostics."),
+                    new OperationEvidence(
+                        "solidworks-provider",
+                        BuildDiagnosticEvidence(inspection.Value.Diagnostics),
+                        stateHash: inspection.Value.Document.StateHash));
+            }
+
+            BodyId bodyId = inspection.Value.Bodies[0].BodyId;
+            var snapshot = new FeatureSnapshot
+            {
+                FeatureId = new FeatureId($"{current.DocumentId.Value}:feature:{featureName}"),
+                Name = featureName,
+                // The semantic contract is stable even when SOLIDWORKS returns a version-specific feature type token
+                // (for example an internal ICE token). Preserve that native token as evidence, but never leak it into
+                // the engineering model as the feature's business identity. 即使 SOLIDWORKS 返回版本相关的 feature
+                // type token（例如内部 ICE token），semantic contract 仍保持稳定；native token 只进 evidence。
+                Kind = "slot-cut",
+                BodyId = bodyId,
+            };
+            SolidWorksDocumentDescriptor nextDescriptor = current with
+            {
+                StateHash = inspection.Value.Document.StateHash,
+                IsDirty = model.GetSaveFlag(),
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeSlotCutResult(snapshot, nextDescriptor, current),
+                new EvidenceObservation("feature.name", snapshot.Name),
+                new EvidenceObservation("feature.kind", snapshot.Kind),
+                new EvidenceObservation("native.feature.kind", featureKind),
+                new EvidenceObservation("semantic.name", request.Name.Trim()),
+                new EvidenceObservation("slot.width-millimeters", Length.FromMeters(nativeSlotWidthMeters).Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("slot.centerline-length-millimeters", Length.FromMeters(centerlineLengthMeters).Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("slot.native-length-millimeters", Length.FromMeters(nativeSlotLengthMeters).Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("slot.support-face-probe-millimeters", $"{request.SupportFaceProbe.X.Millimeters:G17},{request.SupportFaceProbe.Y.Millimeters:G17}"),
+                new EvidenceObservation("body.count", inspection.Value.Bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("volume.cubic-millimeters", inspection.Value.Bodies[0].Volume.CubicMillimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("state.hash", nextDescriptor.StateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.Failure<NativeSlotCutResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.ProviderFailure,
+                    "SOLIDWORKS failed during the native slot-cut workflow.",
+                    ErrorCategories.Provider,
+                    retryable: true,
+                    details: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["stage"] = stage,
+                        ["exception-type"] = exception.GetType().FullName ?? exception.GetType().Name,
+                        ["hresult"] = $"0x{exception.HResult:X8}",
+                    },
+                    remediation: "Preserve the isolated artifact and inspect the reported native slot stage."));
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(slot);
             SolidWorksDocumentRouting.Release(feature);
             SolidWorksDocumentRouting.Release(model);
         }
@@ -1554,6 +1881,12 @@ internal sealed record NativeExtrusionResult(
     SolidWorksDocumentDescriptor ExpectedDescriptor);
 
 internal sealed record NativeHolePatternResult(
+    FeatureSnapshot Feature,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
+
+/// <summary>Internal result carrying a verified native slot cut and updated document metadata.</summary>
+internal sealed record NativeSlotCutResult(
     FeatureSnapshot Feature,
     SolidWorksDocumentDescriptor Descriptor,
     SolidWorksDocumentDescriptor ExpectedDescriptor);

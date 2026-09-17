@@ -789,7 +789,9 @@ is now proven, while native Hole Callout association, position-dimension coverag
 D04 now has a bounded provider-neutral `DrawingSectionViewRequest` and a native implementation. The request binds the
 section to an exact declarative parent `ViewId`, carries a deterministic paper-space cutting line and placement, and
 does not expose SOLIDWORKS selection marks to MCP. The native adapter activates the registered parent view, creates and
-selects the drawing sketch line on the owning STA, calls `IDrawingDoc.CreateSectionViewAt5`, removes the inherited child
+selects the drawing sketch line on the owning STA. Because the official `ISketchManager.CreateLine` contract uses the
+active drawing view's local coordinates, the adapter converts the compiler paper-space cut line through the exact parent
+position/angle and records both coordinate spaces. It then calls `IDrawingDoc.CreateSectionViewAt5`, removes the inherited child
 alignment, applies `IView.SetXform`, rebuilds and verifies a positive native outline. FakeCad and Contract tests cover
 the same request boundary; the high-level part compiler triggers the section only when the verified internal-hole group
 is present. This is the first real section candidate, not a claim that the complete Section/Detail/Auxiliary/Multi-Sheet
@@ -797,10 +799,26 @@ planner is finished.
 
 D04 目前已形成 bounded provider-neutral `DrawingSectionViewRequest` 和 native implementation。请求绑定精确的声明式
 parent `ViewId`，携带确定性的纸面剖切线与位置，不把 SOLIDWORKS selection mark 暴露给 MCP。Native adapter 在所属
-STA 激活已登记 parent view，创建并选中 drawing sketch line，调用 `IDrawingDoc.CreateSectionViewAt5`，移除创建后
+STA 激活已登记 parent view；由于官方 `ISketchManager.CreateLine` 在 active drawing view 中使用 view-local 坐标，
+adapter 先通过 parent 的精确 position/angle 把 compiler 的纸空间剖切线转换后再创建并选中 sketch line，且记录两套坐标，
+再调用 `IDrawingDoc.CreateSectionViewAt5`，移除创建后
 继承的 child alignment，通过 `IView.SetXform` 定位，rebuild 后验证 native outline 为正值。FakeCad 和 Contract 覆盖
 相同 request boundary；高层 part compiler 仅在已验证 internal-hole group 存在时生成 section。这里证明的是首个真实
 剖视 candidate，不代表完整 Section/Detail/Auxiliary/Multi-Sheet planner 已完成。
+
+The latest focused two-case fresh-process run also verified the coordinate-space correction: the rounded-plate section
+labels and cut line stayed on-sheet after persisted PDF export, while the second case produced the native obround slot.
+The PDF text-boundary audit returned `OFF_SHEET=[]` for both retained PDFs. This is evidence for the bounded native
+coordinate fix only; it does not claim that every future template or arbitrary view transform is layout-complete.
+
+最新的双 case 全新进程运行进一步验证了坐标空间修正：圆角板剖视线和 section labels 在持久化 PDF 导出后仍位于图幅内，
+第二个 case 同时生成 native obround slot。两份保留 PDF 的文字边界审计均返回 `OFF_SHEET=[]`。这只证明当前受控 native
+坐标修正，不代表所有未来模板或任意 view transform 的布局都已完成。
+
+    Live 1 passed; 0 failed; 0 skipped
+    SLDWORKS_COUNT_BEFORE=0; SLDWORKS_COUNT_AFTER_OLD=0; SLDWORKS_COUNT_AFTER=0
+    rounded-plate: views=6; section=Section A-A; detail=Detail A
+    formed-u-bracket: views=4; slot=slot-cut; drawing.slot-callout.reopened=verified
 
 The first Live attempt intentionally failed closed: SOLIDWORKS 2022's PDF SaveAs changed only `saveFlag` from `False`
 to `True`; path, type, configuration, title, update stamp and feature count were unchanged. The export adapter now
@@ -1235,3 +1253,31 @@ issues.
 并捕获了错误的 COM 几何解释：前一次失败暴露了退化 Z 包围盒，随后依据官方 `IBody2.GetBodyBox` contract
 `[X1,Y1,Z1,X2,Y2,Z2]` 修正 Provider。它不声称已经重建秘密图纸的尺寸、全部标注、公差 provenance 或完整制造 coverage；
 这些仍由 Engineering Requirement Graph、Provider inspection 和后续 Drawing Compiler issues 约束。
+
+### Native obround slot on the reference-driven bracket / 参考驱动支架的原生长圆槽
+
+The second redacted single-part case now carries a generic obround-slot requirement. The high-level MCP request uses
+slotCutJson with a semantic name, width, centerline endpoints and an explicit support-face probe. The provider calls
+the verified ISketchManager.CreateSketchSlot API, applies a native through-all FeatureCut4, rebuilds, inspects one
+positive-volume body and publishes native width/length evidence under part.slot-cut.native.*. The drawing compiler
+adds one controlled slot-callout note and verifies the same annotation identity/text after persisted reopen.
+
+第二个脱敏单零件 case 现在包含通用长圆槽需求。高层 MCP request 通过 slotCutJson 携带 semantic name、槽宽、中心线
+端点和显式支撑面探针。Provider 调用已核对的 ISketchManager.CreateSketchSlot，使用 native through-all FeatureCut4，
+rebuild 后检查一个正体积 body，并把 native 宽度/长度证据发布到 part.slot-cut.native.*。Drawing compiler 生成一条受控
+slot-callout note，并在持久化 reopen 后验证同一 annotation identity/text。
+
+Focused evidence from the final fresh-process run:
+
+    Live 1 passed; 0 failed; 0 skipped
+    part.slot-cut.kind=slot-cut
+    part.slot-cut.native.slot.width-millimeters=4.000...
+    part.slot-cut.native.slot.centerline-length-millimeters=12
+    part.slot-cut.native.slot.native-length-millimeters=12
+    part.slot-cut.native.body.count=1
+    drawing.slot-callout.reopened=verified
+    SLDWORKS_COUNT_BEFORE=0; SLDWORKS_COUNT_AFTER_OLD=0; SLDWORKS_COUNT_AFTER=0
+
+The local rendered PDF was visually checked and shows the real obround opening in the bracket leg together with Front,
+Top, Isometric and the controlled slot callout. This slice is not a claim of full sheet-metal bend recognition or full
+dimension coverage; those remain governed by the later Engineering Requirement Graph and Drawing Compiler issues.

@@ -183,6 +183,7 @@ verified signatures are:
 | Interface / method | Verified signature | Official source | Runtime note |
 | --- | --- | --- | --- |
 | `IDrawingDoc.CreateSectionViewAt5` | `View CreateSectionViewAt5(Double X, Double Y, Double Z, String SectionLabel, Int32 Options, Object ExcludedComponents, Double SectionDepth)` | [CreateSectionViewAt5 Method](https://help.solidworks.com/2016/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDrawingDoc~CreateSectionViewAt5.html) | Requires a selected drawing section line; the provider creates/selects that line on the owning STA and rejects a null return. |
+| `ISketchManager.CreateLine` | `SketchSegment CreateLine(Double X1, Double Y1, Double Z1, Double X2, Double Y2, Double Z2)` | [CreateLine Method](https://help.solidworks.com/2023/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.ISketchManager~CreateLine.html) | When a drawing view is active, the sketch line is authored in that view's local coordinates; the provider converts the compiler's paper-space cut line through the exact parent position/angle first. |
 | `IView.RemoveAlignment` | `Void RemoveAlignment()` | [RemoveAlignment Method](https://help.solidworks.com/2019/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~RemoveAlignment.html) | A created section may inherit parent alignment; the provider removes it before independent compiler placement. |
 | `IView.SetXform` | `Boolean SetXform(Object Transform)` | [SetXform Method](https://help.solidworks.com/2015/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~SetXform.html) | The transform is three doubles: X, Y and scale. The provider checks the return value and rebuilds before reading position/outline. |
 | `IView.GetAlignment` | `Int32 GetAlignment()` | [GetAlignment Method](https://help.solidworks.com/2018/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~GetAlignment.html) | Captured as evidence before `RemoveAlignment`; it is not used as a guessed placement policy. |
@@ -191,13 +192,18 @@ verified signatures are:
 The official `CreateSectionViewAt5` documentation states that X/Y/Z are the section-view center on the sheet and that a
 section line must be selected before the call. The official `IView` documentation also states that aligned views can
 move only along their alignment vector; this is why the implementation uses `RemoveAlignment` before `SetXform` instead
-of trusting the initial CreateSectionViewAt5 coordinates. This was verified in a fresh SOLIDWORKS 2022 process through
+of trusting the initial CreateSectionViewAt5 coordinates. The official `CreateLine` contract is the complementary
+coordinate boundary: with a drawing view active, its sketch geometry uses view-local coordinates. The provider therefore
+applies the inverse parent-view transform before creating the line and records both coordinate spaces as evidence. This
+was verified in a fresh SOLIDWORKS 2022 process through
 the MCP `cad.build-part-drawing` workflow and a retained PDF artifact. No 2026 runtime was available locally, so this is
 not a 2026 runtime claim.
 
 官方 `CreateSectionViewAt5` 文档说明 X/Y/Z 是图纸上的剖视中心，并要求调用前选中 section line。官方 `IView` 文档还说明
 aligned view 只能沿 alignment vector 移动，因此实现先 `RemoveAlignment` 再 `SetXform`，不盲信 CreateSectionViewAt5 初始
-坐标。该流程已在全新 SOLIDWORKS 2022 进程中通过 MCP `cad.build-part-drawing` 和保留 PDF artifact 真实验证。本机没有
+坐标。官方 `CreateLine` 文档构成互补坐标边界：当 drawing view active 时，sketch geometry 使用 view-local 坐标，
+因此 provider 先通过 parent view 的精确 position/angle 执行逆变换，再创建剖切线，并把两套坐标都写入 evidence。
+该流程已在全新 SOLIDWORKS 2022 进程中通过 MCP `cad.build-part-drawing` 和保留 PDF artifact 真实验证。本机没有
 可验证的 2026 runtime，因此不把它表述为 2026 运行时证据。
 
 ### D04 detail-view API boundary / D04 局部放大 API 边界
@@ -242,3 +248,38 @@ a real curved non-cylindrical single-part drawing without a detail request. Thes
 PDFs, source filenames, exact private dimensions and source renders remain outside Git, logs and artifacts.
 
 Official sample sequence cross-check: [Create Detail Circle and Detail View Example (C#)](https://help.solidworks.com/2023/english/api/sldworksapi/Create_Detail_Circle_and_Detail_View_Example_CSharp.htm).
+
+### D05 native obround-slot API boundary / D05 原生长圆槽 API 边界
+
+Before implementation, the installed SOLIDWORKS 2022 Interop assemblies were reflected and the official 2026 help
+page was checked for the same public signature. The verified contract is:
+
+| Interface / method | Verified signature | Official source | Runtime note |
+| --- | --- | --- | --- |
+| ISketchManager.CreateSketchSlot | SketchSlot CreateSketchSlot(Int32 SlotCreationType, Int32 SlotLengthType, Double Width, Double X1, Double Y1, Double Z1, Double X2, Double Y2, Double Z2, Double X3, Double Y3, Double Z3, Int32 CenterArcDirection, Boolean AddDimension) | [CreateSketchSlot Method](https://help.solidworks.com/2026/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISketchManager~CreateSketchSlot.html) | The provider uses swSketchSlotCreationType_line=0, swSketchSlotLengthType_CenterCenter=0, CenterArcDirection=1 and AddDimension=false. |
+| ISketchSlot.Width / ISketchSlot.Length | Double Width { get; set; } / Double Length { get; } | [ISketchSlot Interface Members](https://help.solidworks.com/2025/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISketchSlot_members.html) | Native width and centerline length are read back before FeatureCut4; the evidence is not inferred from the drawing PDF. |
+| IFeatureManager.FeatureCut4 | See the B04 signature above | [FeatureCut4 Method](https://help.solidworks.com/2022/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.IFeatureManager~FeatureCut4.html) | The slot sketch is cut with swEndCondThroughAll in both directions, followed by rebuild, body/volume/diagnostic inspection and save/reopen proof. |
+
+The public CreateSketchSlot documentation defines X1/Y1/Z1 and X2/Y2/Z2 as the two centerline points, width as the slot
+width, and CenterArcDirection as -1 clockwise or 1 counter-clockwise. The abstraction therefore keeps the
+centerline endpoints and an explicit SupportFaceProbe separately: for a slot in a narrow bracket leg, the centerline
+may lie inside the material to be removed and cannot safely double as a face-selection ray.
+
+官方 CreateSketchSlot 文档定义 X1/Y1/Z1 与 X2/Y2/Z2 为中心线两端点，Width 为槽宽，CenterArcDirection 为
+-1 顺时针或 1 逆时针。抽象层因此把中心线端点与显式 SupportFaceProbe 分开：窄支架腿上的槽中心线可能
+完全落在待切材料内，不能同时作为安全的面选择射线。
+
+Fresh-process Live proof uses one generated generic formed U-bracket case in the two-case redacted single-part run:
+
+    part.slot-cut.kind=slot-cut
+    part.slot-cut.native.slot.width-millimeters=4.000...
+    part.slot-cut.native.slot.centerline-length-millimeters=12
+    part.slot-cut.native.slot.native-length-millimeters=12
+    part.slot-cut.native.body.count=1
+    drawing.slot-callout.reopened=verified
+    SLDWORKS_COUNT_BEFORE=0
+    SLDWORKS_COUNT_AFTER=0
+
+The rendered native PDF shows the actual obround opening in the bracket leg, not just a semantic note. This is a
+focused D05 slice; Hole Wizard semantics, sheet-metal bend features, slot dimension association and general layout
+reflow remain separate compiler/provider work.

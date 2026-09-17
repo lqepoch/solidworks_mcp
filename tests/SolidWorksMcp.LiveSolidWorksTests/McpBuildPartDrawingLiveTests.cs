@@ -145,12 +145,14 @@ public sealed class McpBuildPartDrawingLiveTests
                 RoundedPlateReferenceProfile(),
                 6d,
                 ThroughHolePatternJson,
+                SlotCutJson: null,
                 IncludeDetailView: true),
             new ReferencePartCase(
                 "formed-u-bracket",
                 FormedUBracketReferenceProfile(),
                 12d,
                 ThroughHolePatternJson: null,
+                SlotCutJson: SlotCutJson,
                 IncludeDetailView: false),
         ];
 
@@ -197,6 +199,10 @@ public sealed class McpBuildPartDrawingLiveTests
                 if (referenceCase.ThroughHolePatternJson is not null)
                 {
                     arguments["throughHolePatternJson"] = referenceCase.ThroughHolePatternJson;
+                }
+                if (referenceCase.SlotCutJson is not null)
+                {
+                    arguments["slotCutJson"] = referenceCase.SlotCutJson;
                 }
 
                 CallToolResult result = await host.Client.CallToolAsync("cad.build-part-drawing", arguments);
@@ -253,6 +259,7 @@ public sealed class McpBuildPartDrawingLiveTests
         string ProfileJson,
         double ExtrusionDepthMillimeters,
         string? ThroughHolePatternJson,
+        string? SlotCutJson,
         bool IncludeDetailView);
 
     /// <summary>
@@ -337,6 +344,25 @@ public sealed class McpBuildPartDrawingLiveTests
         {
             Assert.Equal(JsonValueKind.Null, detailView.ValueKind);
         }
+
+        JsonElement slotCut = value.GetProperty("slotCut");
+        if (referenceCase.SlotCutJson is not null)
+        {
+            Assert.NotEqual(JsonValueKind.Null, slotCut.ValueKind);
+            Assert.Contains("slot-cut", structuredText, StringComparison.Ordinal);
+            JsonElement slotCallout = value.GetProperty("slotCallout");
+            Assert.NotEqual(JsonValueKind.Null, slotCallout.ValueKind);
+            Assert.Equal("slot-callout", slotCallout.GetProperty("kind").GetString());
+            Assert.Equal("SLOT W4; C-C 12", slotCallout.GetProperty("text").GetString());
+            Assert.Contains("drawing.slot-callout.reopened", structuredText, StringComparison.Ordinal);
+            Assert.Contains("part.slot-cut.native.slot.native-length-millimeters", structuredText, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(JsonValueKind.Null, slotCut.ValueKind);
+            Assert.Equal(JsonValueKind.Null, value.GetProperty("slotCallout").ValueKind);
+        }
+
         JsonElement[] drawingViews = [.. drawing.GetProperty("views").EnumerateArray()];
         bool hasFirstAngleProjectedPlacement = drawingViews.Any(view =>
         {
@@ -396,7 +422,7 @@ public sealed class McpBuildPartDrawingLiveTests
         + $"\"parentViewId\":\"{drawingDocumentId}:front\","
         + "\"name\":\"Detail A\",\"label\":\"A\","
         + "\"detailCenterXMillimeters\":90,\"detailCenterYMillimeters\":135,"
-        + "\"detailRadiusMillimeters\":12,\"positionXMillimeters\":220,\"positionYMillimeters\":185,"
+        + "\"detailRadiusMillimeters\":12,\"positionXMillimeters\":220,\"positionYMillimeters\":170,"
         + "\"scaleNumerator\":2,\"scaleDenominator\":1,\"fullOutline\":true,\"jaggedOutline\":false"
         + "}";
 
@@ -411,6 +437,12 @@ public sealed class McpBuildPartDrawingLiveTests
         + "{\"xMillimeters\":0,\"yMillimeters\":-10},"
         + "{\"xMillimeters\":0,\"yMillimeters\":10}"
         + "]}";
+
+    /// <summary>Returns a generic slot on the left leg of the bracket; no private drawing value is encoded. 返回支架左腿上的通用长圆槽；不编码私有图纸值。</summary>
+    private const string SlotCutJson = "{\"name\":\"MCP-Access-Slot\",\"widthMillimeters\":4,"
+        + "\"start\":{\"xMillimeters\":-25,\"yMillimeters\":-20},"
+        + "\"end\":{\"xMillimeters\":-25,\"yMillimeters\":-8},"
+        + "\"supportFaceProbe\":{\"xMillimeters\":-26,\"yMillimeters\":-14}}";
 
     private static void TryDeleteArtifact(string path)
     {

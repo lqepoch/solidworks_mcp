@@ -321,6 +321,10 @@ public sealed class McpServerIntegrationTests
                     + "{\"xMillimeters\":0,\"yMillimeters\":-8},"
                     + "{\"xMillimeters\":0,\"yMillimeters\":8}"
                     + "]}",
+                ["slotCutJson"] = "{\"name\":\"Access-Slot\",\"widthMillimeters\":4,"
+                    + "\"start\":{\"xMillimeters\":-20,\"yMillimeters\":-8},"
+                    + "\"end\":{\"xMillimeters\":-20,\"yMillimeters\":8},"
+                    + "\"supportFaceProbe\":{\"xMillimeters\":-22,\"yMillimeters\":0}}",
             });
 
         Assert.False(result.IsError);
@@ -340,6 +344,9 @@ public sealed class McpServerIntegrationTests
         Assert.Contains("THRU", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("PITCH 16", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("SYMMETRIC", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("slot-cut", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("SLOT W4; C-C 16", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.slot-callout.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>Invalid repeated-hole JSON fails before a provider session can mutate a document.</summary>

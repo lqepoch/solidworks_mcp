@@ -243,7 +243,8 @@ internal sealed class SolidWorksNativeDrawingDocument(
         ArgumentNullException.ThrowIfNull(request);
         string kind = request.Kind.Trim();
         bool isNote = kind.Equals("note", StringComparison.OrdinalIgnoreCase)
-            || kind.Equals("pattern-callout", StringComparison.OrdinalIgnoreCase);
+            || kind.Equals("pattern-callout", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("slot-callout", StringComparison.OrdinalIgnoreCase);
         bool isModelDimensions = kind.Equals("model-dimensions", StringComparison.OrdinalIgnoreCase);
         bool isModelItems = request.ModelItemKinds is not DrawingModelAnnotationImportKinds.None;
         bool missingFeatureIdentity = isModelItems && string.IsNullOrWhiteSpace(request.FeatureIdentity);
@@ -259,7 +260,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
                 ? "Critical native model-item annotations require Approved or Released semantic intent."
                 : missingFeatureIdentity
                     ? "Native model-item annotations require a stable FeatureIdentity for audit and association scope."
-                : "The native drawing annotation slice supports Kind='note', Kind='pattern-callout', Kind='model-dimensions' or an allowlisted ModelItemKinds value with a ViewId.";
+                : "The native drawing annotation slice supports Kind='note', Kind='pattern-callout', Kind='slot-callout', Kind='model-dimensions' or an allowlisted ModelItemKinds value with a ViewId.";
             string errorCode = missingApproval ? ErrorCodes.ReviewRequired : ErrorCodes.InvalidRequest;
             string errorCategory = missingApproval ? ErrorCategories.Policy : ErrorCategories.Validation;
             return SolidWorksProviderResults.Failure<DrawingAnnotationSnapshot>(
@@ -900,10 +901,28 @@ internal sealed class SolidWorksNativeDrawingDocument(
         }
 
         SketchSegment? cutLine = null;
+        View? parentView = null;
         View? sectionView = null;
         try
         {
             var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            parentView = FindNativeView(
+                drawing,
+                current.DocumentId.Value,
+                request.ParentViewId.Value,
+                parentNativeName,
+                out string? resolvedParentName);
+            if (parentView is null || string.IsNullOrWhiteSpace(resolvedParentName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The declared section parent view could not be resolved in the current drawing.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and use the current declarative parent ViewId."));
+            }
+
             if (!drawing.ActivateView(parentNativeName))
             {
                 return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
@@ -916,12 +935,43 @@ internal sealed class SolidWorksNativeDrawingDocument(
             }
 
             resolvedDrawing.Value.ClearSelection2(true);
-            cutLine = resolvedDrawing.Value.SketchManager.CreateLine(
+            // SOLIDWORKS creates sketch geometry relative to the active drawing view, while the compiler contract
+            // expresses cut-line coordinates in paper space. Convert sheet coordinates through the exact parent view
+            // position/angle before CreateLine; passing sheet coordinates directly moves section labels off-sheet.
+            // SOLIDWORKS 在 active drawing view 中创建 sketch geometry 时使用 view-local 坐标，而 compiler contract
+            // 使用纸空间坐标。这里通过精确 parent view 的 position/angle 转换后再 CreateLine；直接传纸空间坐标会
+            // 把 section label 带到图幅外。
+            double[] parentPosition = ReadNumbers(parentView.Position);
+            if (parentPosition.Length < 2
+                || !double.IsFinite(parentPosition[0])
+                || !double.IsFinite(parentPosition[1])
+                || !double.IsFinite(parentView.Angle))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not expose a finite position/angle for the section parent view.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the parent view transform before creating the section line."));
+            }
+
+            (double localStartX, double localStartY) = ToViewLocalCoordinates(
                 request.CutLineStart.X.ToMeters(),
                 request.CutLineStart.Y.ToMeters(),
-                0d,
+                parentPosition,
+                parentView.Angle);
+            (double localEndX, double localEndY) = ToViewLocalCoordinates(
                 request.CutLineEnd.X.ToMeters(),
                 request.CutLineEnd.Y.ToMeters(),
+                parentPosition,
+                parentView.Angle);
+            cutLine = resolvedDrawing.Value.SketchManager.CreateLine(
+                localStartX,
+                localStartY,
+                0d,
+                localEndX,
+                localEndY,
                 0d);
             if (cutLine is null || !cutLine.Select4(false, null))
             {
@@ -1039,6 +1089,12 @@ internal sealed class SolidWorksNativeDrawingDocument(
                 new EvidenceObservation("view.native-name", nativeName),
                 new EvidenceObservation("view.inherited-alignment", inheritedAlignment.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 new EvidenceObservation("view.alignment-removed", bool.TrueString),
+                new EvidenceObservation("view.parent.position-meters", string.Join(',', parentPosition.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("view.parent.angle-radians", parentView.Angle.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.cut-line.requested-start-meters", $"{request.CutLineStart.X.ToMeters():G17},{request.CutLineStart.Y.ToMeters():G17}"),
+                new EvidenceObservation("view.cut-line.requested-end-meters", $"{request.CutLineEnd.X.ToMeters():G17},{request.CutLineEnd.Y.ToMeters():G17}"),
+                new EvidenceObservation("view.cut-line.local-start-meters", $"{localStartX:G17},{localStartY:G17}"),
+                new EvidenceObservation("view.cut-line.local-end-meters", $"{localEndX:G17},{localEndY:G17}"),
                 new EvidenceObservation("view.position.requested-meters", $"{request.Position.X.ToMeters():G17},{request.Position.Y.ToMeters():G17}"),
                 new EvidenceObservation("view.position.actual-meters", string.Join(',', position.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
                 new EvidenceObservation("view.outline.meters", string.Join(',', outline.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
@@ -1055,6 +1111,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
         {
             SolidWorksDocumentRouting.Release(sectionView);
             SolidWorksDocumentRouting.Release(cutLine);
+            SolidWorksDocumentRouting.Release(parentView);
             SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
         }
     }
@@ -2321,6 +2378,32 @@ internal sealed class SolidWorksNativeDrawingDocument(
     private static Coordinate2D PositionSnapshot(double[] position) => new(
         Length.FromMeters(position.Length > 0 ? position[0] : 0d),
         Length.FromMeters(position.Length > 1 ? position[1] : 0d));
+
+    /// <summary>
+    /// Converts a paper-space point into the local coordinate system of an active drawing view.
+    /// 将纸空间点转换到当前激活工程图视图的局部坐标系。
+    ///
+    /// SOLIDWORKS sketch creation APIs use the active-view coordinate system when a drawing view
+    /// is active. The compiler deliberately keeps all authoring requests in sheet coordinates, so
+    /// this explicit inverse rigid transform is the single boundary between those two contracts.
+    /// 当工程图视图处于 active 状态时，SOLIDWORKS sketch creation API 使用 view-local 坐标。
+    /// Compiler 内部统一使用 sheet 坐标，因此这里集中执行一次逆刚体变换，避免把标注/剖视线
+    /// 错误放置到图幅外。
+    /// </summary>
+    private static (double X, double Y) ToViewLocalCoordinates(
+        double sheetX,
+        double sheetY,
+        double[] viewPosition,
+        double viewAngle)
+    {
+        double deltaX = sheetX - viewPosition[0];
+        double deltaY = sheetY - viewPosition[1];
+        double cosine = Math.Cos(viewAngle);
+        double sine = Math.Sin(viewAngle);
+        return (
+            (cosine * deltaX) + (sine * deltaY),
+            (-sine * deltaX) + (cosine * deltaY));
+    }
 
     private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
         Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d

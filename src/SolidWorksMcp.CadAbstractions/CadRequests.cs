@@ -204,6 +204,44 @@ public sealed record ThroughHolePatternRequest
     public BodyId? TargetBodyId { get; init; }
 }
 
+/// <summary>
+/// Declares one obround slot cut on the verified planar support face of a part.
+/// 声明在已验证平面支撑面上的一个长圆槽切除。
+/// </summary>
+/// <remarks>
+/// The two points are the ends of the slot centerline and width is the finished slot width. The provider converts
+/// these canonical millimetres to native units and creates one native sketch-slot profile before cutting through all.
+/// 两个点表示槽中心线端点，width 表示成品槽宽。Provider 只在边界处把毫米转换为 native units，先创建一个原生
+/// sketch-slot profile，再执行贯穿切除。SupportFaceProbe is an explicit geometric probe, not a global selection.
+/// SupportFaceProbe 是显式几何探针，不是全局 selection。
+/// </remarks>
+public sealed record SlotCutRequest
+{
+    /// <summary>Optional stable feature identity.</summary>
+    public FeatureId? RequestedFeatureId { get; init; }
+
+    /// <summary>Semantic feature name retained in the engineering graph.</summary>
+    public string Name { get; init; } = "Slot-1";
+
+    /// <summary>Finished slot width in canonical millimetres.</summary>
+    public Length Width { get; init; }
+
+    /// <summary>First centerline endpoint on the sketch plane.</summary>
+    public Coordinate2D Start { get; init; }
+
+    /// <summary>Second centerline endpoint on the sketch plane.</summary>
+    public Coordinate2D End { get; init; }
+
+    /// <summary>
+    /// A point known to lie on the planar support face, used by the native provider's declarative ray selection.
+    /// 已知位于平面支撑面上的点，供 native provider 进行声明式射线选面。
+    /// </summary>
+    public Coordinate2D SupportFaceProbe { get; init; }
+
+    /// <summary>Optional target body identity; null means the active solid body.</summary>
+    public BodyId? TargetBodyId { get; init; }
+}
+
 /// <summary>Request to change one named model dimension in the registered active configuration.</summary>
 /// <remarks>
 /// The first native slice accepts the full SOLIDWORKS parameter name, for example <c>D1@Boss-Extrude-1</c>.

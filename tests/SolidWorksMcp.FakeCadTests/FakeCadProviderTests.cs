@@ -306,6 +306,44 @@ public sealed class FakeCadProviderTests
         Assert.Contains(inspection.Features, feature => feature.FeatureId == pattern.FeatureId && feature.Kind == "through-hole-pattern");
     }
 
+    /// <summary>
+    /// An obround slot remains one semantic cut feature and reports its native-independent dimensions.
+    /// 长圆槽在 fake contract 中也必须保持为一个语义切除 feature，并报告与 native 无关的尺寸证据。
+    /// </summary>
+    [Fact]
+    public async Task SlotCutPreservesSemanticEvidence()
+    {
+        await using var provider = new FakeCadProvider();
+        await using ICadSession session = (await provider.StartSessionAsync(new CadSessionOptions())).RequireSuccess();
+        ICadPartDocument part = (await session.CreatePartAsync(new CreatePartRequest())).RequireSuccess();
+        BodySnapshot body = (await part.CreateBodyAsync(new CreateBodyRequest { Name = "Bracket" })).RequireSuccess();
+        _ = (await part.AddExtrusionAsync(new ExtrusionRequest
+        {
+            Name = "Bracket thickness",
+            Depth = Length.FromMillimeters(12d),
+            TargetBodyId = body.BodyId,
+        })).RequireSuccess();
+
+        OperationResult<FeatureSnapshot> slotResult = await part.AddSlotCutAsync(new SlotCutRequest
+        {
+            Name = "Access slot",
+            Width = Length.FromMillimeters(4d),
+            Start = new Coordinate2D(Length.FromMillimeters(-25d), Length.FromMillimeters(-20d)),
+            End = new Coordinate2D(Length.FromMillimeters(-25d), Length.FromMillimeters(-8d)),
+            SupportFaceProbe = new Coordinate2D(Length.FromMillimeters(-26d), Length.FromMillimeters(-14d)),
+            TargetBodyId = body.BodyId,
+        });
+        FeatureSnapshot slot = slotResult.RequireSuccess();
+
+        Assert.Equal("slot-cut", slot.Kind);
+        Assert.Equal("Access slot", slot.Name);
+        Assert.Equal("4", slotResult.Evidence!.Observations.Single(observation => observation.Key == "slot.width-millimeters").Value);
+        Assert.Equal("12", slotResult.Evidence.Observations.Single(observation => observation.Key == "slot.centerline-length-millimeters").Value);
+
+        CadInspectionSnapshot inspection = (await session.Inspection.InspectAsync(part.DocumentId)).RequireSuccess();
+        Assert.Contains(inspection.Features, feature => feature.FeatureId == slot.FeatureId && feature.Kind == "slot-cut");
+    }
+
 }
 
 /// <summary>Local assertion extension shared by FakeCad tests.</summary>

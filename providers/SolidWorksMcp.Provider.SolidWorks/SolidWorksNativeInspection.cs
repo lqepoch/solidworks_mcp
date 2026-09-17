@@ -279,6 +279,7 @@ internal static class SolidWorksNativeInspectionReader
     private static string ToAnnotationKind(int nativeType, string identity) => nativeType switch
     {
         (int)swAnnotationType_e.swNote when identity.Contains(":pattern-callout:", StringComparison.Ordinal) => "pattern-callout",
+        (int)swAnnotationType_e.swNote when identity.Contains(":slot-callout:", StringComparison.Ordinal) => "slot-callout",
         (int)swAnnotationType_e.swNote => "note",
         (int)swAnnotationType_e.swDisplayDimension => "model-dimension",
         (int)swAnnotationType_e.swDatumTag => "datum",

@@ -223,6 +223,84 @@ internal sealed class FakeCadPartDocument(
     }
 
     /// <inheritdoc />
+    public Task<OperationResult<FeatureSnapshot>> AddSlotCutAsync(
+        SlotCutRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "add-slot-cut";
+        if (request is null)
+        {
+            return Task.FromResult(FakeCadResults.Invalid<FeatureSnapshot>(operation, "The slot-cut request is required."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<FeatureSnapshot>(operation));
+        }
+
+        if (!Session.Supports(CadCapabilityNames.PartMutation, out CadCapability capability))
+        {
+            return Task.FromResult(FakeCadResults.Unsupported<FeatureSnapshot>(operation, capability));
+        }
+
+        if (Session.IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Closed<FeatureSnapshot>(operation));
+        }
+
+        double centerlineLength = Math.Sqrt(
+            Math.Pow(request.End.X.Millimeters - request.Start.X.Millimeters, 2d)
+            + Math.Pow(request.End.Y.Millimeters - request.Start.Y.Millimeters, 2d));
+        if (string.IsNullOrWhiteSpace(request.Name)
+            || !double.IsFinite(request.Width.Millimeters)
+            || request.Width.Millimeters <= 0d
+            || !double.IsFinite(centerlineLength)
+            || centerlineLength <= 0d)
+        {
+            return Task.FromResult(
+                FakeCadResults.Invalid<FeatureSnapshot>(
+                    operation,
+                    "A semantic name, positive width and two distinct slot centerline endpoints are required."));
+        }
+
+        BodyId bodyId = request.TargetBodyId ?? bodies.Keys.OrderBy(id => id.Value, StringComparer.Ordinal).FirstOrDefault();
+        if (string.IsNullOrEmpty(bodyId.Value))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<FeatureSnapshot>(operation, "active-body"));
+        }
+
+        if (!bodies.ContainsKey(bodyId))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<FeatureSnapshot>(operation, bodyId.Value));
+        }
+
+        FeatureId featureId = request.RequestedFeatureId ?? new FeatureId($"feature-slot-{++featureSequence:000}");
+        if (features.Any(feature => feature.FeatureId == featureId))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<FeatureSnapshot>(operation, $"Feature identity '{featureId.Value}' already exists."));
+        }
+
+        var feature = new FeatureSnapshot
+        {
+            FeatureId = featureId,
+            Name = request.Name.Trim(),
+            Kind = "slot-cut",
+            BodyId = bodyId,
+        };
+        features.Add(feature);
+        MarkMutated();
+        return Task.FromResult(
+            FakeCadResults.Success(
+                feature,
+                operation,
+                new EvidenceObservation("feature.id", featureId.Value),
+                new EvidenceObservation("feature.kind", feature.Kind),
+                new EvidenceObservation("slot.width-millimeters", request.Width.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("slot.centerline-length-millimeters", centerlineLength.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("state.hash", StateHash)));
+    }
+
+    /// <inheritdoc />
     public Task<OperationResult<DimensionSnapshot>> SetDimensionValueAsync(
         DimensionUpdateRequest request,
         CancellationToken cancellationToken = default)

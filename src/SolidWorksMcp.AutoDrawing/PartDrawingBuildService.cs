@@ -104,6 +104,39 @@ public static class PartDrawingBuildService
                 holePattern = holeResult.Value;
             }
 
+            FeatureSnapshot? slotCut = null;
+            ImmutableArray<EvidenceObservation> slotEvidence = [];
+            if (request.SlotCut is not null)
+            {
+                // A slot remains one semantic feature from engineering input through native sketch creation and the
+                // drawing callout. It is not represented as four unrelated lines and two unrelated arcs in this layer.
+                // 长圆槽从工程输入到 native sketch 创建和工程图 callout 始终保持一个语义 feature；本层不会把它拆成
+                // 四条互不关联的线和两条互不关联的弧。
+                OperationResult<FeatureSnapshot> slotResult = await part.AddSlotCutAsync(
+                    request.SlotCut,
+                    cancellationToken).ConfigureAwait(false);
+                if (!slotResult.IsSuccess || slotResult.Value is null)
+                {
+                    return Failure(slotResult);
+                }
+
+                slotCut = slotResult.Value;
+                if (slotResult.Evidence is not null)
+                {
+                    // Preserve native width/length/body evidence under a high-level namespace so MCP callers can
+                    // audit the exact COM read-back without depending on provider-internal operation IDs.
+                    // 将 native width/length/body evidence 放入高层 namespace，使 MCP caller 能审计 COM 读回结果，
+                    // 同时不依赖 Provider 内部 operation ID。
+                    slotEvidence =
+                    [
+                        .. slotResult.Evidence.Observations.Select(observation => new EvidenceObservation(
+                            $"part.slot-cut.native.{observation.Key}",
+                            observation.Value,
+                            observation.ExpectedValue)),
+                    ];
+                }
+            }
+
             OperationResult<SaveReceipt> partSave = await part.SaveAsync(cancellationToken).ConfigureAwait(false);
             if (!partSave.IsSuccess)
             {
@@ -126,7 +159,7 @@ public static class PartDrawingBuildService
 
             drawing = createdDrawing.Value;
             ImmutableArray<DrawingViewSnapshot>.Builder views = ImmutableArray.CreateBuilder<DrawingViewSnapshot>(3);
-            foreach (DrawingSeed seed in DrawingSeeds(request.RulePack))
+            foreach (DrawingSeed seed in DrawingSeeds(request.RulePack, request.DetailView is not null))
             {
                 OperationResult<DrawingViewSnapshot> view = await drawing.AddViewAsync(
                     new DrawingViewRequest
@@ -252,6 +285,39 @@ public static class PartDrawingBuildService
                 patternCallout = callout.Value;
             }
 
+            DrawingAnnotationSnapshot? slotCallout = null;
+            if (request.SlotCut is not null && slotCut is not null)
+            {
+                double centerlineLengthMillimeters = Math.Sqrt(
+                    Math.Pow(request.SlotCut.End.X.Millimeters - request.SlotCut.Start.X.Millimeters, 2d)
+                    + Math.Pow(request.SlotCut.End.Y.Millimeters - request.SlotCut.Start.Y.Millimeters, 2d));
+                string slotText = $"SLOT W{request.SlotCut.Width.Millimeters.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}; "
+                    + $"C-C {centerlineLengthMillimeters.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}";
+                OperationResult<DrawingAnnotationSnapshot> callout = await drawing.AddAnnotationAsync(
+                    new DrawingAnnotationRequest
+                    {
+                        RequestedAnnotationId = new AnnotationId(
+                            $"{request.DrawingDocumentId.Value}:slot-callout:{slotCut.FeatureId.Value}"),
+                        ViewId = views[0].ViewId,
+                        Kind = "slot-callout",
+                        Text = slotText,
+                        CoverageKeys =
+                        [
+                            $"feature.{NormalizeSemanticKey(request.SlotCut.Name)}.width",
+                            $"feature.{NormalizeSemanticKey(request.SlotCut.Name)}.centerline-length",
+                            $"feature.{NormalizeSemanticKey(request.SlotCut.Name)}.profile",
+                        ],
+                        Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(25d)),
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                if (!callout.IsSuccess || callout.Value is null)
+                {
+                    return Failure(callout);
+                }
+
+                slotCallout = callout.Value;
+            }
+
             if (request.DetailView is not null)
             {
                 // Create the derived Detail View after model-item and semantic-note writes. Some SOLIDWORKS 2022
@@ -332,6 +398,22 @@ public static class PartDrawingBuildService
                     drawingInspection.Evidence);
             }
 
+            if (slotCallout is not null
+                && !drawingInspection.Value.Annotations.Any(annotation =>
+                    annotation.AnnotationId == slotCallout.AnnotationId
+                    && annotation.Kind.Equals("slot-callout", StringComparison.Ordinal)
+                    && annotation.Text.Equals(slotCallout.Text, StringComparison.Ordinal)))
+            {
+                return OperationResults.Failure<PartDrawingBuildResult>(
+                    drawingInspection.OperationId,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The persisted drawing did not contain the verified obround-slot callout identity and text.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing artifact and inspect native annotation identity before retrying."),
+                    drawingInspection.Evidence);
+            }
+
             if (!drawingInspection.Value.Annotations.Any(annotation => annotation.AnnotationId == modelDimensions.AnnotationId))
             {
                 return OperationResults.Failure<PartDrawingBuildResult>(
@@ -371,12 +453,14 @@ public static class PartDrawingBuildService
                 Drawing = drawingInspection.Value,
                 Extrusion = extrusion.Value,
                 HolePattern = holePattern,
+                SlotCut = slotCut,
                 Views = views.ToImmutable(),
                 SectionView = sectionView,
                 DetailView = detailView,
                 ModelDimensions = modelDimensions,
                 ManufacturingAnnotations = manufacturingAnnotations,
                 PatternCallout = patternCallout,
+                SlotCallout = slotCallout,
                 Pdf = pdf.Value,
                 RulePackId = request.RulePack?.PackId,
                 Projection = request.RulePack is null
@@ -413,6 +497,22 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.pattern-callout.distribution", patternCalloutPlan?.Distribution ?? "none"),
                         new EvidenceObservation("drawing.pattern-callout.coverage-count", patternCalloutPlan?.CoverageKeys.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
                         new EvidenceObservation("drawing.pattern-callout.reopened", patternCallout is null ? "not-requested" : "verified"),
+                        new EvidenceObservation("part.slot-cut", slotCut?.Name ?? "none"),
+                        new EvidenceObservation("part.slot-cut.kind", slotCut?.Kind ?? "none"),
+                        new EvidenceObservation(
+                            "part.slot-cut.width-millimeters",
+                            request.SlotCut?.Width.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
+                        new EvidenceObservation(
+                            "part.slot-cut.centerline-length-millimeters",
+                            request.SlotCut is null
+                                ? "0"
+                                : Math.Sqrt(
+                                    Math.Pow(request.SlotCut.End.X.Millimeters - request.SlotCut.Start.X.Millimeters, 2d)
+                                    + Math.Pow(request.SlotCut.End.Y.Millimeters - request.SlotCut.Start.Y.Millimeters, 2d))
+                                    .ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("drawing.slot-callout", slotCallout?.Text ?? "none"),
+                        new EvidenceObservation("drawing.slot-callout.reopened", slotCallout is null ? "not-requested" : "verified"),
+                        .. slotEvidence,
                         new EvidenceObservation("drawing.rule-pack.id", request.RulePack?.PackId ?? "legacy-unresolved"),
                         new EvidenceObservation(
                             "drawing.rule-pack.projection",
@@ -487,11 +587,34 @@ public static class PartDrawingBuildService
             }
         }
 
+        if (request.SlotCut is not null)
+        {
+            double centerlineLength = Math.Sqrt(
+                Math.Pow(request.SlotCut.End.X.Millimeters - request.SlotCut.Start.X.Millimeters, 2d)
+                + Math.Pow(request.SlotCut.End.Y.Millimeters - request.SlotCut.Start.Y.Millimeters, 2d));
+            if (string.IsNullOrWhiteSpace(request.SlotCut.Name))
+            {
+                return "Slot semantic name is required.";
+            }
+
+            if (!double.IsFinite(request.SlotCut.Width.Millimeters) || request.SlotCut.Width.Millimeters <= 0d)
+            {
+                return "Slot width must be finite and greater than zero.";
+            }
+
+            if (!double.IsFinite(centerlineLength) || centerlineLength <= 0d)
+            {
+                return "Slot centerline endpoints must be finite and distinct.";
+            }
+        }
+
         return SketchProfileValidation.Validate(request.InitialSketchProfile)
             ?? string.Empty;
     }
 
-    private static IEnumerable<DrawingSeed> DrawingSeeds(ResolvedDrawingRulePack? rulePack)
+    private static IEnumerable<DrawingSeed> DrawingSeeds(
+        ResolvedDrawingRulePack? rulePack,
+        bool detailViewRequested)
     {
         yield return new DrawingSeed("Front", "Front", 90d, 125d);
         // First-angle places the projected top view below the front view; third-angle places it above. This is a
@@ -504,7 +627,10 @@ public static class PartDrawingBuildService
             _ => 210d,
         };
         yield return new DrawingSeed("Top", "Top", 90d, projectedY);
-        yield return new DrawingSeed("Isometric", "Isometric", 210d, 125d);
+        // Reserve the right-side label corridor for an explicit Detail View. The deterministic shift is part of the
+        // seed plan, so it does not depend on screen pixels or a live ActiveDoc layout guess. 对显式 Detail View 预留
+        // 右侧标签通道；这个确定性偏移属于 seed plan，不依赖屏幕像素或 live ActiveDoc 的布局猜测。
+        yield return new DrawingSeed("Isometric", "Isometric", detailViewRequested ? 175d : 210d, 125d);
     }
 
     private static PartDrawingProjectionMethod ToPlannerProjection(DrawingProjectionMethod method) =>
@@ -519,6 +645,10 @@ public static class PartDrawingBuildService
         rulePack.Provenance.TryGetValue("projection.method", out RuleValueProvenance? provenance)
             ? provenance.Source.SourceId
             : "unavailable";
+
+    private static string NormalizeSemanticKey(string value) => string.Concat(
+            value.Trim().ToLowerInvariant().Select(character => char.IsLetterOrDigit(character) ? character : '-'))
+        .Trim('-');
 
     private static OperationResult<PartDrawingBuildResult> Failure<T>(OperationResult<T> failure) =>
         OperationResults.Failure<PartDrawingBuildResult>(failure.OperationId, failure.Error!, failure.Evidence);
@@ -575,6 +705,12 @@ public sealed record PartDrawingBuildRequest
     public ThroughHolePatternRequest? ThroughHolePattern { get; init; }
 
     /// <summary>
+    /// Optional native obround slot cut retained as one engineering feature.
+    /// 可选的原生长圆槽切除；作为一个工程 feature 保留。
+    /// </summary>
+    public SlotCutRequest? SlotCut { get; init; }
+
+    /// <summary>
     /// Optional explicit detail-view request. The request names the parent view, source circle and enlarged-view
     /// position; it is never inferred from a screenshot or an arbitrary active selection.
     /// 可选的显式局部放大视图请求；请求明确父视图、源圆和放大视图位置，绝不从截图或任意 active selection 猜测。
@@ -597,6 +733,9 @@ public sealed record PartDrawingBuildResult
     /// <summary>Verified native repeated-hole group, when requested.</summary>
     public FeatureSnapshot? HolePattern { get; init; }
 
+    /// <summary>Verified native obround slot cut, when requested.</summary>
+    public FeatureSnapshot? SlotCut { get; init; }
+
     /// <summary>Views requested by the deterministic seed plan.</summary>
     public required ImmutableArray<DrawingViewSnapshot> Views { get; init; }
 
@@ -614,6 +753,9 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>One compressed semantic callout for the optional repeated feature group.</summary>
     public DrawingAnnotationSnapshot? PatternCallout { get; init; }
+
+    /// <summary>One deterministic slot callout, when an obround slot was requested.</summary>
+    public DrawingAnnotationSnapshot? SlotCallout { get; init; }
 
     /// <summary>Verified PDF export receipt.</summary>
     public required ExportReceipt Pdf { get; init; }

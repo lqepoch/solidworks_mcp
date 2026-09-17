@@ -142,6 +142,14 @@ public interface ICadPartDocument : ICadDocument
         ThroughHolePatternRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Creates one native obround slot profile, cuts it through the verified solid and verifies the rebuilt body.
+    /// 创建一个原生长圆槽 profile，贯穿已验证 solid 切除，并验证 rebuild 后的 body。
+    /// </summary>
+    Task<OperationResult<FeatureSnapshot>> AddSlotCutAsync(
+        SlotCutRequest request,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Changes one named model dimension, rebuilds the part and returns read-back evidence.</summary>
     /// <remarks>
     /// Providers must resolve the exact dimension identity and active configuration before mutation.  A raw setter
