@@ -44,6 +44,12 @@ public static class ServerComposition
         services.TryAddSingleton<McpOperationCorrelation>();
         services.TryAddSingleton<McpCapabilityNegotiator>();
         services.TryAddSingleton<CadSessionAccessor>();
+        // The idempotency store is shared for the stdio host lifetime. Release execution creates a transaction engine
+        // per bound session, while this store reconciles duplicate MCP requests across those short-lived engines.
+        // 幂等 store 共享整个 stdio Host 生命周期；release 每次按 session 创建短生命周期 transaction engine，
+        // 该 store 仍可跨 engine 对重复 MCP request 做 reconcile。
+        services.TryAddSingleton<ICadIdempotencyStore, InMemoryCadIdempotencyStore>();
+        services.TryAddSingleton<DrawingReleaseService>();
         return services;
     }
 }

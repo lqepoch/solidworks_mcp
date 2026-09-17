@@ -148,6 +148,13 @@ public sealed record DrawingQaRequest
     public ImmutableArray<string> RequiredArtifactFormats { get; init; } = [];
 
     /// <summary>
+    /// Controls whether artifact findings are evaluated in this pass. A preflight pass may deliberately defer this
+    /// check until after the transaction has materialized the requested files; the final release pass must leave this
+    /// value true. 预检阶段可以暂缓 artifact 检查，等事务真正生成文件后再执行最终 gate；最终 release pass 必须为 true。
+    /// </summary>
+    public bool IncludeArtifactFindings { get; init; } = true;
+
+    /// <summary>
     /// Expected document state hash captured before export. Null means the caller did not supply a prior-state
     /// assertion; the inspected document hash is still bound to every artifact proof.
     /// </summary>
@@ -233,7 +240,10 @@ public static class DrawingQaReleasePlanner
         AddCoverageFindings(request.Coverage, findings);
         AddLayoutFindings(request.Coverage.LayoutPlan, findings);
         AddManufacturingAnnotationFindings(request.ManufacturingAnnotations, findings);
-        AddArtifactFindings(request, findings);
+        if (request.IncludeArtifactFindings)
+        {
+            AddArtifactFindings(request, findings);
+        }
 
         DrawingQaFinding[] orderedFindings = [.. findings
             .OrderBy(finding => finding.Status)

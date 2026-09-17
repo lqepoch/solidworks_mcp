@@ -4,8 +4,10 @@ using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using SolidWorksMcp.AutoDrawing;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Core;
+using SolidWorksMcp.EngineeringModel;
 using SolidWorksMcp.Protocol;
 using SolidWorksMcp.Provider.SolidWorks;
 using SolidWorksMcp.Server;
@@ -180,6 +182,173 @@ public sealed class McpDrawingRepairLiveTests
             {
                 TryDelete(partPath);
                 TryDelete(drawingPath);
+            }
+        }
+    }
+
+    /// <summary>Proves the public drawing.release path saves, exports PDF and writes a verified manifest.</summary>
+    [OptInLiveFact]
+    public async Task PublicMcpDrawingReleaseCreatesVerifiedPdfAndManifest()
+    {
+        string? pidText = Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_PROCESS_ID");
+        string? workspaceText = Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_WORKSPACE");
+        if (!int.TryParse(pidText, NumberStyles.None, CultureInfo.InvariantCulture, out int processId)
+            || processId <= 0
+            || string.IsNullOrWhiteSpace(workspaceText))
+        {
+            throw new InvalidOperationException(
+                "The opt-in Live test was discovered as runnable, but its required process/workspace inputs disappeared.");
+        }
+
+        string workspace = Path.GetFullPath(workspaceText.Trim());
+        Directory.CreateDirectory(workspace);
+        string suffix = Guid.NewGuid().ToString("N");
+        string partPath = Path.Combine(workspace, $"MCP-D09-Release-Part-{suffix}.sldprt");
+        string drawingPath = Path.Combine(workspace, $"MCP-D09-Release-Drawing-{suffix}.slddrw");
+        string pdfPath = Path.Combine(workspace, $"MCP-D09-Release-Drawing-{suffix}.pdf");
+        string manifestPath = Path.Combine(workspace, $"MCP-D09-Release-Drawing-{suffix}.release.json");
+        ICadPartDocument? part = null;
+        ICadDrawingDocument? drawing = null;
+        bool completed = false;
+
+        await using var provider = new SolidWorksCadProvider(new CadPathAllowlist([workspace]));
+        try
+        {
+            OperationResult<ICadSession> sessionResult = await provider.StartSessionAsync(
+                new CadSessionOptions { RequestedProcessId = processId });
+            Assert.True(sessionResult.IsSuccess, FormatError(sessionResult.Error));
+            ICadSession session = sessionResult.Value!;
+
+            OperationResult<ICadPartDocument> partResult = await session.CreatePartAsync(
+                new CreatePartRequest
+                {
+                    RequestedDocumentId = new DocumentId($"mcp-d09-part-{suffix}"),
+                    Path = partPath,
+                    InitialRectangle = new RectangleProfileRequest
+                    {
+                        Width = Length.FromMillimeters(80d),
+                        Height = Length.FromMillimeters(50d),
+                    },
+                });
+            Assert.True(partResult.IsSuccess, FormatError(partResult.Error));
+            part = partResult.Value!;
+
+            OperationResult<FeatureSnapshot> extrusion = await part.AddExtrusionAsync(
+                new ExtrusionRequest { Name = "MCP-D09-Release-Extrusion", Depth = Length.FromMillimeters(12d) });
+            Assert.True(extrusion.IsSuccess, FormatError(extrusion.Error));
+            OperationResult<SaveReceipt> partSave = await part.SaveAsync();
+            Assert.True(partSave.IsSuccess, FormatError(partSave.Error));
+
+            OperationResult<ICadDrawingDocument> drawingResult = await session.CreateDrawingAsync(
+                new CreateDrawingRequest
+                {
+                    RequestedDocumentId = new DocumentId($"mcp-d09-drawing-{suffix}"),
+                    Path = drawingPath,
+                    SourceDocumentId = part.DocumentId,
+                    Configuration = part.Configuration,
+                });
+            Assert.True(drawingResult.IsSuccess, FormatError(drawingResult.Error));
+            drawing = drawingResult.Value!;
+
+            OperationResult<DrawingViewSnapshot> view = await drawing.AddViewAsync(
+                new DrawingViewRequest
+                {
+                    RequestedViewId = new ViewId($"mcp-d09-view-{suffix}"),
+                    Name = "Front",
+                    Orientation = "Front",
+                    Position = new Coordinate2D(Length.FromMillimeters(100d), Length.FromMillimeters(100d)),
+                    ScaleDenominator = 1,
+                });
+            Assert.True(view.IsSuccess, FormatError(view.Error));
+
+            OperationResult<DrawingAnnotationSnapshot> annotation = await drawing.AddAnnotationAsync(
+                new DrawingAnnotationRequest
+                {
+                    RequestedAnnotationId = new AnnotationId($"mcp-d09-annotation-{suffix}"),
+                    ViewId = view.Value!.ViewId,
+                    Kind = "note",
+                    Text = "D09 release fixture",
+                    CoverageKeys = ["views.orthographic.coverage"],
+                    Position = new Coordinate2D(Length.FromMillimeters(100d), Length.FromMillimeters(70d)),
+                });
+            Assert.True(annotation.IsSuccess, FormatError(annotation.Error));
+
+            OperationResult<SaveReceipt> drawingSave = await drawing.SaveAsync();
+            Assert.True(drawingSave.IsSuccess, FormatError(drawingSave.Error));
+            OperationResult<CadInspectionSnapshot> inspection = await session.Inspection.InspectAsync(drawing.DocumentId);
+            Assert.True(inspection.IsSuccess, FormatError(inspection.Error));
+
+            string requirementGraphJson = "{\"profileId\":\"d09-release\",\"requirements\":["
+                + "{\"requirementId\":\"req-orthographic\",\"semanticClass\":\"OrthographicViews\",\"coverageKey\":\"views.orthographic.coverage\",\"required\":true,\"status\":\"Approved\",\"sourceKind\":\"model_native\",\"method\":\"live-fixture\",\"observedAtUtc\":\"2026-09-18T00:00:00Z\"}]}";
+            string dimensionRequirementJson = "{\"profileId\":\"d09-dimensions\",\"features\":["
+                + "{\"featureId\":\"Plate\",\"displayName\":\"Plate\",\"kind\":\"Plate\",\"required\":true,\"status\":\"Approved\",\"sourceKind\":\"model_native\",\"method\":\"live-fixture\",\"observedAtUtc\":\"2026-09-18T00:00:00Z\",\"definitions\":["
+                + "{\"definitionKey\":\"thickness\",\"displayName\":\"Thickness\",\"kind\":\"Size\",\"classification\":\"Manufacturing\",\"required\":true}],\"datums\":[]}]}";
+            string dimensionEvidenceJson = "[{\"dimensionId\":\"live-thickness-001\",\"featureId\":\"Plate\",\"definitionKey\":\"thickness\",\"classification\":\"Manufacturing\",\"isAssociative\":true,\"isVisible\":true,\"sourceKind\":\"model_native\",\"method\":\"live-fixture\",\"observedAtUtc\":\"2026-09-18T00:00:00Z\"}]";
+            string planOptionsJson = "{\"preferredPrimaryOrientation\":\"Front\",\"preferredPrimaryOrientationApproved\":true,\"projection\":\"FirstAngle\"}";
+            string layoutJson = "{\"sheetId\":\"sheet-1\",\"sheetBounds\":{\"leftMillimeters\":0,\"bottomMillimeters\":0,\"widthMillimeters\":420,\"heightMillimeters\":297},\"margins\":{\"leftMillimeters\":10,\"bottomMillimeters\":10,\"rightMillimeters\":10,\"topMillimeters\":10},\"items\":["
+                + "{\"itemId\":\"view-front\",\"kind\":\"View\",\"requestedBounds\":{\"leftMillimeters\":70,\"bottomMillimeters\":80,\"widthMillimeters\":60,\"heightMillimeters\":40},\"viewId\":\"" + view.Value.ViewId.Value + "\",\"isFixed\":true},"
+                + "{\"itemId\":\"annotation-release\",\"kind\":\"Label\",\"requestedBounds\":{\"leftMillimeters\":90,\"bottomMillimeters\":55,\"widthMillimeters\":25,\"heightMillimeters\":6},\"anchorId\":\"" + annotation.Value!.AnnotationId.Value + "\"}],\"reservedZones\":[]}";
+            string manufacturingJson = "{\"requirements\":["
+                + "{\"requirementId\":\"annotation-req-001\",\"featureIdentity\":\"Plate\",\"kind\":\"Note\",\"viewId\":\"" + view.Value.ViewId.Value + "\",\"coverageKeys\":[\"views.orthographic.coverage\"],\"isCritical\":true}],\"evidence\":["
+                + "{\"evidenceId\":\"annotation-evidence-001\",\"requirementId\":\"annotation-req-001\",\"featureIdentity\":\"Plate\",\"kind\":\"Note\",\"viewId\":\"" + view.Value.ViewId.Value + "\",\"annotationId\":\"" + annotation.Value.AnnotationId.Value + "\",\"provenanceKind\":\"model_native\",\"provenanceMethod\":\"live-fixture\",\"approvalState\":\"Approved\",\"isAssociative\":true,\"isAmbiguous\":false,\"coverageKeys\":[\"views.orthographic.coverage\"]}]}";
+            string escapedDrawingPath = drawingPath.Replace("\\", "\\\\", StringComparison.Ordinal);
+            string escapedPdfPath = pdfPath.Replace("\\", "\\\\", StringComparison.Ordinal);
+            string escapedManifestPath = manifestPath.Replace("\\", "\\\\", StringComparison.Ordinal);
+            string artifactPolicyJson = "{\"artifacts\":["
+                + "{\"format\":\"SLDDRW\",\"targetPath\":\"" + escapedDrawingPath + "\",\"allowOverwrite\":true},"
+                + "{\"format\":\"PDF\",\"targetPath\":\"" + escapedPdfPath + "\",\"allowOverwrite\":true}],"
+                + "\"manifestPath\":\"" + escapedManifestPath + "\"}";
+
+            await using InMemoryMcpHost host = await InMemoryMcpHost.CreateAsync(provider, processId);
+            CallToolResult result = await host.Client.CallToolAsync(
+                "drawing.release",
+                new Dictionary<string, object?>
+                {
+                    ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                    ["documentId"] = drawing.DocumentId.Value,
+                    ["expectedStateHash"] = inspection.Value!.Document.StateHash,
+                    ["requirementGraphJson"] = requirementGraphJson,
+                    ["planOptionsJson"] = planOptionsJson,
+                    ["dimensionRequirementJson"] = dimensionRequirementJson,
+                    ["dimensionEvidenceJson"] = dimensionEvidenceJson,
+                    ["layoutJson"] = layoutJson,
+                    ["manufacturingJson"] = manufacturingJson,
+                    ["artifactPolicyJson"] = artifactPolicyJson,
+                    ["transactionId"] = $"mcp-d09-transaction-{suffix}",
+                    ["idempotencyKey"] = $"mcp-d09-idempotency-{suffix}",
+                });
+
+            Assert.False(result.IsError, string.Join(Environment.NewLine, result.Content) + Environment.NewLine + result.StructuredContent);
+            Assert.Contains("save-export-inspect-manifest-verified", result.StructuredContent!.Value.ToString(), StringComparison.Ordinal);
+            Assert.Contains("artifact-verified", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+            Assert.True(File.Exists(pdfPath));
+            Assert.True(File.Exists(manifestPath));
+            OperationResult<CadInspectionSnapshot> finalInspection = await session.Inspection.InspectAsync(drawing.DocumentId);
+            Assert.True(finalInspection.IsSuccess, FormatError(finalInspection.Error));
+            completed = true;
+        }
+        finally
+        {
+            if (drawing is not null)
+            {
+                await drawing.CloseAsync(CancellationToken.None);
+            }
+
+            if (part is not null)
+            {
+                await part.CloseAsync(CancellationToken.None);
+            }
+
+            bool keepArtifact = string.Equals(
+                Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_KEEP_ARTIFACT"),
+                "1",
+                StringComparison.Ordinal);
+            if (completed && !keepArtifact)
+            {
+                TryDelete(partPath);
+                TryDelete(drawingPath);
+                TryDelete(pdfPath);
+                TryDelete(manifestPath);
             }
         }
     }

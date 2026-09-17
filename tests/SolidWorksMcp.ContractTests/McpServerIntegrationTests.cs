@@ -28,7 +28,7 @@ public sealed class McpServerIntegrationTests
 
         IList<McpClientTool> tools = await host.Client.ListToolsAsync();
 
-        Assert.Equal(7, tools.Count);
+        Assert.Equal(8, tools.Count);
         McpClientTool createTool = Assert.Single(tools, tool => tool.Name == "cad.create-part");
         Assert.Contains("Preconditions", createTool.Description, StringComparison.Ordinal);
         Assert.Contains("Side effects", createTool.Description, StringComparison.Ordinal);
@@ -76,6 +76,36 @@ public sealed class McpServerIntegrationTests
                 ["documentId"] = "drawing-validation-001",
                 ["dimensionRequirementJson"] = "{}",
                 ["dimensionEvidenceJson"] = "[]",
+            });
+
+        Assert.True(invalid.IsError);
+        Assert.Contains(ErrorCodes.InvalidRequest, invalid.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
+    }
+
+    /// <summary>drawing.release rejects malformed high-level JSON before a CAD session is started.</summary>
+    [Fact]
+    public async Task DrawingReleaseMalformedPlanFailsBeforeBusinessExecution()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult invalid = await host.Client.CallToolAsync(
+            "drawing.release",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = "drawing-release-001",
+                ["expectedStateHash"] = "state-001",
+                ["requirementGraphJson"] = "{}",
+                ["planOptionsJson"] = "{}",
+                ["dimensionRequirementJson"] = "{}",
+                ["dimensionEvidenceJson"] = "[]",
+                ["layoutJson"] = "{}",
+                ["manufacturingJson"] = "{}",
+                ["artifactPolicyJson"] = "{}",
+                ["transactionId"] = "transaction-release-001",
+                ["idempotencyKey"] = "idempotency-release-001",
             });
 
         Assert.True(invalid.IsError);

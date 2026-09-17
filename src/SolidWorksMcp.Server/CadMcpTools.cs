@@ -21,7 +21,8 @@ public sealed class CadMcpTools(
     McpOperationCorrelation correlation,
     CadSessionAccessor sessions,
     McpCapabilityNegotiator capabilities,
-    SolidWorksMcpConfiguration configuration)
+    SolidWorksMcpConfiguration configuration,
+    DrawingReleaseService releaseService)
 {
     private readonly ICadProvider provider = provider ?? throw new ArgumentNullException(nameof(provider));
     private readonly McpToolCatalog catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
@@ -29,6 +30,7 @@ public sealed class CadMcpTools(
     private readonly CadSessionAccessor sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
     private readonly McpCapabilityNegotiator capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
     private readonly SolidWorksMcpConfiguration configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+    private readonly DrawingReleaseService releaseService = releaseService ?? throw new ArgumentNullException(nameof(releaseService));
 
     /// <summary>Returns read-only server and provider health.</summary>
     [McpServerTool(Name = "cad.health")]
@@ -585,6 +587,237 @@ public sealed class CadMcpTools(
                 ],
                 [saved.Value.Path],
                 reopened.Value.Document.StateHash));
+        return McpToolResultWriter.Write(result);
+    }
+
+    /// <summary>
+    /// Executes one governed single-part drawing release through the Core transaction engine.
+    /// 通过 Core transaction engine 执行一次受治理的单零件工程图发布。
+    /// </summary>
+    /// <remarks>
+    /// The endpoint accepts one high-level plan and never exposes a loop of COM primitives. Pure requirement, layout
+    /// and manufacturing planners run before session startup; the final provider inspection, export checksums and
+    /// manifest are performed inside the checkpointed transaction. endpoint 接受一个高层 plan，不暴露 COM primitive
+    /// 循环；纯 requirement/layout/manufacturing planner 在启动 session 前完成，最终 provider inspection、export
+    /// checksum 和 manifest 在 checkpointed transaction 内完成。
+    /// </remarks>
+    [McpServerTool(Name = "drawing.release")]
+    [Description("Release one single-part drawing through a bounded QA/compiler plan. Preconditions: schemaVersion=1.0, exact drawing/state hash, approved redacted requirement graph, deterministic layout proof, manufacturing annotation evidence and explicit artifact policy. Side effects: checkpointed drawing save, configured native export, final QA, checksum evidence and a JSON release manifest. No private source drawing content is returned.")]
+    public async Task<CallToolResult> ReleaseDrawingAsync(
+        [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
+        [Description("Stable registered drawing document identity.")] string documentId,
+        [Description("State hash captured immediately before semantic planning.")] string expectedStateHash,
+        [Description("Redacted requirement graph JSON: {profileId,requirements:[{requirementId,semanticClass,coverageKey,required,status,sourceKind,method,observedAtUtc}]}. It must not contain private PDF text.")] string requirementGraphJson,
+        [Description("High-level plan JSON: {preferredPrimaryOrientation,preferredPrimaryOrientationApproved,projection}.")] string planOptionsJson,
+        [Description("Bounded dimension requirement graph JSON; same contract as drawing.validate.")] string dimensionRequirementJson,
+        [Description("Bounded dimension evidence JSON; same contract as drawing.validate.")] string dimensionEvidenceJson,
+        [Description("Bounded layout request JSON with sheetBounds, margins, views/annotations and reserved zones in millimetres.")] string layoutJson,
+        [Description("Manufacturing annotation requirement/evidence JSON with approved provenance and exact native annotation identities.")] string manufacturingJson,
+        [Description("Artifact policy JSON: {artifacts:[{format,targetPath,allowOverwrite}],manifestPath}. Native SLDDrw target must equal the registered drawing path.")] string artifactPolicyJson,
+        [Description("Stable transaction identity used for audit and checkpoint correlation.")] string transactionId,
+        [Description("Stable caller idempotency identity; retrying the same key reconciles the committed transaction.")] string idempotencyKey,
+        [Description("Optional application operation correlation key.")] string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        string correlationId = correlation.Resolve(operationId);
+        if (!string.Equals(schemaVersion, ProtocolSchema.CurrentVersion, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(documentId)
+            || string.IsNullOrWhiteSpace(expectedStateHash)
+            || string.IsNullOrWhiteSpace(transactionId)
+            || string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(
+                    correlationId,
+                    InvalidInput("schemaVersion must be 1.0; documentId, expectedStateHash, transactionId and idempotencyKey are required.")));
+        }
+
+        if (!DrawingReleaseJsonCodec.TryParseRequirements(requirementGraphJson, out PartDrawingRequirementSet? requirements, out string? requirementError)
+            || requirements is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, InvalidInput(requirementError ?? "requirementGraphJson-invalid")));
+        }
+
+        if (!DrawingReleaseJsonCodec.TryParsePlanOptions(planOptionsJson, out DrawingReleasePlanOptions? planOptions, out string? planOptionsError)
+            || planOptions is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, InvalidInput(planOptionsError ?? "planOptionsJson-invalid")));
+        }
+
+        if (!DrawingDimensionJsonCodec.TryParseGraph(
+                dimensionRequirementJson,
+                out PartDrawingDimensionRequirementGraph? dimensionGraph,
+                out string? dimensionGraphError)
+            || dimensionGraph is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, InvalidInput(dimensionGraphError ?? "dimensionRequirementJson-invalid")));
+        }
+
+        if (!DrawingDimensionJsonCodec.TryParseEvidence(
+                dimensionEvidenceJson,
+                out PartDrawingDimensionEvidence[] dimensionEvidence,
+                out string? dimensionEvidenceError))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, InvalidInput(dimensionEvidenceError ?? "dimensionEvidenceJson-invalid")));
+        }
+
+        if (!DrawingReleaseJsonCodec.TryParseLayout(layoutJson, out DrawingLayoutRequest? layoutRequest, out string? layoutError)
+            || layoutRequest is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, InvalidInput(layoutError ?? "layoutJson-invalid")));
+        }
+
+        if (!DrawingReleaseJsonCodec.TryParseManufacturing(
+                manufacturingJson,
+                out DrawingManufacturingInput? manufacturingInput,
+                out string? manufacturingError)
+            || manufacturingInput is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, InvalidInput(manufacturingError ?? "manufacturingJson-invalid")));
+        }
+
+        if (!DrawingReleaseJsonCodec.TryParseArtifactPolicy(
+                artifactPolicyJson,
+                out DrawingArtifactPolicy? artifactPolicy,
+                out string? artifactPolicyError)
+            || artifactPolicy is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, InvalidInput(artifactPolicyError ?? "artifactPolicyJson-invalid")));
+        }
+
+        PartDrawingDimensionPlan dimensionPlan;
+        PartDrawingPlan drawingPlan;
+        DrawingLayoutPlan layoutPlan;
+        DrawingManufacturingAnnotationPlan manufacturingPlan;
+        try
+        {
+            dimensionPlan = PartDrawingDimensionPlanner.Plan(dimensionGraph, dimensionEvidence);
+            drawingPlan = PartDrawingPlanner.Plan(
+                new PartDrawingPlanRequest
+                {
+                    Requirements = requirements,
+                    PreferredPrimaryOrientation = planOptions.PreferredPrimaryOrientation,
+                    PreferredPrimaryOrientationApproved = planOptions.PreferredPrimaryOrientationApproved,
+                    Projection = planOptions.Projection,
+                });
+            layoutPlan = PartDrawingLayoutPlanner.Plan(layoutRequest);
+            manufacturingPlan = ManufacturingAnnotationPlanner.Plan(
+                manufacturingInput.Requirements,
+                manufacturingInput.Evidence);
+        }
+        catch (ArgumentException exception)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(
+                    correlationId,
+                    InvalidInput($"release-plan-invalid: {exception.Message}")));
+        }
+
+        OperationError? capabilityError = capabilities.ValidateInvocation("drawing.release");
+        if (capabilityError is not null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, capabilityError));
+        }
+
+        OperationResult<ICadSession> sessionResult = await sessions.GetOrStartAsync(cancellationToken).ConfigureAwait(false);
+        if (!sessionResult.IsSuccess || sessionResult.Value is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, sessionResult.Error!, sessionResult.Evidence));
+        }
+
+        DocumentId targetDocumentId = new(documentId.Trim());
+        OperationResult<CadInspectionSnapshot> inspection = await sessionResult.Value.Inspection.InspectAsync(
+            targetDocumentId,
+            cancellationToken).ConfigureAwait(false);
+        if (!inspection.IsSuccess || inspection.Value is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, inspection.Error!, inspection.Evidence));
+        }
+
+        if (!inspection.Value.Document.StateHash.Equals(expectedStateHash.Trim(), StringComparison.Ordinal))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingReleaseExecutionResult>(
+                    correlationId,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The drawing state hash no longer matches the release plan.",
+                        ErrorCategories.State,
+                        remediation: "Inspect the exact drawing again and create a new release plan."),
+                    inspection.Evidence));
+        }
+
+        foreach (DrawingManufacturingAnnotationPlanItem item in manufacturingPlan.Items.Where(item => item.Status == ManufacturingAnnotationFindingStatus.Pass))
+        {
+            if (item.ExistingAnnotationId is not AnnotationId annotationId)
+            {
+                return McpToolResultWriter.Write(
+                    OperationResults.Failure<DrawingReleaseExecutionResult>(
+                        correlationId,
+                        new OperationError(
+                            ErrorCodes.ReviewRequired,
+                            "Approved manufacturing evidence must carry an exact native annotation identity.",
+                            ErrorCategories.Policy,
+                            remediation: "Re-inspect native annotations and provide exact associative identities."),
+                        inspection.Evidence));
+            }
+
+            DrawingAnnotationSnapshot? observed = inspection.Value.Annotations.SingleOrDefault(annotation =>
+                annotation.AnnotationId == annotationId);
+            if (observed is null)
+            {
+                return McpToolResultWriter.Write(
+                    OperationResults.Failure<DrawingReleaseExecutionResult>(
+                        correlationId,
+                        new OperationError(
+                            ErrorCodes.SelectionStale,
+                            "Manufacturing evidence references an annotation not present in the exact drawing inspection.",
+                            ErrorCategories.State,
+                            remediation: "Re-inspect the drawing and rebuild the manufacturing evidence graph."),
+                        inspection.Evidence));
+            }
+        }
+
+        PartDrawingCoverageReport coverage = PartDrawingCoverageAnalyzer.Analyze(
+            requirements,
+            drawingPlan,
+            inspection.Value,
+            dimensionPlan,
+            layoutPlan);
+        var preflightQa = new DrawingQaRequest
+        {
+            Drawing = inspection.Value,
+            Coverage = coverage,
+            ManufacturingAnnotations = manufacturingPlan,
+            RequiredArtifactFormats = [.. artifactPolicy.Artifacts.Select(item => item.Format)],
+            Artifacts = [],
+            ExpectedDocumentStateHash = expectedStateHash.Trim(),
+            IncludeArtifactFindings = false,
+        };
+
+        OperationResult<DrawingReleaseExecutionResult> released = await releaseService.ExecuteAsync(
+            sessionResult.Value,
+            new DrawingReleaseExecutionRequest
+            {
+                PreflightQa = preflightQa,
+                ArtifactPolicy = artifactPolicy,
+                TransactionId = new TransactionId(transactionId.Trim()),
+                IdempotencyKey = new IdempotencyKey(idempotencyKey.Trim()),
+            },
+            cancellationToken).ConfigureAwait(false);
+        OperationResult<DrawingReleaseExecutionResult> result = released.IsSuccess
+            ? OperationResults.Success(released.Value!, correlationId, released.Evidence!)
+            : OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, released.Error!, released.Evidence);
         return McpToolResultWriter.Write(result);
     }
 

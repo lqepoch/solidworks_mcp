@@ -100,5 +100,6 @@ public sealed class McpToolCatalog
         new McpToolDescriptor("cad.inspect", "read", "schemaVersion=1.0; stable document ID", "none", CadAbstractions.CadCapabilityNames.Inspection),
         new McpToolDescriptor("drawing.validate", "read", "schemaVersion=1.0; stable drawing document ID; bounded requirement/evidence JSON", "none", CadAbstractions.CadCapabilityNames.Inspection),
         new McpToolDescriptor("drawing.repair", "mutation", "schemaVersion=1.0; exact drawing/state hash; one bounded layout repair action", "moves one exact annotation, saves and reopens the drawing", CadAbstractions.CadCapabilityNames.DrawingMutation),
+        new McpToolDescriptor("drawing.release", "release", "schemaVersion=1.0; exact drawing/state hash; approved requirement/layout/annotation evidence; explicit artifact policy", "checkpointed save, configured export, final QA and evidence manifest", CadAbstractions.CadCapabilityNames.DrawingMutation),
     ]);
 }
