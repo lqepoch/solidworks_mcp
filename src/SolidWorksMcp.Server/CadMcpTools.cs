@@ -6,6 +6,7 @@ using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Core;
 using SolidWorksMcp.EngineeringModel;
 using SolidWorksMcp.Protocol;
+using SolidWorksMcp.RuleEngine;
 using SolidWorksMcp.Tolerancing;
 
 namespace SolidWorksMcp.Server;
@@ -197,7 +198,7 @@ public sealed class CadMcpTools(
     /// 不按每个 COM primitive 暴露 tool；确定性序列由工程服务编排，SOLIDWORKS 调用和 read-back invariant 仍归 Provider。
     /// </remarks>
     [McpServerTool(Name = "cad.build-part-drawing")]
-    [Description("Build one part and its engineering drawing. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group and emits one deterministic compact pattern callout. Side effects: creates a real part, three views, native model-dimension insertion, a semantic pattern note, and a PDF export.")]
+    [Description("Build one part and its engineering drawing under the versioned GB RulePack. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group and emits one deterministic compact pattern callout. Side effects: creates a real part, RulePack-selected projection views, native model-dimension insertion, a semantic pattern note, and a PDF export.")]
     public async Task<CallToolResult> BuildPartDrawingAsync(
         [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
         [Description("Stable part document identity.")] string documentId,
@@ -231,6 +232,26 @@ public sealed class CadMcpTools(
                 out ThroughHolePatternRequest? holePattern))
         {
             return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, validationError!));
+        }
+
+        // Resolve policy before requesting a CAD session. A malformed standard pack is a product invariant failure,
+        // never a reason to open SOLIDWORKS and discover the problem after a mutation has started.
+        // 在请求 CAD session 之前先 resolve policy；标准 RulePack malformed 是产品 invariant failure，不能等到
+        // 打开 SOLIDWORKS 并开始 mutation 后才发现。
+        RulePackResolutionResult rulePackResolution = DrawingRulePackResolver.Resolve(
+            StandardRulePackCatalog.CreateGbRulePack());
+        if (!rulePackResolution.IsValid || rulePackResolution.Pack is null)
+        {
+            string diagnostics = string.Join(
+                "; ",
+                rulePackResolution.Diagnostics.Select(diagnostic => $"{diagnostic.Code}:{diagnostic.RulePath}"));
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<PartDrawingBuildResult>(
+                    correlationId,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        $"The built-in GB drawing RulePack could not be resolved: {diagnostics}",
+                        ErrorCategories.Invariant)));
         }
 
         // Check both capability gates before a provider session is started. This keeps unsupported high-level builds
@@ -267,6 +288,7 @@ public sealed class CadMcpTools(
                 InitialSketchProfile = sketchProfile!,
                 ExtrusionDepth = Length.FromMillimeters(extrusionDepthMillimeters),
                 ScaleDenominator = scaleDenominator,
+                RulePack = rulePackResolution.Pack,
                 ThroughHolePattern = holePattern,
             },
             cancellationToken).ConfigureAwait(false);

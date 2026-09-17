@@ -234,6 +234,9 @@ public sealed class McpBuildPartDrawingLiveTests
         Assert.NotNull(result.StructuredContent);
         JsonElement root = result.StructuredContent!.Value;
         JsonElement value = root.GetProperty("value");
+        string structuredText = result.StructuredContent.Value.ToString();
+        Assert.Contains("GB.rulepack", structuredText, StringComparison.Ordinal);
+        Assert.Contains("FirstAngle", structuredText, StringComparison.Ordinal);
         JsonElement part = value.GetProperty("part");
         JsonElement bodies = part.GetProperty("bodies");
         JsonElement features = part.GetProperty("features");
@@ -262,6 +265,20 @@ public sealed class McpBuildPartDrawingLiveTests
         JsonElement drawing = value.GetProperty("drawing");
         Assert.True(drawing.GetProperty("views").GetArrayLength() >= 3, $"{referenceCase.Id} has insufficient drawing views.");
         Assert.True(drawing.GetProperty("annotations").GetArrayLength() >= 1, $"{referenceCase.Id} has no drawing annotation.");
+        JsonElement[] drawingViews = drawing.GetProperty("views").EnumerateArray().ToArray();
+        bool hasFirstAngleProjectedPlacement = drawingViews.Any(view =>
+        {
+            double x = ReadLength(view.GetProperty("position").GetProperty("x"));
+            double y = ReadLength(view.GetProperty("position").GetProperty("y"));
+            return Math.Abs(x - 90d) < 1d && Math.Abs(y - 50d) < 1d;
+        });
+        string positions = string.Join(
+            "; ",
+            drawingViews.Select(view =>
+                $"{ReadLength(view.GetProperty("position").GetProperty("x")):G17},{ReadLength(view.GetProperty("position").GetProperty("y")):G17}"));
+        Assert.True(
+            hasFirstAngleProjectedPlacement,
+            $"{referenceCase.Id} did not apply the GB first-angle projected-view placement; actual view positions={positions} mm.");
     }
 
     /// <summary>Reads a serialized canonical millimetre value from the MCP contract. / 从 MCP contract 读取序列化后的毫米值。</summary>

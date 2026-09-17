@@ -332,6 +332,10 @@ public sealed class McpServerIntegrationTests
         Assert.Contains("Section A-A", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.pattern-callout", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.pattern-callout.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.rule-pack.id", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("GB.rulepack", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.rule-pack.projection", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("FirstAngle", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("2X", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("THRU", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("PITCH 16", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);

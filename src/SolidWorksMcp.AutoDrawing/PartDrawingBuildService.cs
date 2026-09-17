@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Protocol;
+using SolidWorksMcp.RuleEngine;
 
 namespace SolidWorksMcp.AutoDrawing;
 
@@ -125,7 +126,7 @@ public static class PartDrawingBuildService
 
             drawing = createdDrawing.Value;
             ImmutableArray<DrawingViewSnapshot>.Builder views = ImmutableArray.CreateBuilder<DrawingViewSnapshot>(3);
-            foreach (DrawingSeed seed in DrawingSeeds())
+            foreach (DrawingSeed seed in DrawingSeeds(request.RulePack))
             {
                 OperationResult<DrawingViewSnapshot> view = await drawing.AddViewAsync(
                     new DrawingViewRequest
@@ -312,6 +313,10 @@ public static class PartDrawingBuildService
                 ModelDimensions = modelDimensions.Value,
                 PatternCallout = patternCallout,
                 Pdf = pdf.Value,
+                RulePackId = request.RulePack?.PackId,
+                Projection = request.RulePack is null
+                    ? null
+                    : ToPlannerProjection(request.RulePack.Values.ProjectionMethod),
             };
             return OperationResults.Success(
                 result,
@@ -338,6 +343,15 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.pattern-callout.distribution", patternCalloutPlan?.Distribution ?? "none"),
                         new EvidenceObservation("drawing.pattern-callout.coverage-count", patternCalloutPlan?.CoverageKeys.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
                         new EvidenceObservation("drawing.pattern-callout.reopened", patternCallout is null ? "not-requested" : "verified"),
+                        new EvidenceObservation("drawing.rule-pack.id", request.RulePack?.PackId ?? "legacy-unresolved"),
+                        new EvidenceObservation(
+                            "drawing.rule-pack.projection",
+                            request.RulePack?.Values.ProjectionMethod.ToString() ?? "legacy-request"),
+                        new EvidenceObservation(
+                            "drawing.rule-pack.provenance.projection",
+                            request.RulePack is null
+                                ? "legacy-unresolved"
+                                : ProjectionSourceId(request.RulePack)),
                         new EvidenceObservation("export.format", pdf.Value.Format),
                     ],
                     [part.Path, drawing.Path, pdf.Value.TargetPath]));
@@ -386,16 +400,55 @@ public static class PartDrawingBuildService
             return "Drawing scale denominator must be greater than zero.";
         }
 
+        if (request.RulePack is not null)
+        {
+            // The provider contract currently accepts integral 1:N denominators. The RulePack gate therefore rejects
+            // an unapproved request before any part/drawing document is created.
+            // 当前 Provider contract 接受整数 1:N 分母，因此 RulePack gate 必须在创建任何文档前拒绝未批准比例。
+            if (string.IsNullOrWhiteSpace(request.RulePack.PackId))
+            {
+                return "Resolved drawing RulePack identity is required.";
+            }
+
+            if (!request.RulePack.Values.AllowedScaleDenominators.Any(value =>
+                    Math.Abs(value.Value - request.ScaleDenominator) < 1e-9))
+            {
+                return $"Drawing scale denominator {request.ScaleDenominator} is not permitted by RulePack '{request.RulePack.PackId}'.";
+            }
+        }
+
         return SketchProfileValidation.Validate(request.InitialSketchProfile)
             ?? string.Empty;
     }
 
-    private static IEnumerable<DrawingSeed> DrawingSeeds()
+    private static IEnumerable<DrawingSeed> DrawingSeeds(ResolvedDrawingRulePack? rulePack)
     {
         yield return new DrawingSeed("Front", "Front", 90d, 125d);
-        yield return new DrawingSeed("Top", "Top", 90d, 210d);
+        // First-angle places the projected top view below the front view; third-angle places it above. This is a
+        // deliberate paper-space consequence of the resolved rule, not an ActiveDoc/UI guess.
+        // 第一角把俯视图放在主视图下方，第三角放在上方；这是 resolved rule 的纸空间结果，不猜 ActiveDoc/UI。
+        double projectedY = rulePack?.Values.ProjectionMethod switch
+        {
+            DrawingProjectionMethod.FirstAngle => 50d,
+            DrawingProjectionMethod.ThirdAngle => 210d,
+            _ => 210d,
+        };
+        yield return new DrawingSeed("Top", "Top", 90d, projectedY);
         yield return new DrawingSeed("Isometric", "Isometric", 210d, 125d);
     }
+
+    private static PartDrawingProjectionMethod ToPlannerProjection(DrawingProjectionMethod method) =>
+        method switch
+        {
+            DrawingProjectionMethod.FirstAngle => PartDrawingProjectionMethod.FirstAngle,
+            DrawingProjectionMethod.ThirdAngle => PartDrawingProjectionMethod.ThirdAngle,
+            _ => throw new ArgumentOutOfRangeException(nameof(method), method, "Unknown RulePack projection method."),
+        };
+
+    private static string ProjectionSourceId(ResolvedDrawingRulePack rulePack) =>
+        rulePack.Provenance.TryGetValue("projection.method", out RuleValueProvenance? provenance)
+            ? provenance.Source.SourceId
+            : "unavailable";
 
     private static OperationResult<PartDrawingBuildResult> Failure<T>(OperationResult<T> failure) =>
         OperationResults.Failure<PartDrawingBuildResult>(failure.OperationId, failure.Error!, failure.Evidence);
@@ -432,6 +485,12 @@ public sealed record PartDrawingBuildRequest
 
     /// <summary>Readable 1:N drawing scale denominator.</summary>
     public int ScaleDenominator { get; init; } = 1;
+
+    /// <summary>
+    /// Resolved vendor-neutral drawing rules used by this build.
+    /// 本次 build 使用的已 resolve 厂商无关制图规则。
+    /// </summary>
+    public ResolvedDrawingRulePack? RulePack { get; init; }
 
     /// <summary>Stable semantic extrusion feature name.</summary>
     public string ExtrusionFeatureName { get; init; } = "Profile-Extrusion";
@@ -475,4 +534,10 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>Verified PDF export receipt.</summary>
     public required ExportReceipt Pdf { get; init; }
+
+    /// <summary>Resolved RulePack identity recorded for audit.</summary>
+    public string? RulePackId { get; init; }
+
+    /// <summary>Projection method actually selected from the resolved RulePack.</summary>
+    public PartDrawingProjectionMethod? Projection { get; init; }
 }

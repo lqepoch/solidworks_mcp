@@ -3,6 +3,7 @@ using SolidWorksMcp.AutoDrawing;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.EngineeringModel;
 using SolidWorksMcp.Protocol;
+using SolidWorksMcp.RuleEngine;
 
 namespace SolidWorksMcp.UnitTests;
 
@@ -173,6 +174,55 @@ public sealed class PartDrawingPlannerTests
 
         Assert.Equal(PartDrawingViewRole.Section, plan.Items[^1].Role);
         Assert.Equal("z-section", plan.Items[^1].CandidateId);
+    }
+
+    [Fact]
+    public void PlannerCarriesResolvedRulePackProjectionAndProvenance()
+    {
+        PartDrawingRequirementSet requirements = ApprovedRequirements(PartDrawingSemanticClass.OrthographicViews);
+        DrawingRulePack standard = StandardRulePackCatalog.CreateGbRulePack();
+        RulePackResolutionResult firstAngle = DrawingRulePackResolver.Resolve(standard);
+        RulePackResolutionResult thirdAngle = DrawingRulePackResolver.Resolve(
+            standard,
+            [
+                new DrawingRulePackOverride
+                {
+                    PackId = "enterprise-third-angle",
+                    Layer = RulePackLayer.Enterprise,
+                    Source = new RulePackSourceMetadata
+                    {
+                        SourceId = "enterprise-projection-policy",
+                        SourceUrl = "https://example.invalid/enterprise/projection",
+                        Status = "test-reviewed",
+                        RetrievedAtUtc = DateTimeOffset.Parse("2026-09-18T00:00:00Z", CultureInfo.InvariantCulture),
+                        LicenseNote = "Test metadata only.",
+                    },
+                    ProjectionMethod = DrawingProjectionMethod.ThirdAngle,
+                },
+            ]);
+
+        PartDrawingPlan firstPlan = PartDrawingPlanner.Plan(
+            new PartDrawingPlanRequest
+            {
+                Requirements = requirements,
+                PreferredPrimaryOrientationApproved = true,
+                RulePack = firstAngle.Pack,
+            });
+        PartDrawingPlan thirdPlan = PartDrawingPlanner.Plan(
+            new PartDrawingPlanRequest
+            {
+                Requirements = requirements,
+                PreferredPrimaryOrientationApproved = true,
+                RulePack = thirdAngle.Pack,
+            });
+
+        Assert.Equal(PartDrawingProjectionMethod.FirstAngle, firstPlan.Projection);
+        Assert.Equal(PartDrawingProjectionMethod.ThirdAngle, thirdPlan.Projection);
+        Assert.NotEqual(firstPlan.Projection, thirdPlan.Projection);
+        Assert.Equal("GB.rulepack", firstPlan.RulePack!.PackId);
+        Assert.True(thirdPlan.RulePack!.TryExplain("projection.method", out RulePackExplanation? explanation));
+        Assert.Equal("enterprise-third-angle", explanation!.PackId);
+        Assert.Equal("enterprise-projection-policy", explanation.Source.SourceId);
     }
 
     private static PartDrawingRequirementSet ApprovedRequirements(params PartDrawingSemanticClass[] classes)

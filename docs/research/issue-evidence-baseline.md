@@ -1148,16 +1148,24 @@ licensing notes only; standard full text, scanned pages and copyrighted tables a
 explicit compiler defaults and are not presented as a complete transcription of those standards. Enterprise/customer
 packs remain the governed place for project-specific clauses and detailed tolerance tables.
 
-本切片只建立 RulePack 数据和 provenance 基础，还没有声称 AutoDrawing 已按两个 RulePack 完成 native SOLIDWORKS
-图纸再生成；下一步必须把 'ResolvedDrawingRulePack' 接到 view planner、dimension planner、layout/QA 和真实 Provider
-出图，并以同一个私有单零件测试工作区抽取两个测试验证。秘密 '图纸/' PDF 不进入仓库、日志、截图或 artifact。
+本切片已经把 'ResolvedDrawingRulePack' 接入 part view planner、part-to-drawing build service 和 MCP 高层入口：
+默认 native build 使用 GB profile 的第一角投影布局，并在请求 scale 不被 RulePack 允许时于 Provider session 之前 fail closed。
+RulePack identity、projection 和 projection provenance 会进入 build evidence。它仍不是完整 Drawing Compiler：dimension
+coverage、title block、section/detail 自动选择、layout/QA 和企业/customer RulePack 输入仍需后续 Issue 实现。
+秘密 '图纸/' PDF 不进入仓库、日志、截图或 artifact。
 
 Focused and Hosted evidence:
 
     dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
     dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~RulePackTests --logger "console;verbosity=minimal" # exit 0; 7 passed; 0 failed; 0 skipped
-    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                               # exit 0; Unit 105 + Contract 16 + FakeCad 11 passed
+    dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~PartDrawingPlannerTests --logger "console;verbosity=minimal" # exit 0; 5 passed; 0 failed; 0 skipped
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                               # exit 0; Unit 106 + Contract 16 + FakeCad 11 passed
+    dotnet build tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~McpReferenceDrivenSinglePartClassesCreateVerifiedThreeDAndTwoDArtifacts -NoBuild # exit 0; Live 1 passed; 0 failed; 0 skipped
+    SLDWORKS_COUNT_BEFORE=0
+    SLDWORKS_COUNT_AFTER_OLD=0
+    SLDWORKS_COUNT_AFTER=0
     git diff --check                                                                                  # exit 0
 
 The official metadata pages used for this catalog are [GB/T 1800.1-2020](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B2EA3A6454B903DCF466A0CE16F2ED26),
@@ -1165,6 +1173,11 @@ The official metadata pages used for this catalog are [GB/T 1800.1-2020](https:/
 [GB/T 1182-2018](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=C87A687A21B36E2F2D3A09BDF03DCA01). The pages identify
 the standards and their current catalogue status; the implementation intentionally uses metadata rather than copying
 the standard text.
+
+The retained native PDFs from the latest run were rendered and visually checked from the user-local Live workspace:
+the rounded plate has a real solid body, front/top/isometric views, a native dimension and first-angle top-view placement;
+the formed U-bracket has the corresponding curved wall geometry and native dimension. The generated artifacts remain
+outside Git and contain no private source-PDF identifiers.
 
 The focused tests cover round-trip fingerprint stability, insertion-order independence, duplicate node identity,
 dangling edges, orphan requirements, directed cycles, added/removed/changed node and edge diff entries, and empty diffs.

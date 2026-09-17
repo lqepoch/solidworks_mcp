@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using SolidWorksMcp.EngineeringModel;
 using SolidWorksMcp.Protocol;
+using SolidWorksMcp.RuleEngine;
 
 namespace SolidWorksMcp.AutoDrawing;
 
@@ -100,6 +101,17 @@ public sealed record PartDrawingPlanRequest
     /// <summary>Projection method supplied by a versioned RulePack.</summary>
     public PartDrawingProjectionMethod Projection { get; init; } = PartDrawingProjectionMethod.FirstAngle;
 
+    /// <summary>
+    /// Resolved rule policy carried into the plan with field-level provenance.
+    /// 将已 resolve 且带字段级 provenance 的规则策略带入 plan。
+    /// </summary>
+    /// <remarks>
+    /// Null is retained only for legacy unit callers that explicitly exercise the low-level planner contract. The
+    /// high-level compiler path should always resolve a RulePack before planning.
+    /// null 只为兼容显式测试低层 planner contract；高层 compiler 路径应始终先 resolve RulePack。
+    /// </remarks>
+    public ResolvedDrawingRulePack? RulePack { get; init; }
+
     /// <summary>Comparable section/detail candidates; source paths and raw drawing text are forbidden.</summary>
     public ImmutableArray<PartDrawingViewCandidate> ViewCandidates { get; init; } = [];
 }
@@ -146,6 +158,10 @@ public sealed record PartDrawingPlan
 
     /// <summary>Projection method chosen by policy.</summary>
     public required PartDrawingProjectionMethod Projection { get; init; }
+
+    /// <summary>Resolved rule policy and provenance used by this plan.</summary>
+    /// <summary>本 plan 使用的 resolved rule policy 与 provenance。</summary>
+    public ResolvedDrawingRulePack? RulePack { get; init; }
 
     /// <summary>Deterministically ordered view plan items.</summary>
     public ImmutableArray<PartDrawingPlanItem> Items { get; init; } = [];
@@ -285,10 +301,21 @@ public static class PartDrawingPlanner
         {
             ProfileId = request.Requirements.ProfileId,
             Status = status,
-            Projection = request.Projection,
+            Projection = request.RulePack is null
+                ? request.Projection
+                : ToPlannerProjection(request.RulePack.Values.ProjectionMethod),
+            RulePack = request.RulePack,
             Items = [.. items],
             Diagnostics = [.. diagnostics.Distinct(StringComparer.Ordinal)],
             BlockingCoverageKeys = [.. blockingCoverageKeys.Distinct(StringComparer.Ordinal)],
+        };
+
+    private static PartDrawingProjectionMethod ToPlannerProjection(DrawingProjectionMethod method) =>
+        method switch
+        {
+            DrawingProjectionMethod.FirstAngle => PartDrawingProjectionMethod.FirstAngle,
+            DrawingProjectionMethod.ThirdAngle => PartDrawingProjectionMethod.ThirdAngle,
+            _ => throw new ArgumentOutOfRangeException(nameof(method), method, "Unknown RulePack projection method."),
         };
 
     private static PartDrawingRequirement? Find(PartDrawingRequirementSet requirements, PartDrawingSemanticClass semanticClass) =>
