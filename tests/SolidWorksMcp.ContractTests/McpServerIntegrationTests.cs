@@ -84,6 +84,63 @@ public sealed class McpServerIntegrationTests
         Assert.NotNull(result.StructuredContent);
     }
 
+    /// <summary>Valid closed line/arc profile JSON crosses the compact MCP boundary without exposing COM types.</summary>
+    /// <remarks>
+    /// This is intentionally a generic D-shaped profile. It verifies only the public schema/validation path; native
+    /// geometry remains the responsibility of the SOLIDWORKS provider Live suite. 这里使用通用 D 形轮廓，只验证
+    /// 公共 schema 和 validation path；native geometry 仍由 SOLIDWORKS Provider Live suite 负责。
+    /// </remarks>
+    [Fact]
+    public async Task ValidStructuredSketchProfileReachesFakeProvider()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "cad.create-part",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = "mcp-curved-part-001",
+                ["configuration"] = "Default",
+                ["initialSketchProfileJson"] = "{\"segments\":["
+                    + "{\"kind\":\"line\",\"startXMillimeters\":-20,\"startYMillimeters\":-20,\"endXMillimeters\":20,\"endYMillimeters\":-20},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":20,\"startYMillimeters\":-20,\"endXMillimeters\":20,\"endYMillimeters\":0},"
+                    + "{\"kind\":\"arc\",\"startXMillimeters\":20,\"startYMillimeters\":0,\"throughXMillimeters\":0,\"throughYMillimeters\":22,\"endXMillimeters\":-20,\"endYMillimeters\":0},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":-20,\"startYMillimeters\":0,\"endXMillimeters\":-20,\"endYMillimeters\":-20}"
+                    + "]}",
+            });
+
+        Assert.False(result.IsError);
+        Assert.Equal(1, countingProvider.StartSessionCount);
+    }
+
+    /// <summary>Disconnected profile JSON fails before provider/session startup.</summary>
+    [Fact]
+    public async Task DisconnectedStructuredSketchProfileFailsBeforeBusinessExecution()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "cad.create-part",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = "mcp-invalid-curved-part-001",
+                ["configuration"] = "Default",
+                ["initialSketchProfileJson"] = "{\"segments\":["
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":0,\"endXMillimeters\":10,\"endYMillimeters\":0},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":20,\"startYMillimeters\":0,\"endXMillimeters\":0,\"endYMillimeters\":10},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":10,\"endXMillimeters\":0,\"endYMillimeters\":0}"
+                    + "]}",
+            });
+
+        Assert.True(result.IsError);
+        Assert.Contains(ErrorCodes.InvalidRequest, result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
+    }
+
     /// <summary>Capability negotiation must reject an unsupported provider combination before session startup.</summary>
     [Fact]
     public async Task UnsupportedProviderCapabilityFailsDeterministicallyBeforeSessionStartup()

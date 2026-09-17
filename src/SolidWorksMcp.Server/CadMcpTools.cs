@@ -72,13 +72,14 @@ public sealed class CadMcpTools(
 
     /// <summary>Creates one part after schema/version and identity validation.</summary>
     [McpServerTool(Name = "cad.create-part")]
-    [Description("Create one CAD part. Preconditions: schemaVersion=1.0, valid document/configuration, and for native mode an explicit path below the configured allowlist. Side effects: creates one part document; no drawing generation.")]
+    [Description("Create one CAD part. Preconditions: schemaVersion=1.0, valid document/configuration, and for native mode an explicit path below the configured allowlist. Optional initialSketchProfileJson is a closed line/arc profile in millimetres. Side effects: creates one part document; no drawing generation.")]
     public async Task<CallToolResult> CreatePartAsync(
         [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
         [Description("Stable document identity; it is not a display title.")] string documentId,
         [Description("Active configuration name.")] string configuration,
         [Description("Explicit absolute .sldprt output path below the configured path allowlist; omit only for FakeCad.")] string? path = null,
         [Description("Optional initial circle radius in millimetres; this is not a SOLIDWORKS metre value.")] double? initialCircleRadiusMillimeters = null,
+        [Description("Optional JSON profile with segments [{kind: line|arc, startXMillimeters, startYMillimeters, throughXMillimeters, throughYMillimeters, endXMillimeters, endYMillimeters}]. It must be a connected closed loop; arc through fields are required only for arc segments.")] string? initialSketchProfileJson = null,
         [Description("Optional application operation correlation key.")] string? operationId = null,
         CancellationToken cancellationToken = default)
     {
@@ -94,9 +95,10 @@ public sealed class CadMcpTools(
             Configuration = configuration,
             Path = path,
             InitialCircleRadiusMillimeters = initialCircleRadiusMillimeters,
+            InitialSketchProfileJson = initialSketchProfileJson,
         };
         string correlationId = correlation.Resolve(input?.OperationId);
-        if (!TryValidate(input, out OperationError? validationError))
+        if (!TryValidate(input, out OperationError? validationError, out SketchProfileRequest? sketchProfile))
         {
             return McpToolResultWriter.Write(OperationResults.Failure<CadDocumentSummary>(correlationId, validationError!));
         }
@@ -125,6 +127,7 @@ public sealed class CadMcpTools(
                 InitialCircleRadius = validInput.InitialCircleRadiusMillimeters is double radius
                     ? Length.FromMillimeters(radius)
                     : null,
+                InitialSketchProfile = sketchProfile,
             },
             cancellationToken).ConfigureAwait(false);
         OperationResult<CadDocumentSummary> result = created.IsSuccess
@@ -190,9 +193,13 @@ public sealed class CadMcpTools(
         IsDirty = document.IsDirty,
     };
 
-    private static bool TryValidate(CreatePartToolInput? input, out OperationError? error)
+    private static bool TryValidate(
+        CreatePartToolInput? input,
+        out OperationError? error,
+        out SketchProfileRequest? sketchProfile)
     {
         error = null;
+        sketchProfile = null;
         if (input is null)
         {
             error = InvalidInput("create-part input is required");
@@ -213,6 +220,18 @@ public sealed class CadMcpTools(
             && (!double.IsFinite(radius) || radius <= 0d))
         {
             error = InvalidInput("initialCircleRadiusMillimeters must be finite and greater than zero");
+        }
+        else if (input.InitialCircleRadiusMillimeters is not null
+            && !string.IsNullOrWhiteSpace(input.InitialSketchProfileJson))
+        {
+            error = InvalidInput("initialCircleRadiusMillimeters and initialSketchProfileJson are mutually exclusive");
+        }
+        else if (!SketchProfileMcpCodec.TryParse(
+                     input.InitialSketchProfileJson,
+                     out sketchProfile,
+                     out string? profileError))
+        {
+            error = InvalidInput(profileError ?? "initialSketchProfileJson-invalid");
         }
 
         return error is null;
@@ -275,6 +294,10 @@ public sealed class CreatePartToolInput
     /// <summary>Optional initial circle radius in millimetres.</summary>
     [Description("Optional initial circle radius in millimetres.")]
     public double? InitialCircleRadiusMillimeters { get; init; }
+
+    /// <summary>Optional validated closed line/arc profile encoded as bounded JSON.</summary>
+    [Description("Optional connected closed line/arc profile JSON in canonical millimetres.")]
+    public string? InitialSketchProfileJson { get; init; }
 }
 
 /// <summary>Schema-visible input for the read-only inspect tool.</summary>

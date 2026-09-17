@@ -59,6 +59,29 @@ close the owned process, this section is the current state.
 - Hosted-safe build/test remains required after this evidence update. No complete B06, AutoDrawing compiler, drawing
   release, assembly or full Epic completion claim is made.
 
+## MCP structured-profile contract evidence (partial)
+
+The MCP boundary now exposes one bounded `initialSketchProfileJson` property on `cad.create-part`. The field accepts
+only a connected, closed line/three-point-arc profile in canonical millimetres; malformed JSON, non-finite points,
+unsupported curve kinds, open loops and disconnected segments fail before provider session startup. The server codec
+contains no SOLIDWORKS COM reference and delegates topology validation to the shared `CadAbstractions` validator.
+
+The FakeCad provider retains a privacy-safe profile summary in create/inspect evidence and state material (primitive
+counts plus a SHA-256 digest), so acceptance cannot be satisfied by accepting then dropping the profile. Raw source
+drawing coordinates are not emitted by this evidence path. This is a schema/provider contract slice; it does not claim
+that `cad.create-part` itself is already a high-level drawing compiler.
+
+Evidence command and result for this slice:
+
+    dotnet format SolidWorksMcp.slnx --verify-no-changes --no-restore --verbosity minimal # exit 0
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore -p:SolidWorksInstallRoot='D:\\Solidworks2022\\SOLIDWORKS' # exit 0; 0 warnings; 0 errors
+    dotnet test tests/SolidWorksMcp.ContractTests/SolidWorksMcp.ContractTests.csproj -c Release --no-build --no-restore --verbosity minimal # exit 0; 9 passed; 0 skipped
+    dotnet test tests/SolidWorksMcp.FakeCadTests/SolidWorksMcp.FakeCadTests.csproj -c Release --no-build --no-restore --verbosity minimal # exit 0; 10 passed; 0 skipped
+
+The next native step must invoke this MCP tool against the same one-process Live harness and then prove the resulting
+part/drawing artifacts. Every Live invocation continues to close stale SOLIDWORKS processes before starting exactly one
+fresh owned process; an existing user session is never reused implicitly.
+
 ## Authoritative execution DAG
 
 The root Epic comment defines this critical path:

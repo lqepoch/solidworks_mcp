@@ -5,8 +5,14 @@ using SolidWorksMcp.Protocol;
 namespace SolidWorksMcp.Provider.Fake;
 
 /// <summary>Deterministic in-memory part document with body, feature and inspection state.</summary>
-internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId documentId, string path, string configuration) : FakeCadDocument(session, documentId, path, configuration, CadDocumentType.Part), ICadPartDocument
+internal sealed class FakeCadPartDocument(
+    FakeCadSession session,
+    DocumentId documentId,
+    string path,
+    string configuration,
+    SketchProfileRequest? profile = null) : FakeCadDocument(session, documentId, path, configuration, CadDocumentType.Part), ICadPartDocument
 {
+    private readonly SketchProfileRequest? initialSketchProfile = profile;
     private readonly Dictionary<BodyId, FakeBodyState> bodies = [];
     private readonly List<FeatureSnapshot> features = [];
     private readonly Dictionary<string, FakeDimensionState> dimensions = CreateDimensionMap();
@@ -306,6 +312,13 @@ internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId doc
         Features = [.. features.OrderBy(feature => feature.FeatureId.Value, StringComparer.Ordinal)],
     };
 
+    /// <summary>Returns profile evidence for the inspection facade without exposing provider-specific geometry.</summary>
+    /// <remarks>Inspection 也必须能证明 profile 没有被静默丢弃，但只返回稳定摘要而不是原始点坐标。</remarks>
+    internal IReadOnlyCollection<EvidenceObservation> GetInitialSketchProfileEvidence() =>
+        initialSketchProfile is null
+            ? []
+            : FakeCadSketchProfileEvidence.AcceptedObservations(initialSketchProfile);
+
     /// <inheritdoc />
     protected override string DescribeState() => string.Join(
         ";",
@@ -314,7 +327,8 @@ internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId doc
             .Select(body => body.Describe()),
         features
             .OrderBy(feature => feature.FeatureId.Value, StringComparer.Ordinal)
-            .Select(feature => $"feature:{feature.FeatureId.Value}:{feature.Kind}:{feature.Depth?.Millimeters:G17}"));
+            .Select(feature => $"feature:{feature.FeatureId.Value}:{feature.Kind}:{feature.Depth?.Millimeters:G17}"),
+        FakeCadSketchProfileEvidence.StateToken(initialSketchProfile));
 
     // Keep the comparer explicit; replacing this with a collection expression would silently make lookups case-sensitive.
     // 保留显式 comparer；若改成 collection expression 会悄悄丢失不区分大小写的查找语义。

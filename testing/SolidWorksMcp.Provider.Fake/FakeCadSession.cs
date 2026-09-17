@@ -65,13 +65,39 @@ internal sealed class FakeCadSession : ICadSession
             return Task.FromResult(FakeCadResults.Invalid<ICadPartDocument>("create-part", "The part request is required."));
         }
 
+        // Validate before registering a document: an invalid profile must fail closed and must not leave a partially
+        // created fake document behind.  在注册 document 前验证；无效 profile 必须 fail-closed，不能留下半创建状态。
+        if (request.InitialSketchProfile is not null
+            && FakeCadSketchProfileEvidence.Validate(request.InitialSketchProfile) is string validationError)
+        {
+            return Task.FromResult(
+                FakeCadResults.Failure<ICadPartDocument>(
+                    "create-part",
+                    new OperationError(
+                        ErrorCodes.InvalidRequest,
+                        $"The initial sketch profile is invalid: {validationError}.",
+                        ErrorCategories.Validation,
+                        remediation: "Provide one connected closed profile made from valid line or three-point-arc segments."),
+                    FakeCadSketchProfileEvidence.RejectedObservations(validationError)));
+        }
+
+        EvidenceObservation[] profileEvidence = request.InitialSketchProfile is null
+            ? []
+            : FakeCadSketchProfileEvidence.AcceptedObservations(request.InitialSketchProfile);
+
         return CreateDocumentAsync<ICadPartDocument>(
             request.RequestedDocumentId,
             request.Path,
             request.Configuration,
             CadDocumentType.Part,
-            static (session, id, path, configuration) => new FakeCadPartDocument(session, id, path, configuration),
-            cancellationToken);
+            (session, id, path, configuration) => new FakeCadPartDocument(
+                session,
+                id,
+                path,
+                configuration,
+                request.InitialSketchProfile),
+            cancellationToken,
+            profileEvidence);
     }
 
     /// <inheritdoc />
@@ -193,7 +219,8 @@ internal sealed class FakeCadSession : ICadSession
         string configuration,
         CadDocumentType documentType,
         Func<FakeCadSession, DocumentId, string, string, FakeCadDocument> factory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyCollection<EvidenceObservation>? additionalEvidence = null)
         where TContract : ICadDocument
     {
         string operation = $"create-{documentType.ToString().ToLowerInvariant()}";
@@ -243,12 +270,17 @@ internal sealed class FakeCadSession : ICadSession
             FakeCadDocument fakeDocument = factory(this, documentId, path, configuration.Trim());
             var contract = (TContract)(ICadDocument)fakeDocument;
             documents.Add(documentId, fakeDocument);
-            return Task.FromResult(
-                FakeCadResults.Success(
-                    contract,
-                    operation,
-                    new EvidenceObservation("document.id", documentId.Value),
-                    new EvidenceObservation("document.type", documentType.ToString())));
+            var observations = new List<EvidenceObservation>
+            {
+                new("document.id", documentId.Value),
+                new("document.type", documentType.ToString()),
+            };
+            if (additionalEvidence is not null)
+            {
+                observations.AddRange(additionalEvidence);
+            }
+
+            return Task.FromResult(FakeCadResults.Success(contract, operation, [.. observations]));
         }
     }
 

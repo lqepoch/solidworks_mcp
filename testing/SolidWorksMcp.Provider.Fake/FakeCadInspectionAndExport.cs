@@ -52,16 +52,24 @@ internal sealed class FakeCadInspectionService(FakeCadSession session) : ICadIns
         }
 
         CadInspectionSnapshot snapshot = document.BuildInspection();
-        return Task.FromResult(
-            FakeCadResults.Success(
-                snapshot,
-                operation,
-                new EvidenceObservation("document.id", documentId.Value),
-                new EvidenceObservation("state.hash", snapshot.Document.StateHash),
-                new EvidenceObservation("body.count", snapshot.Bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                new EvidenceObservation("feature.count", snapshot.Features.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                new EvidenceObservation("view.count", snapshot.Views.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                new EvidenceObservation("annotation.count", snapshot.Annotations.Length.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+        var observations = new List<EvidenceObservation>
+        {
+            new("document.id", documentId.Value),
+            new("state.hash", snapshot.Document.StateHash),
+            new("body.count", snapshot.Bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("feature.count", snapshot.Features.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("view.count", snapshot.Views.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            new("annotation.count", snapshot.Annotations.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        };
+        if (document is FakeCadPartDocument partDocument)
+        {
+            // A valid profile is observable on inspect as well as create; this prevents a fake implementation from
+            // accepting the request and then silently dropping it.  valid profile 在 inspect/create 都可观察，防止
+            // Fake 实现“接收但丢弃”请求。
+            observations.AddRange(partDocument.GetInitialSketchProfileEvidence());
+        }
+
+        return Task.FromResult(FakeCadResults.Success(snapshot, operation, [.. observations]));
     }
 
     private static OperationError ClosedError() => new(
