@@ -1102,6 +1102,36 @@ assembly stack-ups remain follow-up work and are not represented as passed here.
 engineering-intelligence explanation boundary; it does not infer tolerances from drawings or release a drawing by
 itself.
 
+## C01 immutable engineering graph diff and invariant evidence / C01 immutable 工程语义图 diff 与不变量证据
+
+Issue #23 requires versioned immutable graph contracts that keep CAD entities, engineering requirements and drawing
+annotations as distinct identities, together with round-trip/diff behavior and rejection of invalid cycles, orphan
+requirements and duplicate identities. `EngineeringGraph` now provides `CreateDiff`, which compares stable node IDs and
+edge endpoint/kind identities rather than insertion order. Node payload changes and edge provenance-rationale changes
+are reported separately in immutable `EngineeringGraphNodeChange` and `EngineeringGraphEdgeChange` collections.
+
+Issue #23 要求 versioned immutable graph contract 保持 CAD entity、engineering requirement 和 drawing annotation 的
+identity 分离，同时支持 round-trip/diff，并拒绝非法环、孤立 requirement 和重复 identity。`EngineeringGraph` 现在提供
+`CreateDiff`：按 stable node ID 及 edge endpoint/kind identity 比较，不依赖插入顺序；node payload 变化和 edge provenance
+rationale 变化分别记录在 immutable `EngineeringGraphNodeChange` 与 `EngineeringGraphEdgeChange` 中。
+
+The graph constructor now rejects duplicate relationship identities, directed dependency/provenance cycles and isolated
+`EngineeringRequirement` nodes before a planner can consume the snapshot. JSON round-trip re-runs the same validation, and
+the implementation remains in `SolidWorksMcp.EngineeringModel` with no SOLIDWORKS interop reference.
+
+本次 graph constructor 在 planner 消费 snapshot 之前拒绝重复 relationship identity、有向 dependency/provenance cycle 以及
+没有任何 semantic relationship 的孤立 `EngineeringRequirement`。JSON round-trip 会重新执行同一套验证；实现仍位于
+`SolidWorksMcp.EngineeringModel`，没有 SOLIDWORKS interop 引用。
+
+Focused evidence:
+
+    dotnet format tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-restore --filter FullyQualifiedName~EngineeringGraphTests --logger "console;verbosity=minimal" # exit 0; 8 passed; 0 failed; 0 skipped
+
+The focused tests cover round-trip fingerprint stability, insertion-order independence, duplicate node identity,
+dangling edges, orphan requirements, directed cycles, added/removed/changed node and edge diff entries, and empty diffs.
+The full hosted gate remains required before treating C01 as complete.
+
 ## Native reference-driven single-part 3D + 2D evidence / 原生参考驱动单零件三维+二维证据
 
 The local reference-driven Live slice now exercises the public MCP path with exactly two redacted, non-assembly
