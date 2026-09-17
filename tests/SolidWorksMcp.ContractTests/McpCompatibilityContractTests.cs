@@ -19,7 +19,7 @@ public sealed class McpCompatibilityContractTests
     {
         McpToolDescriptor[] tools = [.. McpToolCatalog.CreateDefault().Tools];
 
-        Assert.Equal(["cad.health", "cad.capabilities", "cad.create-part", "cad.build-part-drawing", "cad.inspect"], tools.Select(tool => tool.Name));
+        Assert.Equal(["cad.health", "cad.capabilities", "cad.create-part", "cad.build-part-drawing", "cad.inspect", "drawing.validate"], tools.Select(tool => tool.Name));
         Assert.All(tools, tool =>
         {
             Assert.False(string.IsNullOrWhiteSpace(tool.Tier));

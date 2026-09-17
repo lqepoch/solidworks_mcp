@@ -825,3 +825,47 @@ general collision/reflow QA and richer section candidate scoring are follow-ups 
 包含曲线边界、两个真实通孔、Front/Top/Isometric views、native `40.00` 尺寸、紧凑重复孔 callout，以及与等轴视图分离的
 右下 `SECTION A-A` 剖视。产物未提交。D04 仍是部分完成：Detail A/B、Auxiliary View、多 Sheet 规划、通用碰撞/重排 QA
 和更丰富的 section candidate scoring 仍属于 D04/D06 后续范围。
+
+## D05 feature-level dimension planning / D05 逐特征尺寸规划
+
+Issue #33 requires coverage to be derived from manufacturable feature definitions rather than annotation count. The new
+vendor-neutral `PartDrawingDimensionRequirementGraph` keeps geometry/CAD feature identity separate from explicit
+dimension definitions, datum requirements and redacted provenance. Definitions are classified as Functional,
+Manufacturing or Reference and use stable keys such as `x-position`, `y-pitch` and `diameter`. A Reference dimension can
+never satisfy a missing Functional or Manufacturing definition.
+
+Issue #33 要求 coverage 来源于可制造特征定义，而不是图纸上有多少个标注。新增的 vendor-neutral
+`PartDrawingDimensionRequirementGraph` 将 geometry/CAD feature identity 与显式 dimension definition、datum requirement
+和脱敏 provenance 分开保存。Definition 明确区分 Functional、Manufacturing、Reference，并使用 `x-position`、`y-pitch`、
+`diameter` 等稳定 key。Reference 尺寸不能掩盖缺失的 Functional/Manufacturing 定义。
+
+`PartDrawingDimensionPlanner` deterministically selects approved datums, chooses a stable associative/visible evidence
+winner, emits `Create`, `RetainExisting`, `ReviewExisting` or `SuppressRedundant` actions, and produces one exact finding
+per feature definition. Missing definitions identify the feature and definition, for example `Slot S03: X position is
+missing.` and `HolePattern17: Y pitch is missing.` Duplicate evidence is warned and compressed rather than copied into
+additional dimensions. The existing `PartDrawingCoverageAnalyzer` now accepts the dimension plan and aggregates its
+feature-level findings into `CanRelease`; text similarity, OCR and screenshots are not used as proof.
+
+`PartDrawingDimensionPlanner` 会确定性地选择 approved datum，选择 stable associative/visible evidence winner，输出 `Create`、
+`RetainExisting`、`ReviewExisting`、`SuppressRedundant` action，并为每个 feature definition 输出一个精确 finding。缺失定义
+会带出 feature 和 definition，例如 `Slot S03: X position is missing.`、`HolePattern17: Y pitch is missing.`。重复 evidence
+只产生 warning 并压缩，不复制成额外尺寸。现有 `PartDrawingCoverageAnalyzer` 已能接收 dimension plan，并将逐特征 findings
+纳入 `CanRelease`；不使用文字相似度、OCR 或截图作为证明。
+
+Hosted evidence for this slice:
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 73 + Contract 12 + FakeCad 10 passed
+    git diff --check # exit 0
+
+The focused unit cases cover exact Slot X-position diagnostics, HolePattern Y-pitch diagnostics with approved primary
+datum selection, Functional/Manufacturing/Reference mismatch, deterministic duplicate suppression and coverage-report
+aggregation. The read-only public MCP `drawing.validate` tool now parses bounded requirement/evidence JSON before
+starting a provider session, binds inspection to the exact document identity, and returns the deterministic plan. This
+slice still does not materialize every missing dimension, execute an AutoDimension scheme, or create native datum/GD&T.
+
+本轮 focused unit cases 覆盖 Slot X position 精确诊断、HolePattern Y pitch 诊断及 approved primary datum 选择、
+Functional/Manufacturing/Reference mismatch、确定性重复抑制和 coverage-report 聚合。只读公开 MCP
+`drawing.validate` 已能在启动 Provider session 前解析 bounded requirement/evidence JSON，再绑定精确 document identity
+执行 inspection 并返回确定性 plan。本切片仍未 materialize 所有缺失尺寸、执行 AutoDimension scheme 或创建 native datum/GD&T。

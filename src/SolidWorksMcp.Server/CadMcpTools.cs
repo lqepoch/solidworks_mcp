@@ -4,6 +4,7 @@ using ModelContextProtocol.Server;
 using SolidWorksMcp.AutoDrawing;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Core;
+using SolidWorksMcp.EngineeringModel;
 using SolidWorksMcp.Protocol;
 
 namespace SolidWorksMcp.Server;
@@ -271,6 +272,101 @@ public sealed class CadMcpTools(
         OperationResult<CadInspectionSnapshot> result = inspected.IsSuccess
             ? OperationResults.Success(inspected.Value!, correlationId, inspected.Evidence!)
             : OperationResults.Failure<CadInspectionSnapshot>(correlationId, inspected.Error!, inspected.Evidence);
+        return McpToolResultWriter.Write(result);
+    }
+
+    /// <summary>
+    /// Validates a real drawing document against an explicit feature-level dimension graph.
+    /// 将真实 drawing document 与显式逐特征 dimension graph 做只读 validation。
+    /// </summary>
+    /// <remarks>
+    /// The JSON is parsed before provider session startup, then the exact document identity is inspected through the
+    /// provider. This tool never creates, moves or deletes a dimension; it returns deterministic missing-definition
+    /// evidence for a later compiler materialization pass. JSON 在 Provider session 启动前解析，随后只 inspection
+    /// 精确 document identity；本 tool 不创建、移动或删除尺寸，只返回供后续 compiler materialization 使用的确定性缺失证据。
+    /// </remarks>
+    [McpServerTool(Name = "drawing.validate")]
+    [Description("Validate a real drawing against a bounded feature-level dimension requirement graph. Preconditions: schemaVersion=1.0, stable drawing document ID, bounded requirement/evidence JSON and inspection capability. Side effects: none.")]
+    public async Task<CallToolResult> ValidateDrawingAsync(
+        [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
+        [Description("Stable registered drawing document identity.")] string documentId,
+        [Description("JSON graph: {profileId,features:[{featureId,displayName,kind,status,sourceKind,method,observedAtUtc,definitions:[...],datums:[...]}]}.")] string dimensionRequirementJson,
+        [Description("JSON evidence array with exact dimensionId, featureId, definitionKey, classification, association, visibility and provenance fields.")] string dimensionEvidenceJson,
+        [Description("Optional application operation correlation key.")] string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        string correlationId = correlation.Resolve(operationId);
+        if (!string.Equals(schemaVersion, ProtocolSchema.CurrentVersion, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(documentId))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<PartDrawingValidationResult>(
+                    correlationId,
+                    InvalidInput("schemaVersion must be 1.0 and documentId is required.")));
+        }
+
+        if (!DrawingDimensionJsonCodec.TryParseGraph(
+                dimensionRequirementJson,
+                out PartDrawingDimensionRequirementGraph? graph,
+                out string? graphError)
+            || graph is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<PartDrawingValidationResult>(
+                    correlationId,
+                    InvalidInput(graphError ?? "dimensionRequirementJson-invalid")));
+        }
+
+        if (!DrawingDimensionJsonCodec.TryParseEvidence(
+                dimensionEvidenceJson,
+                out PartDrawingDimensionEvidence[] evidence,
+                out string? evidenceError))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<PartDrawingValidationResult>(
+                    correlationId,
+                    InvalidInput(evidenceError ?? "dimensionEvidenceJson-invalid")));
+        }
+
+        OperationError? capabilityError = capabilities.ValidateInvocation("drawing.validate");
+        if (capabilityError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingValidationResult>(correlationId, capabilityError));
+        }
+
+        OperationResult<ICadSession> sessionResult = await sessions.GetOrStartAsync(cancellationToken).ConfigureAwait(false);
+        if (!sessionResult.IsSuccess || sessionResult.Value is null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingValidationResult>(correlationId, sessionResult.Error!, sessionResult.Evidence));
+        }
+
+        OperationResult<CadInspectionSnapshot> inspection = await sessionResult.Value.Inspection.InspectAsync(
+            new DocumentId(documentId.Trim()),
+            cancellationToken).ConfigureAwait(false);
+        if (!inspection.IsSuccess || inspection.Value is null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingValidationResult>(correlationId, inspection.Error!, inspection.Evidence));
+        }
+
+        PartDrawingDimensionPlan dimensionPlan = PartDrawingDimensionPlanner.Plan(graph, evidence);
+        PartDrawingValidationResult validation = new()
+        {
+            Drawing = inspection.Value,
+            DimensionPlan = dimensionPlan,
+        };
+        OperationResult<PartDrawingValidationResult> result = OperationResults.Success(
+            validation,
+            correlationId,
+            new OperationEvidence(
+                "drawing.validate",
+                [
+                    new EvidenceObservation("document.id", inspection.Value.Document.DocumentId.Value),
+                    new EvidenceObservation("document.state-hash", inspection.Value.Document.StateHash),
+                    new EvidenceObservation("dimension.profile", graph.ProfileId),
+                    new EvidenceObservation("dimension.status", dimensionPlan.Status.ToString()),
+                    new EvidenceObservation("dimension.finding-count", dimensionPlan.Findings.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("dimension.can-release", dimensionPlan.CanRelease.ToString()),
+                ]));
         return McpToolResultWriter.Write(result);
     }
 

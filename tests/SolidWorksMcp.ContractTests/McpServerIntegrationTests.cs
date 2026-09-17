@@ -28,7 +28,7 @@ public sealed class McpServerIntegrationTests
 
         IList<McpClientTool> tools = await host.Client.ListToolsAsync();
 
-        Assert.Equal(5, tools.Count);
+        Assert.Equal(6, tools.Count);
         McpClientTool createTool = Assert.Single(tools, tool => tool.Name == "cad.create-part");
         Assert.Contains("Preconditions", createTool.Description, StringComparison.Ordinal);
         Assert.Contains("Side effects", createTool.Description, StringComparison.Ordinal);
@@ -54,6 +54,28 @@ public sealed class McpServerIntegrationTests
                 ["schemaVersion"] = "0.0",
                 ["documentId"] = "should-not-be-created",
                 ["configuration"] = "Default",
+            });
+
+        Assert.True(invalid.IsError);
+        Assert.Contains(ErrorCodes.InvalidRequest, invalid.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
+    }
+
+    /// <summary>drawing.validate rejects malformed requirement JSON before starting a provider session.</summary>
+    [Fact]
+    public async Task DrawingValidateMalformedRequirementFailsBeforeBusinessExecution()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult invalid = await host.Client.CallToolAsync(
+            "drawing.validate",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = "drawing-validation-001",
+                ["dimensionRequirementJson"] = "{}",
+                ["dimensionEvidenceJson"] = "[]",
             });
 
         Assert.True(invalid.IsError);

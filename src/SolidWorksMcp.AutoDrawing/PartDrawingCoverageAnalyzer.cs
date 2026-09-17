@@ -54,8 +54,16 @@ public sealed record PartDrawingCoverageReport
     /// <summary>Deterministically ordered findings.</summary>
     public ImmutableArray<PartDrawingCoverageFinding> Findings { get; init; } = [];
 
+    /// <summary>
+    /// Feature-definition findings from the D05 dimension planner.
+    /// D05 dimension planner 产生的逐特征/逐定义 findings；不会用普通 annotation count 代替它。
+    /// </summary>
+    public ImmutableArray<PartDrawingDimensionCoverageFinding> DimensionFindings { get; init; } = [];
+
     /// <summary>True only when no blocking or unresolved review finding remains.</summary>
-    public bool CanRelease => Findings.All(finding => finding.Status is PartDrawingCoverageStatus.Pass or PartDrawingCoverageStatus.Warning);
+    public bool CanRelease =>
+        Findings.All(finding => finding.Status is PartDrawingCoverageStatus.Pass or PartDrawingCoverageStatus.Warning)
+        && DimensionFindings.All(finding => finding.Status is PartDrawingDimensionFindingStatus.Pass or PartDrawingDimensionFindingStatus.Warning);
 }
 
 /// <summary>
@@ -71,7 +79,8 @@ public static class PartDrawingCoverageAnalyzer
     public static PartDrawingCoverageReport Analyze(
         PartDrawingRequirementSet requirements,
         PartDrawingPlan plan,
-        CadInspectionSnapshot drawingInspection)
+        CadInspectionSnapshot drawingInspection,
+        PartDrawingDimensionPlan? dimensionPlan = null)
     {
         ArgumentNullException.ThrowIfNull(requirements);
         ArgumentNullException.ThrowIfNull(plan);
@@ -137,6 +146,7 @@ public static class PartDrawingCoverageAnalyzer
             Findings = [.. findings
                 .OrderBy(finding => finding.Status)
                 .ThenBy(finding => finding.CoverageKey, StringComparer.Ordinal)],
+            DimensionFindings = dimensionPlan?.Findings ?? [],
         };
     }
 
