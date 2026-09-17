@@ -281,9 +281,12 @@ internal static class SolidWorksNativeInspectionReader
         (int)swAnnotationType_e.swNote when identity.Contains(":pattern-callout:", StringComparison.Ordinal) => "pattern-callout",
         (int)swAnnotationType_e.swNote => "note",
         (int)swAnnotationType_e.swDisplayDimension => "model-dimension",
+        (int)swAnnotationType_e.swDatumTag => "datum",
+        (int)swAnnotationType_e.swDatumTargetSym => "datum-target",
         (int)swAnnotationType_e.swGTol => "gdt",
         (int)swAnnotationType_e.swSFSymbol => "surface-finish",
         (int)swAnnotationType_e.swWeldSymbol => "weld",
+        (int)swAnnotationType_e.swCThread => "cosmetic-thread",
         _ => $"native:{nativeType.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
     };
 

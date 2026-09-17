@@ -326,6 +326,72 @@ public sealed record DrawingSectionViewRequest
     public bool ScaleWithModel { get; init; } = true;
 }
 
+/// <summary>
+/// Allowlisted model-item annotation categories that SOLIDWORKS can insert through IDrawingDoc.InsertModelAnnotations3.
+/// 允许通过 IDrawingDoc.InsertModelAnnotations3 导入的模型标注类别；枚举值属于 vendor-neutral contract。
+/// </summary>
+[Flags]
+public enum DrawingModelAnnotationImportKinds
+{
+    /// <summary>No model-item import is requested.</summary>
+    None = 0,
+
+    /// <summary>Dimensions marked or not marked for drawing.</summary>
+    Dimensions = 1 << 0,
+
+    /// <summary>Hole Wizard hole callouts.</summary>
+    HoleCallouts = 1 << 1,
+
+    /// <summary>Hole Wizard location dimensions.</summary>
+    HoleWizardLocationDimensions = 1 << 2,
+
+    /// <summary>Hole Wizard profile dimensions.</summary>
+    HoleWizardProfileDimensions = 1 << 3,
+
+    /// <summary>Pattern instance/revolution counts.</summary>
+    InstanceCounts = 1 << 4,
+
+    /// <summary>Datum feature annotations.</summary>
+    Datums = 1 << 5,
+
+    /// <summary>Datum target annotations.</summary>
+    DatumTargets = 1 << 6,
+
+    /// <summary>Geometric tolerances.</summary>
+    GdAndTolerances = 1 << 7,
+
+    /// <summary>Model notes.</summary>
+    Notes = 1 << 8,
+
+    /// <summary>Surface-finish symbols.</summary>
+    SurfaceFinish = 1 << 9,
+
+    /// <summary>Weld symbols.</summary>
+    WeldSymbols = 1 << 10,
+
+    /// <summary>Cosmetic thread annotations.</summary>
+    CosmeticThreads = 1 << 11,
+
+    /// <summary>Dimensions carrying native tolerances.</summary>
+    TolerancedDimensions = 1 << 12,
+}
+
+/// <summary>Approval state required before a critical native annotation may be materialized.</summary>
+public enum DrawingAnnotationApprovalState
+{
+    /// <summary>AI or rule proposal; it is not eligible for a release mutation.</summary>
+    Proposal,
+
+    /// <summary>Needs human review before release.</summary>
+    ReviewRequired,
+
+    /// <summary>Explicitly approved engineering intent.</summary>
+    Approved,
+
+    /// <summary>Approved and released into the current drawing revision.</summary>
+    Released,
+}
+
 /// <summary>Request to add one drawing annotation associated with a view.</summary>
 public sealed record DrawingAnnotationRequest
 {
@@ -337,6 +403,24 @@ public sealed record DrawingAnnotationRequest
 
     /// <summary>Annotation semantic kind such as model-dimension or note.</summary>
     public string Kind { get; init; } = "note";
+
+    /// <summary>
+    /// Optional native Model Items categories. Non-empty values use SOLIDWORKS' associative import path instead of
+    /// synthesizing display text. 非空时必须通过 SOLIDWORKS native associative Model Items 路径导入，不能合成文本。
+    /// </summary>
+    public DrawingModelAnnotationImportKinds ModelItemKinds { get; init; }
+
+    /// <summary>Stable feature/requirement identity used for audit correlation, never a PDF text payload.</summary>
+    public string? FeatureIdentity { get; init; }
+
+    /// <summary>Redacted provenance source class, for example model_native or pmi.</summary>
+    public string? ProvenanceKind { get; init; }
+
+    /// <summary>Redacted provenance method, for example hole_wizard or insert_model_annotations3.</summary>
+    public string? ProvenanceMethod { get; init; }
+
+    /// <summary>Approval state of the semantic requirement behind this mutation.</summary>
+    public DrawingAnnotationApprovalState ApprovalState { get; init; } = DrawingAnnotationApprovalState.Proposal;
 
     /// <summary>Display text; source semantic identity must be carried by higher layers.</summary>
     public string Text { get; init; } = string.Empty;

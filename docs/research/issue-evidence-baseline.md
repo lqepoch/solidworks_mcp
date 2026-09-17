@@ -920,3 +920,58 @@ slice still does not materialize every missing dimension, execute an AutoDimensi
 Functional/Manufacturing/Reference mismatch、确定性重复抑制和 coverage-report 聚合。只读公开 MCP
 `drawing.validate` 已能在启动 Provider session 前解析 bounded requirement/evidence JSON，再绑定精确 document identity
 执行 inspection 并返回确定性 plan。本切片仍未 materialize 所有缺失尺寸、执行 AutoDimension scheme 或创建 native datum/GD&T。
+
+## D07 manufacturing annotation provenance and native Model Items boundary / D07 制造标注来源与 native Model Items 边界
+
+Issue #35 requires hole/thread callouts, center marks/centerlines, datums, GD&T, surface finish, weld symbols and
+notes to remain associative and provenance-bearing. The new provider-neutral `ManufacturingAnnotationPlanner` keeps a
+manufacturing requirement separate from its native annotation identity. Matching is exact on requirement identity,
+feature identity, annotation kind and drawing view; visible text, screenshot similarity and arbitrary annotation count
+are not evidence. One approved/released associative native annotation is retained. Missing evidence produces a native
+import plan but remains non-release until the provider read-back proves the result.
+
+Issue #35 要求 hole/thread callout、center mark/centerline、datum、GD&T、表面粗糙度、焊接符号和 note 保持关联并带有
+provenance。新增的 vendor-neutral `ManufacturingAnnotationPlanner` 将制造要求与 native annotation identity 分离。
+匹配必须同时满足 requirement identity、feature identity、annotation kind 和 drawing view；不使用可见文字、截图相似度或
+任意 annotation 数量作为证据。只有一条 Approved/Released 且仍关联的 native 标注可以保留；缺少证据时只生成 native
+import plan，在 Provider 回读证明之前不能 release。
+
+The CadAbstractions request now exposes an allowlisted `DrawingModelAnnotationImportKinds` mask and an explicit
+`DrawingAnnotationApprovalState`. The SOLIDWORKS Provider maps the mask to the verified `swInsertAnnotation_e` values
+and calls `IDrawingDoc.InsertModelAnnotations3` on the exact registered drawing view. It accepts only the native
+annotation types that correspond to the requested category, records native type/count, feature identity, provenance and
+approval evidence, and fails closed when SOLIDWORKS returns no requested native annotation. Inspection now classifies
+native datum, datum-target and cosmetic-thread annotations instead of leaking numeric vendor types.
+
+本轮 CadAbstractions 增加 allowlisted `DrawingModelAnnotationImportKinds` mask 和显式
+`DrawingAnnotationApprovalState`。SOLIDWORKS Provider 将 mask 映射到已核验的 `swInsertAnnotation_e`，在精确登记的
+drawing view 上调用 `IDrawingDoc.InsertModelAnnotations3`。只接受与请求类别匹配的 native annotation type，记录 native
+type/count、feature identity、provenance 和 approval evidence；若 SOLIDWORKS 没有返回请求类别则 fail-closed。Inspection
+也能把 native datum、datum-target、cosmetic-thread 分类为稳定 vendor-neutral kind，而不是泄漏厂商数字 type。
+
+Center marks and centerlines deliberately remain `annotation-provider-contract-required` in this slice. Their official
+SOLIDWORKS APIs (`IDrawingDoc.InsertCenterMark3` / `InsertCenterLine2`) require a safe declarative geometry selector and
+post-write association proof; the generic Model Items bitmask is not sufficient. The planner therefore blocks them for
+review instead of synthesizing a symbol or silently selecting a transient enumeration index. Hole Callout live proof also
+requires a real Hole Wizard feature; the existing baseline fixture uses a sketch `FeatureCut4`, so this slice does not
+claim a native Hole Callout from that unrelated cut feature.
+
+Center mark 与 centerline 在本切片中明确返回 `annotation-provider-contract-required`。官方
+`IDrawingDoc.InsertCenterMark3` / `InsertCenterLine2` 需要安全的声明式 geometry selector 和写后关联证明，通用 Model
+Items bitmask 不足以安全实现。因此 planner 会阻断并要求复核，不合成符号，也不静默使用临时 enumeration index。Hole
+Callout 的 Live 证明还必须基于真实 Hole Wizard feature；当前 baseline fixture 是 sketch `FeatureCut4`，所以本切片不
+宣称从无关的 cut feature 得到了 native Hole Callout。
+
+Focused evidence for this slice:
+
+    dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-restore --logger "console;verbosity=minimal" # exit 0; 84 passed; 0 failed; 0 skipped
+    dotnet build providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksMcp.Provider.SolidWorks.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
+
+No native SOLIDWORKS process was started for the pure planner/provider compile slice; the machine inventory remained
+`SLDWORKS_COUNT=0`. Any subsequent native Hole Wizard/Model Items run must use `scripts/Invoke-SolidWorksLiveTests.ps1`,
+which closes existing sessions before launch, owns exactly one fresh process and verifies zero remaining processes after
+cleanup. Private drawing-PDF content is not stored in this repository.
+
+本轮纯 planner/provider compile slice 没有启动 native SOLIDWORKS；机器进程清单保持 `SLDWORKS_COUNT=0`。后续任何
+Hole Wizard/Model Items native 运行都必须通过 `scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭现有会话，只拥有一个
+新进程，清理后验证进程数为零。秘密图纸 PDF 内容不会存入本仓库。

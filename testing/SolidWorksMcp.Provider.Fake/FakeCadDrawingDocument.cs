@@ -182,9 +182,17 @@ internal sealed class FakeCadDrawingDocument(
             return Task.FromResult(FakeCadResults.NotFound<DrawingAnnotationSnapshot>(operation, request.ViewId.Value));
         }
 
-        if (string.IsNullOrWhiteSpace(request.Kind) || string.IsNullOrWhiteSpace(request.Text))
+        bool isModelItems = request.ModelItemKinds is not DrawingModelAnnotationImportKinds.None;
+        if (string.IsNullOrWhiteSpace(request.Kind)
+            || (!isModelItems && string.IsNullOrWhiteSpace(request.Text))
+            || (isModelItems && string.IsNullOrWhiteSpace(request.FeatureIdentity))
+            || (isModelItems && request.ApprovalState is not (DrawingAnnotationApprovalState.Approved or DrawingAnnotationApprovalState.Released)))
         {
-            return Task.FromResult(FakeCadResults.Invalid<DrawingAnnotationSnapshot>(operation, "Annotation kind and text are required."));
+            return Task.FromResult(FakeCadResults.Invalid<DrawingAnnotationSnapshot>(
+                operation,
+                isModelItems
+                    ? "Native model-item annotations require FeatureIdentity and Approved/Released intent."
+                    : "Annotation kind and text are required."));
         }
 
         AnnotationId annotationId = request.RequestedAnnotationId ?? new AnnotationId($"annotation-{++annotationSequence:000}");
@@ -197,7 +205,7 @@ internal sealed class FakeCadDrawingDocument(
         {
             AnnotationId = annotationId,
             ViewId = request.ViewId,
-            Kind = request.Kind.Trim(),
+            Kind = isModelItems ? "native-model-item" : request.Kind.Trim(),
             Text = request.Text.Trim(),
             CoverageKeys = request.CoverageKeys,
             Position = request.Position,
@@ -210,6 +218,9 @@ internal sealed class FakeCadDrawingDocument(
                 operation,
                 new EvidenceObservation("annotation.id", annotationId.Value),
                 new EvidenceObservation("annotation.view-id", snapshot.ViewId.Value),
+                new EvidenceObservation("annotation.feature-identity", request.FeatureIdentity ?? "unspecified"),
+                new EvidenceObservation("annotation.model-item-kinds", request.ModelItemKinds.ToString()),
+                new EvidenceObservation("annotation.approval-state", request.ApprovalState.ToString()),
                 new EvidenceObservation("state.hash", StateHash)));
     }
 

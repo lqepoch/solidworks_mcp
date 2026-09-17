@@ -188,17 +188,30 @@ internal sealed class SolidWorksNativeDrawingDocument(
         bool isNote = kind.Equals("note", StringComparison.OrdinalIgnoreCase)
             || kind.Equals("pattern-callout", StringComparison.OrdinalIgnoreCase);
         bool isModelDimensions = kind.Equals("model-dimensions", StringComparison.OrdinalIgnoreCase);
-        if ((!isNote && !isModelDimensions)
+        bool isModelItems = request.ModelItemKinds is not DrawingModelAnnotationImportKinds.None;
+        bool missingFeatureIdentity = isModelItems && string.IsNullOrWhiteSpace(request.FeatureIdentity);
+        bool missingApproval = isModelItems
+            && request.ApprovalState is not (DrawingAnnotationApprovalState.Approved or DrawingAnnotationApprovalState.Released);
+        if ((!isNote && !isModelDimensions && !isModelItems)
             || (isNote && string.IsNullOrWhiteSpace(request.Text))
-            || string.IsNullOrWhiteSpace(request.ViewId.Value))
+            || string.IsNullOrWhiteSpace(request.ViewId.Value)
+            || missingFeatureIdentity
+            || missingApproval)
         {
+            string message = missingApproval
+                ? "Critical native model-item annotations require Approved or Released semantic intent."
+                : missingFeatureIdentity
+                    ? "Native model-item annotations require a stable FeatureIdentity for audit and association scope."
+                : "The native drawing annotation slice supports Kind='note', Kind='pattern-callout', Kind='model-dimensions' or an allowlisted ModelItemKinds value with a ViewId.";
+            string errorCode = missingApproval ? ErrorCodes.ReviewRequired : ErrorCodes.InvalidRequest;
+            string errorCategory = missingApproval ? ErrorCategories.Policy : ErrorCategories.Validation;
             return SolidWorksProviderResults.Failure<DrawingAnnotationSnapshot>(
                 "drawing.annotation.create",
                 new OperationError(
-                    ErrorCodes.InvalidRequest,
-                    "The native drawing annotation slice supports Kind='note', Kind='pattern-callout' or Kind='model-dimensions' with a ViewId.",
-                    ErrorCategories.Validation,
-                    remediation: "Use explicit note text for Kind='note'; model dimensions must come from native model-item insertion."));
+                    errorCode,
+                    message,
+                    errorCategory,
+                    remediation: "Use approved semantic provenance for critical model items; do not synthesize a hole/GD&T/tolerance string."));
         }
 
         OperationResult<NativeDrawingAnnotationResult> result = await host.InvokeOnStaAsync(
@@ -206,7 +219,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
             attachmentGeneration,
             application => isNote
                 ? AddNoteOnSta(application, request)
-                : InsertModelDimensionsOnSta(application, request),
+                : InsertModelItemsOnSta(application, request),
             cancellationToken).ConfigureAwait(false);
         if (!result.IsSuccess || result.Value is null)
         {
@@ -813,20 +826,20 @@ internal sealed class SolidWorksNativeDrawingDocument(
     }
 
     /// <summary>
-    /// Imports only dimensions returned by SOLIDWORKS model-item insertion for one exact drawing view.
-    /// 只导入 SOLIDWORKS 对指定 drawing view 原生返回的模型尺寸。
+    /// Imports only allowlisted annotations returned by SOLIDWORKS model-item insertion for one exact drawing view.
+    /// 只导入 SOLIDWORKS 对指定 drawing view 原生返回且属于 allowlist 的模型标注。
     /// </summary>
     /// <remarks>
-    /// The request never supplies display text or a numeric value. If SOLIDWORKS returns no DisplayDimension, the
-    /// operation fails closed. This prevents a request label from masquerading as associative engineering evidence.
-    /// 请求不提供显示文字或数值；若 SOLIDWORKS 没有返回 DisplayDimension，操作 fail-closed，避免把请求 label 冒充
-    /// 成关联工程尺寸证据。
+    /// The request never supplies display text or a numeric value. If SOLIDWORKS returns no requested native
+    /// annotation, the operation fails closed. This prevents a request label from masquerading as associative
+    /// engineering evidence. 请求不提供显示文字或数值；若 SOLIDWORKS 没有返回请求的 native annotation，操作
+    /// fail-closed，避免把 request label 冒充成关联工程证据。
     /// </remarks>
-    private OperationResult<NativeDrawingAnnotationResult> InsertModelDimensionsOnSta(
+    private OperationResult<NativeDrawingAnnotationResult> InsertModelItemsOnSta(
         ISldWorks application,
         DrawingAnnotationRequest request)
     {
-        const string operation = "drawing.annotation.insert-model-dimensions";
+        const string operation = "drawing.annotation.insert-model-items";
         if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
         {
             return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
@@ -890,10 +903,13 @@ internal sealed class SolidWorksNativeDrawingDocument(
                         remediation: "Preserve the drawing and inspect the native view identity before retrying."));
             }
 
+            int nativeImportFlags = request.ModelItemKinds is DrawingModelAnnotationImportKinds.None
+                ? (int)(swInsertAnnotation_e.swInsertDimensionsMarkedForDrawing
+                    | swInsertAnnotation_e.swInsertDimensionsNotMarkedForDrawing)
+                : ToNativeModelItemFlags(request.ModelItemKinds);
             object? rawAnnotations = drawing.InsertModelAnnotations3(
                 (int)swImportModelItemsSource_e.swImportModelItemsFromEntireModel,
-                (int)(swInsertAnnotation_e.swInsertDimensionsMarkedForDrawing
-                    | swInsertAnnotation_e.swInsertDimensionsNotMarkedForDrawing),
+                nativeImportFlags,
                 false,
                 false,
                 false,
@@ -906,12 +922,12 @@ internal sealed class SolidWorksNativeDrawingDocument(
                         ErrorCodes.InvariantViolation,
                         "SOLIDWORKS returned no model annotations for the selected drawing view.",
                         ErrorCategories.Invariant,
-                        remediation: "Add approved model dimensions/PMI first; do not synthesize a display dimension from request text."));
+                        remediation: "Add approved model/PMI annotations first; do not synthesize a hole, tolerance or symbol from request text."));
             }
 
             Annotation? firstAnnotation = null;
-            DisplayDimension? firstDimension = null;
-            int displayDimensionCount = 0;
+            object? firstSpecificAnnotation = null;
+            int acceptedAnnotationCount = 0;
             try
             {
                 for (int index = 0; index < nativeAnnotations.Length; index++)
@@ -925,22 +941,18 @@ internal sealed class SolidWorksNativeDrawingDocument(
                     bool retained = false;
                     try
                     {
-                        if (annotation.GetType() != (int)swAnnotationType_e.swDisplayDimension)
+                        int nativeType = annotation.GetType();
+                        if (!IsRequestedModelAnnotation(nativeType, request.ModelItemKinds))
                         {
                             continue;
                         }
 
-                        displayDimensionCount++;
+                        acceptedAnnotationCount++;
                         specific = annotation.GetSpecificAnnotation();
-                        if (specific is not DisplayDimension dimension)
-                        {
-                            continue;
-                        }
-
                         if (firstAnnotation is null)
                         {
                             firstAnnotation = annotation;
-                            firstDimension = dimension;
+                            firstSpecificAnnotation = specific;
                             retained = true;
                         }
                     }
@@ -954,27 +966,26 @@ internal sealed class SolidWorksNativeDrawingDocument(
                     }
                 }
 
-                if (firstAnnotation is null || firstDimension is null || displayDimensionCount == 0)
+                if (firstAnnotation is null || acceptedAnnotationCount == 0)
                 {
                     return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
                         operation,
                         new OperationError(
                             ErrorCodes.InvariantViolation,
-                            "SOLIDWORKS returned model annotations, but none was a verified DisplayDimension.",
+                            "SOLIDWORKS returned model annotations, but none matched the requested native annotation categories.",
                             ErrorCategories.Invariant,
-                            remediation: "Do not promote notes or unsupported annotation types to dimensional evidence."));
+                            remediation: "Inspect native annotation types and RulePack support before retrying."));
                 }
 
                 string nativeIdentity = firstAnnotation.GetName()?.Trim() ?? string.Empty;
                 string annotationIdentity = string.IsNullOrWhiteSpace(nativeIdentity)
-                    ? $"{current.DocumentId.Value}:annotation:model-dimension:{Guid.NewGuid():N}"
+                    ? $"{current.DocumentId.Value}:annotation:model-item:{Guid.NewGuid():N}"
                     : nativeIdentity;
-                // GetText(0) is not a valid SOLIDWORKS API call: swDimensionTextAll is reserved for SetText. Read the
-                // legal text parts and the associated native Dimension.SystemValue instead.
-                // GetText(0) 不是合法的 SOLIDWORKS API 调用：swDimensionTextAll 只可用于 SetText；这里读取合法文本
-                // 片段以及关联原生 Dimension.SystemValue。
-                string text = SolidWorksNativeDimensionText.Read(firstDimension);
-                if (string.IsNullOrWhiteSpace(text))
+                string nativeKind = NativeAnnotationKind(firstAnnotation.GetType());
+                string text = firstSpecificAnnotation is DisplayDimension firstDimension
+                    ? SolidWorksNativeDimensionText.Read(firstDimension)
+                    : nativeKind;
+                if (firstSpecificAnnotation is DisplayDimension && string.IsNullOrWhiteSpace(text))
                 {
                     return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
                         operation,
@@ -991,7 +1002,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
                 {
                     AnnotationId = new AnnotationId(annotationIdentity),
                     ViewId = request.ViewId,
-                    Kind = "model-dimension",
+                    Kind = nativeKind,
                     Text = text,
                     CoverageKeys = request.CoverageKeys,
                     Position = new Coordinate2D(
@@ -1007,16 +1018,21 @@ internal sealed class SolidWorksNativeDrawingDocument(
                     operation,
                     new NativeDrawingAnnotationResult(snapshot, updated, current),
                     new EvidenceObservation("annotation.id", annotationIdentity),
-                    new EvidenceObservation("annotation.kind", "model-dimension"),
-                    new EvidenceObservation("annotation.native-type", ((int)swAnnotationType_e.swDisplayDimension).ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                    new EvidenceObservation("annotation.native-count", displayDimensionCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("annotation.kind", nativeKind),
+                    new EvidenceObservation("annotation.native-type", firstAnnotation.GetType().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("annotation.native-count", acceptedAnnotationCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("annotation.model-item-kinds", request.ModelItemKinds.ToString()),
+                    new EvidenceObservation("annotation.feature-identity", request.FeatureIdentity ?? "unspecified"),
+                    new EvidenceObservation("annotation.provenance.kind", request.ProvenanceKind ?? "unspecified"),
+                    new EvidenceObservation("annotation.provenance.method", request.ProvenanceMethod ?? "unspecified"),
+                    new EvidenceObservation("annotation.approval-state", request.ApprovalState.ToString()),
                     new EvidenceObservation("annotation.view-id", request.ViewId.Value),
                     new EvidenceObservation("annotation.native-view", nativeViewName),
                     new EvidenceObservation("state.hash", stateHash));
             }
             finally
             {
-                SolidWorksDocumentRouting.Release(firstDimension);
+                SolidWorksDocumentRouting.Release(firstSpecificAnnotation);
                 SolidWorksDocumentRouting.Release(firstAnnotation);
             }
         }
@@ -1025,7 +1041,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
             return SolidWorksProviderResults.ProviderFailure<NativeDrawingAnnotationResult>(
                 operation,
                 exception,
-                "SOLIDWORKS model-item insertion failed before a complete DisplayDimension proof was returned.");
+                "SOLIDWORKS model-item insertion failed before a complete native annotation proof was returned.");
         }
         finally
         {
@@ -1033,6 +1049,123 @@ internal sealed class SolidWorksNativeDrawingDocument(
             SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
         }
     }
+
+    /// <summary>
+    /// Maps the vendor-neutral allowlist to the verified SOLIDWORKS swInsertAnnotation_e bitmask.
+    /// 将 vendor-neutral allowlist 映射为已核对的 SOLIDWORKS swInsertAnnotation_e bitmask。
+    /// </summary>
+    private static int ToNativeModelItemFlags(DrawingModelAnnotationImportKinds kinds)
+    {
+        swInsertAnnotation_e flags = 0;
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.Dimensions))
+        {
+            flags |= swInsertAnnotation_e.swInsertDimensionsMarkedForDrawing
+                | swInsertAnnotation_e.swInsertDimensionsNotMarkedForDrawing;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.HoleCallouts))
+        {
+            flags |= swInsertAnnotation_e.swInsertholeCallout;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.HoleWizardLocationDimensions))
+        {
+            flags |= swInsertAnnotation_e.swInsertHoleWizardLocationDimensions;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.HoleWizardProfileDimensions))
+        {
+            flags |= swInsertAnnotation_e.swInsertHoleWizardProfileDimensions;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.InstanceCounts))
+        {
+            flags |= swInsertAnnotation_e.swInsertInstanceCounts;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.Datums))
+        {
+            flags |= swInsertAnnotation_e.swInsertDatums;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.DatumTargets))
+        {
+            flags |= swInsertAnnotation_e.swInsertDatumTargets;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.GdAndTolerances))
+        {
+            flags |= swInsertAnnotation_e.swInsertGTols;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.Notes))
+        {
+            flags |= swInsertAnnotation_e.swInsertNotes;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.SurfaceFinish))
+        {
+            flags |= swInsertAnnotation_e.swInsertSFSymbols;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.WeldSymbols))
+        {
+            flags |= swInsertAnnotation_e.swInsertWelds;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.CosmeticThreads))
+        {
+            flags |= swInsertAnnotation_e.swInsertCThreads;
+        }
+
+        if (kinds.HasFlag(DrawingModelAnnotationImportKinds.TolerancedDimensions))
+        {
+            flags |= swInsertAnnotation_e.swInsertTolerancedDims;
+        }
+
+        return (int)flags;
+    }
+
+    /// <summary>Accepts only native annotation types that correspond to the requested import categories.</summary>
+    private static bool IsRequestedModelAnnotation(int nativeType, DrawingModelAnnotationImportKinds requestedKinds)
+    {
+        if (requestedKinds is DrawingModelAnnotationImportKinds.None)
+        {
+            return nativeType == (int)swAnnotationType_e.swDisplayDimension;
+        }
+
+        return nativeType switch
+        {
+            (int)swAnnotationType_e.swDisplayDimension => requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.Dimensions)
+                || requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.HoleCallouts)
+                || requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.HoleWizardLocationDimensions)
+                || requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.HoleWizardProfileDimensions)
+                || requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.InstanceCounts)
+                || requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.TolerancedDimensions),
+            (int)swAnnotationType_e.swDatumTag => requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.Datums),
+            (int)swAnnotationType_e.swDatumTargetSym => requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.DatumTargets),
+            (int)swAnnotationType_e.swGTol => requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.GdAndTolerances),
+            (int)swAnnotationType_e.swNote => requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.Notes),
+            (int)swAnnotationType_e.swSFSymbol => requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.SurfaceFinish),
+            (int)swAnnotationType_e.swWeldSymbol => requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.WeldSymbols),
+            (int)swAnnotationType_e.swCThread => requestedKinds.HasFlag(DrawingModelAnnotationImportKinds.CosmeticThreads),
+            _ => false,
+        };
+    }
+
+    /// <summary>Returns a stable vendor-neutral kind for native annotation evidence.</summary>
+    private static string NativeAnnotationKind(int nativeType) => nativeType switch
+    {
+        (int)swAnnotationType_e.swDisplayDimension => "model-dimension",
+        (int)swAnnotationType_e.swDatumTag => "datum",
+        (int)swAnnotationType_e.swDatumTargetSym => "datum-target",
+        (int)swAnnotationType_e.swGTol => "gdt",
+        (int)swAnnotationType_e.swNote => "note",
+        (int)swAnnotationType_e.swSFSymbol => "surface-finish",
+        (int)swAnnotationType_e.swWeldSymbol => "weld",
+        (int)swAnnotationType_e.swCThread => "cosmetic-thread",
+        _ => "native-model-annotation",
+    };
 
     private OperationResult<NativeDrawingRebuildResult> RebuildOnSta(ISldWorks application)
     {
