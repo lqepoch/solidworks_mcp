@@ -26,8 +26,7 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
   to `ISldWorks`, report a live `SLDWORKS` process through `GetProcessID()`, and satisfy the requested PID.
 - An unqualified attach is allowed only when exactly one eligible process remains. Multiple eligible processes return
   `STATE_CONFLICT`; the provider never guesses from “active document” or filename.
-- The production attach/detach path does not call `new SldWorks()`, `Activator.CreateInstance`, `Marshal.GetActiveObject` or
-  `ExitApp`; the separate Live-only owned-process harness is the sole explicit `ExitApp` caller after its workspace checks.
+- The production attach/detach path does not call `new SldWorks()`, `Activator.CreateInstance`, `Marshal.GetActiveObject` or `ExitApp`; the separate Live-only owned-process harness is the sole explicit `ExitApp` caller after its workspace checks.
 - All COM RCW release occurs on the owning STA. No COM interface appears in `SolidWorksMcp.CadAbstractions` or MCP
   payloads.
 
@@ -66,8 +65,7 @@ API fact 追加，未来版本变化必须经过审查，不能静默覆盖旧�
 - `RotSolidWorksConnector` 在 Provider STA 上枚举 COM ROT，只接受能转换为 `ISldWorks`、通过 `GetProcessID()` 报告
   存活的 `SLDWORKS` 进程、且符合请求 PID 的对象。
 - 未限定 PID 时只有恰好一个候选才附着；多个候选返回 `STATE_CONFLICT`，绝不根据 ActiveDoc 或文件名猜测。
-- 生产 attach/detach path 不调用 `new SldWorks()`、`Activator.CreateInstance`、`Marshal.GetActiveObject` 或 `ExitApp`；
-  只有独立的 Live owned-process harness 在完成 workspace 检查后才显式调用 `ExitApp`。
+- 生产 attach/detach path 不调用 `new SldWorks()`、`Activator.CreateInstance`、`Marshal.GetActiveObject` 或 `ExitApp`；只有独立的 Live owned-process harness 在完成 workspace 检查后才显式调用 `ExitApp`。
 - 所有 COM RCW 只在其所属 STA 释放；`SolidWorksMcp.CadAbstractions` 和 MCP payload 不出现 COM 接口。
 
 ## B04 non-cylindrical part and native drawing proof / B04 非圆柱零件与原生工程图证据
@@ -113,16 +111,23 @@ B03/B04 Live fixture 是刻意脱敏的通用案例：它证明曲线非圆柱�
 | `IModelDocExtension.GetPersistReference3` | `System.Object GetPersistReference3(System.Object DispObj)` | SOLIDWORKS 2022 Interop assembly `30.0.0.5041` | [GetPersistReference3 Method](https://help.solidworks.com/2021/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IModelDocExtension~GetPersistReference3.html) | The provider accepts only the `solidworks.persist3` token format and keeps the SAFEARRAY/RCW on the Provider STA. The opaque token is never parsed by the vendor-neutral boundary. |
 | `IModelDocExtension.GetObjectByPersistReference3` | `System.Object GetObjectByPersistReference3(System.Object PersistId, out System.Int32 ErrorCode)` | SOLIDWORKS 2022 Interop assembly `30.0.0.5041` | [GetObjectByPersistReference3 Method](https://help.solidworks.com/2023/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.imodeldocextension~getobjectbypersistreference3.html) | A non-zero native error or wrong entity kind returns `SELECTION_STALE`; the provider never falls back to an unrelated active selection. The returned COM object is released before the vendor-neutral result leaves the STA. |
 | `IFeature.Name` / `IFeature.GetNextFeature` | `System.String Name { get; }` / `System.Object GetNextFeature()` | SOLIDWORKS 2022 Interop reflection; used only for exact semantic-name resolution | [IFeature Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IFeature.html) | The semantic fallback traverses the native feature tree and requires exactly one matching name. It does not expose the traversal ordinal as identity. |
+| `IBody2.GetFaces` / `IBody2.GetEdges` / `IBody2.GetVertices` | `System.Object GetFaces()` / `System.Object GetEdges()` / `System.Object GetVertices()` | SOLIDWORKS 2022 Interop reflection; topology fallback remains Provider STA-only | [GetFaces Method](https://help.solidworks.com/2020/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IBody2~GetFaces.html) / [GetFaceCount Method](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IBody2~GetFaceCount.html) | The provider scans all current solid bodies and rejects zero/multiple matches. The traversal ordinal is never serialized as selector identity. |
+| `IFace2.GetFaceId` | `System.Int32 GetFaceId()` | SOLIDWORKS 2022 Interop reflection | [GetFaceId Method](https://help.solidworks.com/2023/english/api/sldworksapi/solidworks.interop.sldworks~solidworks.interop.sldworks.iface2~getfaceid.html) | Officially intended for imported bodies; IDs are removed on rebuild. Therefore `face-id` is only a geometry fallback and is never presented as a permanent reference. |
+| `IEdge.GetID` / `IVertex.GetPoint` | `System.Int32 GetID()` / `System.Object GetPoint()` | SOLIDWORKS 2022 Interop reflection | [IVertex Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SolidWorks.Interop.sldworks.IVertex.html) | Edge IDs and quantized canonical millimetre vertex points are search evidence only; persistent references remain the primary cross-save mechanism. |
+| `ISketch.GetSketchSegments` / `ISketchSegment.GetID` | `System.Object GetSketchSegments()` / `System.Object GetID()` | SOLIDWORKS 2022 Interop reflection | [GetSketchSegments Method](https://help.solidworks.com/2020/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISketch~GetSketchSegments.html) | A sketch entity fallback is scoped by its owning sketch feature name and segment ID; sketch errors may omit segments per official remarks, so unresolved/ambiguous results stay stale/review-required. |
 
 The current native B05 implementation supports Feature/Body semantic resolution, the provider geometry-signature format
-`solidworks.geometry.v1|kind=Feature|name=...`, and persistent-reference validation for the supported native entity kinds.
-The request is always checked against the registered document and expected state hash. Face/edge/vertex/sketch topology
-capture and drawing-annotation capture remain explicit follow-up capabilities; they are not reported as complete.
+`solidworks.geometry.v1|kind=Feature|name=...`, topology signatures for Face/Edge/Vertex/SketchEntity, and
+persistent-reference validation for all currently recognized native entity kinds. Topology signatures are deliberately
+search evidence: face IDs are only valid for the imported-body use case documented by SOLIDWORKS, edge IDs can change
+with topology edits, and vertex points can be coincident. The resolver scans and rejects ambiguity instead of choosing
+an enumeration index. Drawing annotation capture remains an explicit follow-up capability and is not reported as complete.
 
 当前 native B05 实现支持 Feature/Body semantic resolution、Provider geometry-signature 格式
-`solidworks.geometry.v1|kind=Feature|name=...`，以及支持实体类型的 persistent-reference 校验。请求始终绑定已登记
-document 并校验 expected state hash。Face/edge/vertex/sketch topology capture 和 drawing annotation capture 仍是后续能力，
-不会被误报为完成。
+`solidworks.geometry.v1|kind=Feature|name=...`、Face/Edge/Vertex/SketchEntity 拓扑签名，以及当前识别实体类型的
+persistent-reference 校验。拓扑签名只是搜索证据：官方说明 face-id 主要用于 imported body，edge id 可能随拓扑
+修改变化，vertex 点可能重合；解析器会扫描并拒绝歧义，不会选择 enumeration index。Drawing annotation capture
+仍是后续能力，不会被误报为完成。
 
 ## B06 verified native export slice / B06 已验证原生导出切片
 

@@ -37,6 +37,7 @@ internal static class SolidWorksNativeInspectionReader
             string stateHash = SolidWorksDocumentRouting.ComputeStateHash(model);
             ImmutableArray<BodySnapshot> bodies = ReadBodies(model, descriptor, out double totalMassKg, out double totalVolumeM3);
             ImmutableArray<FeatureSnapshot> features = ReadFeatures(model, descriptor, bodies, out ImmutableArray<CadDiagnostic> diagnostics);
+            ImmutableArray<CadTopologyEntitySnapshot> topology = SolidWorksNativeTopologyReader.ReadPart(model, descriptor);
             var snapshot = new CadInspectionSnapshot
             {
                 Document = new CadDocumentSummary
@@ -50,6 +51,7 @@ internal static class SolidWorksNativeInspectionReader
                 },
                 Bodies = bodies,
                 Features = features,
+                TopologyEntities = topology,
                 Diagnostics = diagnostics,
             };
             return OperationResults.Success(
@@ -61,6 +63,7 @@ internal static class SolidWorksNativeInspectionReader
                         new EvidenceObservation("document.id", descriptor.DocumentId.Value),
                         new EvidenceObservation("body.count", bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("feature.count", features.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("topology.entity.count", topology.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("diagnostic.count", diagnostics.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("diagnostic.error.count", diagnostics.Count(diagnostic => diagnostic.Severity is CadDiagnosticSeverity.Error).ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("diagnostic.warning.count", diagnostics.Count(diagnostic => diagnostic.Severity is CadDiagnosticSeverity.Warning).ToString(System.Globalization.CultureInfo.InvariantCulture)),

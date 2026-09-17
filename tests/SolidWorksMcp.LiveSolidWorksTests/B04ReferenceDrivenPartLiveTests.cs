@@ -113,6 +113,55 @@ public sealed class B04ReferenceDrivenPartLiveTests
             Assert.Contains(inspection.Value.Features, feature => feature.Name == extrusionFeature.Name);
             Assert.Contains(inspection.Value.Features, feature => feature.Name == holeFeature.Name);
 
+            // B05 topology proof: inspection publishes opaque persistent references plus provider-owned geometry
+            // evidence for the actual native body. The test feeds those references back through the same declarative
+            // boundary, proving that Face/Edge/Vertex/SketchEntity are not merely enum values in a contract.
+            // B05 topology 证明：inspection 对真实 native body 输出 opaque persistent reference 和 Provider geometry
+            // evidence；测试再通过同一个声明式 boundary 回传，证明 Face/Edge/Vertex/SketchEntity 不是只写在 contract
+            // 里的 enum，而是实际可解析的 native entity。
+            foreach (CadEntityKind topologyKind in new[]
+                     {
+                         CadEntityKind.Face,
+                         CadEntityKind.Edge,
+                         CadEntityKind.Vertex,
+                         CadEntityKind.SketchEntity,
+                     })
+            {
+                CadTopologyEntitySnapshot topologyEntity = inspection.Value.TopologyEntities
+                    .FirstOrDefault(entity => entity.EntityKind == topologyKind && entity.PersistentReference is not null)
+                    ?? throw new Xunit.Sdk.XunitException($"No native topology evidence was captured for {topologyKind}.");
+                OperationResult<CadSelectionSnapshot> topologySelection = await session.Selection.ResolveAsync(
+                    new CadEntitySelector
+                    {
+                        DocumentId = part.DocumentId,
+                        EntityKind = topologyKind,
+                        PersistentReference = topologyEntity.PersistentReference,
+                        ExpectedStateHash = inspection.Value.Document.StateHash,
+                    });
+                Assert.True(topologySelection.IsSuccess, $"{topologyKind}: {FormatError(topologySelection.Error)}");
+                Assert.Equal(CadSelectionResolution.PersistentReference, topologySelection.Value!.Resolution);
+                Assert.Equal(topologyEntity.Identity, topologySelection.Value.Entity.Identity);
+
+                if (topologyEntity.GeometrySignature is not null)
+                {
+                    OperationResult<CadSelectionSnapshot> geometryTopologySelection = await session.Selection.ResolveAsync(
+                        new CadEntitySelector
+                        {
+                            DocumentId = part.DocumentId,
+                            EntityKind = topologyKind,
+                            GeometrySignature = topologyEntity.GeometrySignature,
+                            ExpectedStateHash = inspection.Value.Document.StateHash,
+                        });
+                    Assert.True(
+                        geometryTopologySelection.IsSuccess,
+                        $"{topologyKind} geometry: {FormatError(geometryTopologySelection.Error)}");
+                    Assert.Equal(
+                        CadSelectionResolution.GeometrySignature,
+                        geometryTopologySelection.Value!.Resolution);
+                    Assert.Equal(topologyEntity.Identity, geometryTopologySelection.Value.Entity.Identity);
+                }
+            }
+
             // B05 proof: the native provider resolves an exact feature by declarative semantic identity while the
             // document state hash is still the one observed immediately before the operation.  No global selection
             // mark, active-document guess or feature-list index is sent to the provider.

@@ -674,3 +674,23 @@ Official API evidence for this slice is recorded in `docs/research/solidworks-ap
 `GetSpecificAnnotation`, `CreateDrawViewFromModelView3`, `GetViews`, `GetOutline`, `GetPersistReference3` and
 `GetObjectByPersistReference3`, plus the Live-only `GetDocuments`, `GetDocumentCount` and `ExitApp` lifecycle facts.
 Model-item provenance, PMI normalization and coverage-aware release gating remain separate follow-ups.
+## B05 native topology selector evidence / B05 native 拓扑 selector 证据
+
+The native B05 slice now publishes bounded topology evidence from `ReadPart` and round-trips it through the same declarative selection boundary. `CadInspectionSnapshot.TopologyEntities` contains vendor-neutral `CadTopologyEntitySnapshot` values for Face, Edge, Vertex and SketchEntity when SOLIDWORKS exposes an opaque `solidworks.persist3` token. The token stays opaque outside the provider. Geometry signatures are optional and are emitted only for meaningful search keys: imported-body face IDs, imported-body edge IDs, canonical millimetre vertex points and sketch-feature-name plus segment ID. Native parametric face/edge IDs that read as zero are intentionally persistent-reference-only, because the official API documents those IDs for imported bodies rather than as universal topology identity.
+
+The resolver scans current solid bodies/sketch features on the owning STA, rejects zero or multiple geometry matches, checks the registered document and expected state hash, validates entity kind after `GetObjectByPersistReference3`, and returns `SELECTION_STALE` instead of guessing. No enumeration ordinal or global Selection Mark crosses the abstraction boundary. This remains a selector/inspection slice, not a claim that all topology mutation, drawing annotation capture or release QA is complete.
+
+当前 B05 native slice 已经从 `ReadPart` 输出 bounded topology evidence，并通过同一个声明式 selection boundary 做 round-trip。`CadInspectionSnapshot.TopologyEntities` 在 SOLIDWORKS 能提供 opaque `solidworks.persist3` token 时，输出 Face、Edge、Vertex、SketchEntity 的 vendor-neutral `CadTopologyEntitySnapshot`；token 在 Provider 外始终保持 opaque。Geometry signature 只有在官方 API 提供有意义的 search key 时才输出：imported-body face ID、imported-body edge ID、canonical millimetre vertex point、以及 sketch feature name + segment ID。native parametric face/edge ID 读为 0 时只允许 persistent-reference，因为官方定义这些 ID 主要服务 imported body，不能冒充通用 topology identity。
+
+Resolver 在所属 STA 扫描当前 solid body/sketch feature，拒绝零个或多个 geometry match，校验 registered document 与 expected state hash，并在 `GetObjectByPersistReference3` 后再次校验 entity kind；无法证明时返回 `SELECTION_STALE`，不猜 enumeration ordinal，也不把全局 Selection Mark 穿过 abstraction boundary。该切片仍然只是 selector/inspection 能力，不代表所有 topology mutation、drawing annotation capture 或 release QA 已完成。
+
+Final evidence on the local SOLIDWORKS 2022 machine:
+
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1 # exit 0; Unit 65 + Contract 10 + FakeCad 10 passed; 0 failed
+    dotnet format providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksMcp.Provider.SolidWorks.csproj --no-restore --verify-no-changes --severity info # exit 0
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS # exit 0; 0 warnings; 0 errors
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~B04ReferenceDrivenPartLiveTests -NoBuild # exit 0; 1 passed; 0 failed; 0 skipped; before SLDWORKS_COUNT=0; after SLDWORKS_COUNT=0
+
+The focused Live run created and verified the actual rounded non-cylindrical part and drawing workflow while round-tripping native topology selectors. The harness closed any old SOLIDWORKS process before launch and closed the exact owned PID after the test; no extra SOLIDWORKS session was left running.
+
+该 focused Live run 实际创建并验证了圆弧边界的非圆柱零件及其工程图流程，同时 round-trip native topology selector。Harness 启动前关闭旧 SOLIDWORKS，测试后关闭精确 owned PID；结束时没有遗留额外 SOLIDWORKS session。

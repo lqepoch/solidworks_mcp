@@ -69,6 +69,31 @@ public sealed record FeatureSnapshot
     public Length? Depth { get; init; }
 }
 
+/// <summary>
+/// Inspection evidence for one topological entity that can be fed back into the declarative selection boundary.
+/// 可回传给声明式 selection boundary 的单个拓扑实体 inspection evidence。
+/// </summary>
+/// <remarks>
+/// PersistentReference is the preferred round-trip token. GeometrySignature is optional because some SOLIDWORKS
+/// topology (notably native faces without an assigned imported-body face ID) has no safe, unique geometry fallback.
+/// PersistentReference 是首选回传 token。GeometrySignature 可以为空，因为部分 SOLIDWORKS topology（尤其没有
+/// imported-body face ID 的 native face）没有安全且唯一的 geometry fallback。
+/// </remarks>
+public sealed record CadTopologyEntitySnapshot
+{
+    /// <summary>Vendor-neutral entity kind.</summary>
+    public required CadEntityKind EntityKind { get; init; }
+
+    /// <summary>Provider identity for audit correlation; never an enumeration ordinal.</summary>
+    public required string Identity { get; init; }
+
+    /// <summary>Optional provider-owned geometry search evidence.</summary>
+    public CadGeometrySignature? GeometrySignature { get; init; }
+
+    /// <summary>Opaque persistent reference captured on the provider STA, when supported.</summary>
+    public CadPersistentReference? PersistentReference { get; init; }
+}
+
 /// <summary>Verified snapshot of one named model dimension.</summary>
 /// <remarks>
 /// The value is read back from the CAD parameter after mutation/rebuild; it is not copied from a request alone.
@@ -191,6 +216,12 @@ public sealed record CadInspectionSnapshot
 
     /// <summary>Model features; empty when not available.</summary>
     public ImmutableArray<FeatureSnapshot> Features { get; init; } = [];
+
+    /// <summary>
+    /// Topology evidence suitable for a subsequent declarative selector; empty when the provider cannot capture it.
+    /// 可供后续声明式 selector 使用的拓扑 evidence；Provider 无法安全 capture 时为空。
+    /// </summary>
+    public ImmutableArray<CadTopologyEntitySnapshot> TopologyEntities { get; init; } = [];
 
     /// <summary>
     /// Structured rebuild/What's Wrong diagnostics captured during inspection.
