@@ -110,6 +110,10 @@ full requirement graph, tolerance engine, drawing QA or release gate.
 Hosted-safe follow-up after this change: `scripts/build-hosted.ps1` exited 0 with 0 warnings/errors; Unit 65,
 Contract 10 and FakeCad 10 passed, with no SOLIDWORKS dependency.
 
+The private drawing sampler was rerun for this reference-driven iteration and selected exactly two single-part
+candidates. Both slots were rendered locally and retained only as `single-part-candidate review-required`; source
+filenames, PDF text, exact dimensions, title-block values and renders remain private and untracked.
+
 ## Authoritative execution DAG
 
 The root Epic comment defines this critical path:
