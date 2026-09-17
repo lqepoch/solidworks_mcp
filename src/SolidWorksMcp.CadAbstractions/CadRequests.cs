@@ -13,7 +13,7 @@ public sealed record CadSessionOptions
     public int? RequestedProcessId { get; init; }
 }
 
-/// <summary>Request to create a part document.</summary>
+/// <summary>Request to create a part document from one optional deterministic seed profile.</summary>
 public sealed record CreatePartRequest
 {
     /// <summary>Optional stable identity used by FakeCad tests or idempotent callers.</summary>
@@ -48,6 +48,19 @@ public sealed record CreatePartRequest
     /// COM 类型或源 PDF。
     /// </remarks>
     public PolygonProfileRequest? InitialPolygon { get; init; }
+
+    /// <summary>
+    /// Optional closed planar sketch made from lines and three-point arcs.
+    /// 可选的闭合平面草图，由直线和三点圆弧组成。
+    /// </summary>
+    /// <remarks>
+    /// This is the first structured profile input that can represent the rounded and D-shaped single-part drawings
+    /// used by the private review workflow without embedding a vendor COM type or a private PDF value in the product.
+    /// Segments are validated as one connected closed loop before the native provider creates them. 这是首个能够
+    /// 表达私密图纸复核中圆角轮廓和 D 形轮廓的结构化 profile 输入；它不携带厂商 COM 类型，也不把私密 PDF
+    /// 数值写入产品。Provider 建模前会验证所有 segment 是否连接成一个闭环。
+    /// </remarks>
+    public SketchProfileRequest? InitialSketchProfile { get; init; }
 }
 
 /// <summary>Planar rectangle used as the seed profile of a non-cylindrical part.</summary>
@@ -70,6 +83,48 @@ public sealed record PolygonProfileRequest
 {
     /// <summary>Boundary vertices in counter-clockwise or clockwise order.</summary>
     public ImmutableArray<Coordinate2D> Vertices { get; init; } = [];
+}
+
+/// <summary>Connected closed planar sketch profile independent of SOLIDWORKS COM.</summary>
+/// <remarks>
+/// Coordinates use canonical millimetres. The first segment's start must equal the last segment's end and every
+/// adjacent pair must connect within the validator tolerance. This prevents a provider from silently closing an open
+/// profile with an invented edge. 坐标统一使用毫米；第一条 segment 起点必须与最后一条终点一致，所有相邻端点
+/// 必须在 validator 容差内连接，避免 Provider 擅自添加“猜出来”的闭合边。
+/// </remarks>
+public sealed record SketchProfileRequest
+{
+    /// <summary>Ordered boundary curves, either line or three-point arc.</summary>
+    public ImmutableArray<SketchCurveRequest> Segments { get; init; } = [];
+}
+
+/// <summary>One vendor-neutral planar sketch curve.</summary>
+public sealed record SketchCurveRequest
+{
+    /// <summary>Curve primitive kind.</summary>
+    public SketchCurveKind Kind { get; init; } = SketchCurveKind.Line;
+
+    /// <summary>Curve start point in canonical millimetres.</summary>
+    public Coordinate2D Start { get; init; }
+
+    /// <summary>
+    /// A point on the arc for <see cref="SketchCurveKind.ThreePointArc"/>; ignored for lines.
+    /// 三点圆弧的圆弧通过点；直线忽略此字段。
+    /// </summary>
+    public Coordinate2D Through { get; init; }
+
+    /// <summary>Curve end point in canonical millimetres.</summary>
+    public Coordinate2D End { get; init; }
+}
+
+/// <summary>Supported deterministic planar sketch primitives.</summary>
+public enum SketchCurveKind
+{
+    /// <summary>A straight segment.</summary>
+    Line = 0,
+
+    /// <summary>An arc defined by start, end and an on-arc point.</summary>
+    ThreePointArc = 1,
 }
 
 /// <summary>Request to create an assembly document.</summary>

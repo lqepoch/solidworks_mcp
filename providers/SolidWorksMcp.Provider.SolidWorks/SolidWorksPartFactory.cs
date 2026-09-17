@@ -14,7 +14,7 @@ namespace SolidWorksMcp.Provider.SolidWorks;
 /// </remarks>
 internal static class SolidWorksPartFactory
 {
-    /// <summary>Creates a new part, optionally adds a deterministic initial circle sketch, saves and verifies it.</summary>
+    /// <summary>Creates a new part from a validated profile, saves it and verifies its native identity.</summary>
     public static OperationResult<SolidWorksCreatedPart> CreateOnSta(
         ISldWorks application,
         SessionId sessionId,
@@ -109,7 +109,8 @@ internal static class SolidWorksPartFactory
                         ErrorCategories.Provider));
             }
 
-            int profileCount = (request.InitialPolygon is not null ? 1 : 0)
+            int profileCount = (request.InitialSketchProfile is not null ? 1 : 0)
+                + (request.InitialPolygon is not null ? 1 : 0)
                 + (request.InitialRectangle is not null ? 1 : 0)
                 + (request.InitialCircleRadius is not null ? 1 : 0);
             if (profileCount > 1)
@@ -123,7 +124,97 @@ internal static class SolidWorksPartFactory
             }
 
             string? profileFeatureName = null;
-            if (request.InitialPolygon is PolygonProfileRequest polygonProfile)
+            if (request.InitialSketchProfile is SketchProfileRequest sketchProfile)
+            {
+                bool planeSelected = model.Extension.SelectByID2(
+                    "Front Plane",
+                    "PLANE",
+                    0d,
+                    0d,
+                    0d,
+                    false,
+                    0,
+                    null,
+                    0);
+                if (!planeSelected)
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.ProviderFailure,
+                            "The SOLIDWORKS Front Plane could not be selected for the structured sketch profile.",
+                            ErrorCategories.Provider));
+                }
+
+                model.SketchManager.InsertSketch(true);
+                bool sketchOpen = true;
+                try
+                {
+                    string? profileError = SolidWorksNativeSketchProfileBuilder.TryCreate(model, sketchProfile);
+                    if (profileError is not null)
+                    {
+                        return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                            "part.create",
+                            new OperationError(
+                                ErrorCodes.InvalidRequest,
+                                "The structured sketch profile was rejected before native extrusion.",
+                                ErrorCategories.Validation,
+                                details: new Dictionary<string, string>(StringComparer.Ordinal)
+                                {
+                                    ["profile-reason"] = profileError,
+                                },
+                                remediation: "Provide one finite, connected, closed profile made from lines and non-collinear three-point arcs."));
+                    }
+
+                    // Model Items only imports dimensions that are marked for drawing. Creating one native,
+                    // associative line dimension while the structured sketch is open gives the later drawing
+                    // compiler eligible SOLIDWORKS evidence; setting a feature value afterward is not equivalent.
+                    // Model Items 只会导入被标记为 drawing 的尺寸。在 structured sketch 打开时创建一个原生关联线性
+                    // 尺寸，才能给后续工程图编译器提供可导入的 SOLIDWORKS 证据；之后设置 feature 数值并不等价。
+                    SketchCurveRequest? firstLine = sketchProfile.Segments.FirstOrDefault(
+                        static segment => segment.Kind == SketchCurveKind.Line);
+                    if (firstLine is not null)
+                    {
+                        string? dimensionError = TryCreateNativeDrivingDimension(
+                            application,
+                            model,
+                            firstLine.Start,
+                            firstLine.End,
+                            "structured sketch profile");
+                        if (dimensionError is not null)
+                        {
+                            return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                                "part.create",
+                                new OperationError(
+                                    ErrorCodes.ProviderFailure,
+                                    dimensionError,
+                                    ErrorCategories.Provider,
+                                    remediation: "Preserve the artifact and inspect native profile dimension creation."));
+                        }
+                    }
+                }
+                finally
+                {
+                    if (sketchOpen)
+                    {
+                        model.SketchManager.InsertSketch(true);
+                    }
+                }
+
+                model.ClearSelection2(true);
+                profileFeatureName = FindFirstSketchFeatureName(model);
+                if (string.IsNullOrWhiteSpace(profileFeatureName))
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "The structured sketch profile was created but could not be identified in the feature tree.",
+                            ErrorCategories.Invariant,
+                            remediation: "Preserve the isolated artifact and inspect the native sketch feature identity."));
+                }
+            }
+            else if (request.InitialPolygon is PolygonProfileRequest polygonProfile)
             {
                 if (polygonProfile.Vertices.Length < 3
                     || polygonProfile.Vertices.Any(vertex => !double.IsFinite(vertex.X.Millimeters) || !double.IsFinite(vertex.Y.Millimeters)))
@@ -562,6 +653,68 @@ internal static class SolidWorksPartFactory
         finally
         {
             SolidWorksDocumentRouting.Release(current);
+        }
+    }
+
+    /// <summary>
+    /// Creates one native associative line dimension on an open sketch and restores the user's modal preference.
+    /// 在打开的草图中创建一个原生关联线性尺寸，并恢复用户的模态偏好。
+    /// </summary>
+    /// <remarks>
+    /// The official API distinguishes a dimension value from the DisplayDimension.MarkedForDrawing state. This
+    /// helper follows the verified installed-typelib path used by the polygon baseline and keeps the COM object on
+    /// the provider STA. The drawing layer still imports and verifies the resulting native annotation.
+    /// 官方 API 区分尺寸值与 DisplayDimension.MarkedForDrawing 状态。本 helper 复用已核验的 installed typelib
+    /// 路径，并让 COM 对象始终留在 Provider STA；工程图层仍负责导入和验证最终 native annotation。
+    /// </remarks>
+    private static string? TryCreateNativeDrivingDimension(
+        ISldWorks application,
+        ModelDoc2 model,
+        Coordinate2D start,
+        Coordinate2D end,
+        string profileDescription)
+    {
+        double midpointX = (start.X.ToMeters() + end.X.ToMeters()) / 2d;
+        double midpointY = (start.Y.ToMeters() + end.Y.ToMeters()) / 2d;
+        bool selected = model.Extension.SelectByID2(
+            string.Empty,
+            "SKETCHSEGMENT",
+            midpointX,
+            midpointY,
+            0d,
+            false,
+            0,
+            null,
+            0);
+        if (!selected)
+        {
+            return $"SOLIDWORKS could not select a native {profileDescription} edge for its driving dimension.";
+        }
+
+        // Disabling the documented input-dimension prompt is a bounded COM preflight. It avoids a modal dialog on
+        // the provider STA and never sends blind Enter/Escape/OK keystrokes.
+        // 关闭官方 input-dimension prompt 是有边界的 COM preflight；它避免 Provider STA 被模态框阻塞，绝不发送
+        // blind Enter/Escape/OK 按键。
+        const int inputDimensionValuePreference = (int)swUserPreferenceToggle_e.swInputDimValOnCreate;
+        bool previousPreference = application.GetUserPreferenceToggle(inputDimensionValuePreference);
+        application.SetUserPreferenceToggle(inputDimensionValuePreference, false);
+        try
+        {
+            DisplayDimension? nativeDimension = model.IAddDimension2(midpointX, midpointY - 0.01d, 0d);
+            if (nativeDimension is null)
+            {
+                return $"SOLIDWORKS returned no native driving dimension for the {profileDescription}.";
+            }
+
+            SolidWorksDocumentRouting.Release(nativeDimension);
+            return null;
+        }
+        finally
+        {
+            // Restore the interactive preference before returning; a restore exception intentionally surfaces
+            // through the provider's structured failure path instead of silently changing SOLIDWORKS state.
+            // 返回前恢复交互偏好；恢复异常有意通过 Provider 结构化 failure 路径暴露，不静默改变状态。
+            application.SetUserPreferenceToggle(inputDimensionValuePreference, previousPreference);
         }
     }
 }

@@ -15,7 +15,29 @@ close the owned process, this section is the current state.
 本节记录窄版 native export 和进程生命周期切片的最新覆盖证据。下方旧条目保留历史时间线；其中关于 native export
 仍 unsupported、或 B03 不关闭 owned process 的描述，均以本节当前状态为准。
 
-- Commit under test: working tree change after `c6efc96` (commit only after the hosted and Live evidence below is recorded).
+- Commit under test: working tree change after `00092cf` (the curved-profile slice is pending its verified commit).
+- The current reference-driven iteration sampled exactly two local, single-part drawing candidates through the private
+  fixture skill. Only generic classes were retained: curved/rounded plate family, orthographic/isometric views, hole
+  features, thickness, tolerance/title-block consideration. No private PDF content, values, names or rendered images
+  entered the repository, build inputs, logs, Issues or artifacts.
+- `CreatePartRequest.InitialSketchProfile` now carries a vendor-neutral, validated connected profile made from lines
+  and three-point arcs. The native provider maps it to `ISketchManager.CreateLine`/`Create3PointArc` on the Provider STA,
+  then creates a real associative sketch dimension before extrusion so `InsertModelAnnotations3` can import native
+  marked-for-drawing evidence. No display dimension is synthesized from request text.
+- B03 now creates a D-shaped curved plate, changes a named extrusion dimension, cuts one real through-hole and saves
+  a native part, drawing, STEP and PDF. B04 now creates a rounded plate, a semantic two-instance hole group, a native
+  model dimension and a native note, then saves/reopens the part and drawing.
+- The latest one-process fresh SOLIDWORKS run used the exact harness below and completed `Live 9 passed, 1 skipped,
+  0 failed`; the skipped test is the explicit placeholder. Unit/Contract/FakeCad completed `65/7/8 passed` with no
+  failures, and the post-run process inventory was `SLDWORKS_COUNT=0`.
+- Retained local evidence (outside Git) includes non-empty B03 `.SLDPRT`, `.SLDDRW`, STEP and PDF plus B04 `.SLDPRT`
+  and `.SLDDRW` under the isolated user-local test workspace. These are real SOLIDWORKS 2022 artifacts and are not
+  public fixtures.
+- Fresh-process command and result:
+
+      `$env:SOLIDWORKS_MCP_LIVE_KEEP_ARTIFACT='1'; powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -RepositoryRoot D:\Program\solidworks_mcp -Workspace C:\Users\lqepo\AppData\Local\SolidWorksMcp\test-workspace -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -NoBuild`
+
+      `exit 0; Unit 65 passed; Contract 7 passed; FakeCad 8 passed; Live 9 passed; 1 explicit placeholder skipped; 0 failed`
 - Native provider now exposes a bounded `ICadExportService`: `PDF` for drawings and `STEP`/`IGES`/`STL` for parts/assemblies.
 - `SolidWorksNativeExportService` performs path allowlist validation, document identity/state verification, selection
   clearing, `IModelDocExtension.SaveAs`, Boolean/error-code checks, non-empty output proof and source state-hash recheck.

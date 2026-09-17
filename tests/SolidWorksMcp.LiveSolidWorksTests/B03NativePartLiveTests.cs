@@ -35,10 +35,10 @@ public sealed class B03NativePartLiveTests
 
         string workspace = Path.GetFullPath(workspaceText.Trim());
         Directory.CreateDirectory(workspace);
-        string partPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.sldprt");
-        string drawingPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.slddrw");
-        string stepPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.step");
-        string pdfPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.pdf");
+        string partPath = Path.Combine(workspace, $"B03-DProfile-{Guid.NewGuid():N}.sldprt");
+        string drawingPath = Path.Combine(workspace, $"B03-DProfile-{Guid.NewGuid():N}.slddrw");
+        string stepPath = Path.Combine(workspace, $"B03-DProfile-{Guid.NewGuid():N}.step");
+        string pdfPath = Path.Combine(workspace, $"B03-DProfile-{Guid.NewGuid():N}.pdf");
         bool completed = false;
         try
         {
@@ -54,7 +54,10 @@ public sealed class B03NativePartLiveTests
                 new CreatePartRequest
                 {
                     Path = partPath,
-                    InitialCircleRadius = Length.FromMillimeters(25d),
+                    // This redacted reference class is a plate with a straight lower boundary and a three-point
+                    // rounded crown. It exercises real arc geometry instead of collapsing the fixture to a cylinder.
+                    // 该脱敏参考类别是下部直边、上部三点圆弧的板件；这里验证真实圆弧，而不是退化成圆柱。
+                    InitialSketchProfile = DShapedPlateProfile(),
                 });
             Assert.True(createResult.IsSuccess, FormatError(createResult.Error));
             ICadPartDocument part = createResult.Value!;
@@ -65,7 +68,7 @@ public sealed class B03NativePartLiveTests
             OperationResult<FeatureSnapshot> extrusion = await part.AddExtrusionAsync(
                 new ExtrusionRequest
                 {
-                    Name = "B03-Circle-Extrusion",
+                    Name = "B03-DProfile-Extrusion",
                     Depth = Length.FromMillimeters(10d),
                 });
             Assert.True(
@@ -104,6 +107,19 @@ public sealed class B03NativePartLiveTests
             Assert.True(afterDimension.IsSuccess, FormatError(afterDimension.Error));
             Assert.Single(afterDimension.Value!.Bodies);
             Assert.True(afterDimension.Value.Bodies[0].Volume.CubicMillimeters > volumeBeforeDimension);
+            Assert.Contains(afterDimension.Value.Features, feature => feature.Name == extrusion.Value.Name);
+
+            OperationResult<FeatureSnapshot> hole = await part.AddThroughHolePatternAsync(
+                new ThroughHolePatternRequest
+                {
+                    Name = "B03-DProfile-ThroughHole",
+                    Diameter = Length.FromMillimeters(10d),
+                    Centers =
+                    [
+                        new Coordinate2D(Length.FromMillimeters(0d), Length.FromMillimeters(0d)),
+                    ],
+                });
+            Assert.True(hole.IsSuccess, FormatError(hole.Error));
             Assert.Contains(afterDimension.Value.Features, feature => feature.Name == extrusion.Value.Name);
 
             OperationResult<SaveReceipt> save = await part.SaveAsync();
@@ -209,6 +225,7 @@ public sealed class B03NativePartLiveTests
             Assert.True(reopened.IsSuccess, FormatError(reopened.Error));
             Assert.Single(reopened.Value!.Bodies);
             Assert.Contains(reopened.Value.Features, feature => feature.Name == extrusion.Value.Name);
+            Assert.Contains(reopened.Value.Features, feature => feature.Name == hole.Value!.Name);
             Assert.True(reopened.Value.Bodies[0].Volume.CubicMillimeters > 0d);
             // The pre-save inspection hash includes the dirty/save-flag marker; persisted reopen must match the
             // post-save receipt hash instead.  保存前 inspection hash 包含 dirty/save-flag；持久化 reopen 应与
@@ -278,6 +295,34 @@ public sealed class B03NativePartLiveTests
             : $" details={string.Join(';', error.Details.Select(pair => $"{pair.Key}={pair.Value}"))}";
         return $"code={error.Code}; category={error.Category}; message={error.Message};{details}";
     }
+
+    /// <summary>Builds a generic D-shaped closed profile without copying confidential drawing dimensions.</summary>
+    private static SketchProfileRequest DShapedPlateProfile() => new()
+    {
+        Segments =
+        [
+            Curve(SketchCurveKind.Line, (-20d, -20d), (20d, -20d)),
+            Curve(SketchCurveKind.Line, (20d, -20d), (20d, 0d)),
+            Curve(SketchCurveKind.ThreePointArc, (20d, 0d), (-20d, 0d), (0d, 22d)),
+            Curve(SketchCurveKind.Line, (-20d, 0d), (-20d, -20d)),
+        ],
+    };
+
+    private static SketchCurveRequest Curve(
+        SketchCurveKind kind,
+        (double X, double Y) start,
+        (double X, double Y) end,
+        (double X, double Y)? through = null) => new()
+        {
+            Kind = kind,
+            Start = Point(start),
+            End = Point(end),
+            Through = Point(through ?? (0d, 0d)),
+        };
+
+    private static Coordinate2D Point((double X, double Y) point) => new(
+        Length.FromMillimeters(point.X),
+        Length.FromMillimeters(point.Y));
 }
 
 /// <summary>Fact attribute that turns an absent explicit Live configuration into a discovery-time skip.</summary>

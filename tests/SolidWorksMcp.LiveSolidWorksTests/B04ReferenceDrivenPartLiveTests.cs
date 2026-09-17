@@ -7,8 +7,8 @@ using SolidWorksMcp.Provider.SolidWorks;
 namespace SolidWorksMcp.LiveSolidWorksTests;
 
 /// <summary>
-/// Opt-in native proof for a non-cylindrical reference-driven slice: an L-bracket profile, semantic hole group and drawing.
-/// 显式 opt-in 的非圆柱参考驱动切片：L 形支架轮廓、具备工程语义的孔组和真实工程图。
+/// Opt-in native proof for a rounded reference-driven slice: an arc-based plate profile, semantic hole group and drawing.
+/// 显式 opt-in 的圆角参考驱动切片：由圆弧组成的板件轮廓、具备工程语义的孔组和真实工程图。
 /// </summary>
 /// <remarks>
 /// This fixture intentionally uses a redacted engineering class rather than any confidential drawing text or dimensions.
@@ -46,26 +46,15 @@ public sealed class B04ReferenceDrivenPartLiveTests
             Assert.True(sessionResult.IsSuccess, FormatError(sessionResult.Error));
             ICadSession session = sessionResult.Value!;
 
-            // The profile is deliberately an asymmetric L-bracket rather than a primitive cylinder or a single
-            // rectangle. It proves that the provider executes a reference-driven closed-profile plan and preserves
-            // a repeated hole group as engineering intent. 这里故意使用非对称 L 形闭合轮廓，而不是圆柱或单个矩形，
-            // 证明 Provider 执行参考驱动的 profile plan，并保留重复孔组的工程语义。
+            // The profile is deliberately a rounded rectangle made from native lines and three-point arcs rather
+            // than a primitive cylinder or a sharp polygon. It proves curved boundary intent and repeated-hole
+            // semantics. 这里故意使用由原生直线和三点圆弧组成的圆角矩形，而不是圆柱或尖角多边形，证明曲线
+            // 轮廓意图和重复孔组工程语义都被保留。
             OperationResult<ICadPartDocument> createResult = await session.CreatePartAsync(
                 new CreatePartRequest
                 {
                     Path = partPath,
-                    InitialPolygon = new PolygonProfileRequest
-                    {
-                        Vertices =
-                        [
-                            new Coordinate2D(Length.FromMillimeters(-40d), Length.FromMillimeters(-25d)),
-                            new Coordinate2D(Length.FromMillimeters(40d), Length.FromMillimeters(-25d)),
-                            new Coordinate2D(Length.FromMillimeters(40d), Length.FromMillimeters(25d)),
-                            new Coordinate2D(Length.FromMillimeters(-8d), Length.FromMillimeters(25d)),
-                            new Coordinate2D(Length.FromMillimeters(-8d), Length.FromMillimeters(-17d)),
-                            new Coordinate2D(Length.FromMillimeters(-40d), Length.FromMillimeters(-17d)),
-                        ],
-                    },
+                    InitialSketchProfile = RoundedPlateProfile(),
                 });
             Assert.True(createResult.IsSuccess, FormatError(createResult.Error));
             ICadPartDocument part = createResult.Value!;
@@ -73,15 +62,30 @@ public sealed class B04ReferenceDrivenPartLiveTests
             OperationResult<FeatureSnapshot> extrusion = await part.AddExtrusionAsync(
                 new ExtrusionRequest
                 {
-                    Name = "ReferenceBracket-Thickness",
+                    Name = "ReferenceRoundedPlate-Thickness",
                     Depth = Length.FromMillimeters(8d),
                 });
             Assert.True(extrusion.IsSuccess, FormatError(extrusion.Error));
 
+            // Keep one native driving dimension in the part before model-item insertion. The drawing compiler must
+            // consume a dimension owned by SOLIDWORKS, not infer text from the rounded profile or manufacture a
+            // display dimension from the test request. 先在零件中保留一个由 SOLIDWORKS 所有的 driving dimension，
+            // 再执行 Model Items 插入；工程图编译器必须消费 native dimension，不能从圆角轮廓猜文字，也不能
+            // 用测试请求伪造显示尺寸。
+            OperationResult<DimensionSnapshot> thicknessDimension = await part.SetDimensionValueAsync(
+                new DimensionUpdateRequest
+                {
+                    ParameterName = $"D1@{extrusion.Value!.Name}",
+                    Value = Length.FromMillimeters(8d),
+                    Configuration = part.Configuration,
+                });
+            Assert.True(thicknessDimension.IsSuccess, FormatError(thicknessDimension.Error));
+            Assert.Equal(8d, thicknessDimension.Value!.Value.Millimeters, precision: 8);
+
             OperationResult<FeatureSnapshot> holes = await part.AddThroughHolePatternAsync(
                 new ThroughHolePatternRequest
                 {
-                    Name = "ReferenceHolePattern-2X",
+                    Name = "ReferenceRoundedPlate-HolePattern-2X",
                     Diameter = Length.FromMillimeters(6d),
                     Centers =
                     [
@@ -93,7 +97,7 @@ public sealed class B04ReferenceDrivenPartLiveTests
             Assert.False(string.IsNullOrWhiteSpace(holes.Value!.Name));
             Assert.Contains(
                 holes.Evidence!.Observations,
-                observation => observation.Key == "semantic.name" && observation.Value == "ReferenceHolePattern-2X");
+                observation => observation.Key == "semantic.name" && observation.Value == "ReferenceRoundedPlate-HolePattern-2X");
 
             OperationResult<RebuildReceipt> rebuild = await part.RebuildAsync();
             Assert.True(rebuild.IsSuccess, FormatError(rebuild.Error));
@@ -203,24 +207,24 @@ public sealed class B04ReferenceDrivenPartLiveTests
             OperationResult<DrawingAnnotationSnapshot> note = await drawing.AddAnnotationAsync(
                 new DrawingAnnotationRequest
                 {
-                    RequestedAnnotationId = new AnnotationId("ReferenceBracket-note"),
+                    RequestedAnnotationId = new AnnotationId("ReferenceRoundedPlate-note"),
                     ViewId = frontView!.ViewId,
                     Kind = "note",
-                    Text = "REFERENCE BRACKET",
-                    CoverageKeys = ["reference-bracket.semantic-note"],
+                    Text = "REFERENCE ROUNDED PLATE",
+                    CoverageKeys = ["reference-rounded-plate.semantic-note"],
                     Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(235d)),
                 });
             Assert.True(note.IsSuccess, FormatError(note.Error));
             Assert.Equal("note", note.Value!.Kind);
-            Assert.Equal("REFERENCE BRACKET", note.Value.Text);
+            Assert.Equal("REFERENCE ROUNDED PLATE", note.Value.Text);
 
             OperationResult<DrawingAnnotationSnapshot> modelDimensions = await drawing.AddAnnotationAsync(
                 new DrawingAnnotationRequest
                 {
-                    RequestedAnnotationId = new AnnotationId("ReferenceBracket-model-dimension"),
+                    RequestedAnnotationId = new AnnotationId("ReferenceRoundedPlate-model-dimension"),
                     ViewId = frontView.ViewId,
                     Kind = "model-dimensions",
-                    CoverageKeys = ["reference-bracket.native-model-dimension"],
+                    CoverageKeys = ["reference-rounded-plate.native-model-dimension"],
                     Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(225d)),
                 });
             Assert.True(modelDimensions.IsSuccess, FormatError(modelDimensions.Error));
@@ -241,7 +245,7 @@ public sealed class B04ReferenceDrivenPartLiveTests
                 drawingInspection.Value.Annotations,
                 annotation => annotation.AnnotationId == note.Value.AnnotationId
                     && annotation.Kind == "note"
-                    && annotation.Text == "REFERENCE BRACKET");
+                    && annotation.Text == "REFERENCE ROUNDED PLATE");
             Assert.Contains(
                 drawingInspection.Value.Annotations,
                 annotation => annotation.Kind == "model-dimension"
@@ -258,7 +262,7 @@ public sealed class B04ReferenceDrivenPartLiveTests
                 reopenedDrawing.Value.Annotations,
                 annotation => annotation.AnnotationId == note.Value.AnnotationId
                     && annotation.Kind == "note"
-                    && annotation.Text == "REFERENCE BRACKET");
+                    && annotation.Text == "REFERENCE ROUNDED PLATE");
             Assert.Contains(
                 reopenedDrawing.Value.Annotations,
                 annotation => annotation.Kind == "model-dimension"
@@ -306,6 +310,38 @@ public sealed class B04ReferenceDrivenPartLiveTests
             }
         }
     }
+
+    /// <summary>Builds a generic rounded plate profile without copying confidential drawing dimensions.</summary>
+    private static SketchProfileRequest RoundedPlateProfile() => new()
+    {
+        Segments =
+        [
+            Curve(SketchCurveKind.Line, (-32d, -25d), (32d, -25d)),
+            Curve(SketchCurveKind.ThreePointArc, (32d, -25d), (40d, -17d), (37.657d, -22.657d)),
+            Curve(SketchCurveKind.Line, (40d, -17d), (40d, 17d)),
+            Curve(SketchCurveKind.ThreePointArc, (40d, 17d), (32d, 25d), (37.657d, 22.657d)),
+            Curve(SketchCurveKind.Line, (32d, 25d), (-32d, 25d)),
+            Curve(SketchCurveKind.ThreePointArc, (-32d, 25d), (-40d, 17d), (-37.657d, 22.657d)),
+            Curve(SketchCurveKind.Line, (-40d, 17d), (-40d, -17d)),
+            Curve(SketchCurveKind.ThreePointArc, (-40d, -17d), (-32d, -25d), (-37.657d, -22.657d)),
+        ],
+    };
+
+    private static SketchCurveRequest Curve(
+        SketchCurveKind kind,
+        (double X, double Y) start,
+        (double X, double Y) end,
+        (double X, double Y)? through = null) => new()
+        {
+            Kind = kind,
+            Start = Point(start),
+            End = Point(end),
+            Through = Point(through ?? (0d, 0d)),
+        };
+
+    private static Coordinate2D Point((double X, double Y) point) => new(
+        Length.FromMillimeters(point.X),
+        Length.FromMillimeters(point.Y));
 
     private static string FormatError(OperationError? error)
     {
