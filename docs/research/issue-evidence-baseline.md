@@ -1109,7 +1109,10 @@ semantic classes observed during private drawing review: a rounded plate and a f
 generic test inputs; they do not contain private PDF filenames, title-block content or source drawing text. Each case
 creates a real SOLIDWORKS part from a connected line/arc sketch, persists an `SLDPRT`, creates a native drawing with
 orthographic and isometric views, persists an `SLDDRW`, exports a PDF, and verifies non-empty artifacts through the MCP
-result contract. The rendered PDF evidence was inspected locally; only the generic semantic conclusion is recorded here.
+result contract. The strengthened result assertions also require one solid body, a native feature and topology entity,
+positive measured volume, a non-degenerate three-axis body bounding box, the requested extrusion depth, at least three
+persisted drawing views and at least one read-back annotation. The rendered PDF evidence was inspected locally; only the
+generic semantic conclusion is recorded here.
 
 The run is isolated under the user-local Live workspace and is not copied into the repository. The process harness
 closed the previous SOLIDWORKS instance before launch and shut down the one owned instance afterward:
@@ -1117,8 +1120,11 @@ closed the previous SOLIDWORKS instance before launch and shut down the one owne
     powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~McpReferenceDrivenSinglePartClassesCreateVerifiedThreeDAndTwoDArtifacts -NoBuild
     # first run: exit 0; Live 1 passed; 0 failed; 0 skipped; SLDWORKS_COUNT_BEFORE=1; SLDWORKS_COUNT_AFTER_OLD=0; SLDWORKS_COUNT_AFTER=0
     # artifact-retention run: exit 0; Live 1 passed; 0 failed; 0 skipped; SLDWORKS_COUNT_BEFORE=0; SLDWORKS_COUNT_AFTER_OLD=0; SLDWORKS_COUNT_AFTER=0
+    # strengthened native-evidence run: exit 0; Live 1 passed; 0 failed; 0 skipped; SLDWORKS_COUNT_BEFORE=0; SLDWORKS_COUNT_AFTER_OLD=0; SLDWORKS_COUNT_AFTER=0
 
 The retained artifacts are user-local evidence only. This proves the current MCP-to-native 3D/2D path for two generic
-single-part classes; it does not claim that private drawing dimensions, annotations, tolerance provenance or full
-manufacturing coverage have been reconstructed. Those remain gated by the Engineering Requirement Graph, provider
-inspection and the later Drawing Compiler issues.
+single-part classes and catches incorrect COM geometry interpretation: the failed pre-fix run exposed a degenerate Z box,
+and the provider was corrected after checking the official `IBody2.GetBodyBox` contract `[X1,Y1,Z1,X2,Y2,Z2]`. It does
+not claim that private drawing dimensions, annotations, tolerance provenance or full manufacturing coverage have been
+reconstructed. Those remain gated by the Engineering Requirement Graph, provider inspection and the later Drawing Compiler
+issues.

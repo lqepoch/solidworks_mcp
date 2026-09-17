@@ -483,9 +483,35 @@ internal static class SolidWorksNativeInspectionReader
             return (zero, zero);
         }
 
+        // IBody2.GetBodyBox returns two XYZ corners, not six interleaved min/max values:
+        // [XCorner1, YCorner1, ZCorner1, XCorner2, YCorner2, ZCorner2].  The previous
+        // implementation treated the array as [XMin, XMax, YMin, YMax, ZMin, ZMax].
+        // That happened to produce plausible values for some symmetric fixtures, but it
+        // could make one axis appear zero-length and therefore was not valid geometry evidence.
+        //
+        // IBody2.GetBodyBox 返回的是两个 XYZ 角点，而不是六个交错的 min/max 值：
+        // [XCorner1, YCorner1, ZCorner1, XCorner2, YCorner2, ZCorner2]。旧实现把数组
+        // 错当成 [XMin, XMax, YMin, YMax, ZMin, ZMax]；对于某些对称 fixture 看起来仍然合理，
+        // 但会导致某个轴被错误地报告为零长度，因此不能作为有效几何证据。
+        // SOLIDWORKS only promises approximate corners; normalize each coordinate so that
+        // the domain snapshot remains valid even when a rotated/negative-coordinate body is read.
+        // SOLIDWORKS 只保证角点是近似值；这里逐坐标归一化，确保旋转或负坐标实体仍能形成有效快照。
+        double x1 = values[0];
+        double y1 = values[1];
+        double z1 = values[2];
+        double x2 = values[3];
+        double y2 = values[4];
+        double z2 = values[5];
+
         return (
-            new Coordinate3D(Length.FromMeters(values[0]), Length.FromMeters(values[2]), Length.FromMeters(values[4])),
-            new Coordinate3D(Length.FromMeters(values[1]), Length.FromMeters(values[3]), Length.FromMeters(values[5])));
+            new Coordinate3D(
+                Length.FromMeters(Math.Min(x1, x2)),
+                Length.FromMeters(Math.Min(y1, y2)),
+                Length.FromMeters(Math.Min(z1, z2))),
+            new Coordinate3D(
+                Length.FromMeters(Math.Max(x1, x2)),
+                Length.FromMeters(Math.Max(y1, y2)),
+                Length.FromMeters(Math.Max(z1, z2))));
     }
 }
 

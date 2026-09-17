@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.IO.Pipelines;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -185,6 +186,7 @@ public sealed class McpBuildPartDrawingLiveTests
                 Assert.Contains("workflow", result.StructuredContent.ToString(), StringComparison.Ordinal);
                 Assert.Contains("drawing.view.count", result.StructuredContent.ToString(), StringComparison.Ordinal);
                 Assert.Contains("export.format", result.StructuredContent.ToString(), StringComparison.Ordinal);
+                AssertNativeGeometryAndDrawingEvidence(result, referenceCase);
                 Assert.True(File.Exists(partPath), $"The {referenceCase.Id} part was not persisted.");
                 Assert.True(File.Exists(drawingPath), $"The {referenceCase.Id} drawing was not persisted.");
                 Assert.True(File.Exists(pdfPath), $"The {referenceCase.Id} PDF was not exported.");
@@ -212,6 +214,58 @@ public sealed class McpBuildPartDrawingLiveTests
     /// <summary>Names one redacted semantic reference case and carries only its provider-neutral profile JSON.</summary>
     /// <summary>表示一个脱敏语义参考 case；这里只携带厂商无关的 profile JSON。</summary>
     private sealed record ReferencePartCase(string Id, string ProfileJson, double ExtrusionDepthMillimeters);
+
+    /// <summary>
+    /// Verifies engineering data returned by the MCP result, not only that files exist.
+    /// 验证 MCP result 返回的工程数据，而不是只验证文件存在。
+    /// </summary>
+    /// <remarks>
+    /// The assertions intentionally use broad invariants shared by both redacted classes: one solid body, at least one
+    /// native feature/topology entity, positive measured volume, a non-degenerate bounding box, and multiple persisted
+    /// drawing views/annotations. This keeps the test independent of private source dimensions while proving that the
+    /// profile became real geometry and that the drawing was inspected after reopen.
+    /// 这些断言只使用两个脱敏类别共有的宽不变量：一个实体 body、至少一个 native feature/topology entity、正体积、
+    /// 非退化包围盒，以及多个重开后读回的工程图视图/标注；不依赖私密源尺寸，但能证明 profile 已成为真实几何。
+    /// </remarks>
+    private static void AssertNativeGeometryAndDrawingEvidence(
+        CallToolResult result,
+        ReferencePartCase referenceCase)
+    {
+        Assert.NotNull(result.StructuredContent);
+        JsonElement root = result.StructuredContent!.Value;
+        JsonElement value = root.GetProperty("value");
+        JsonElement part = value.GetProperty("part");
+        JsonElement bodies = part.GetProperty("bodies");
+        JsonElement features = part.GetProperty("features");
+        JsonElement topology = part.GetProperty("topologyEntities");
+
+        Assert.Equal(1, bodies.GetArrayLength());
+        Assert.True(features.GetArrayLength() >= 1, $"{referenceCase.Id} has no verified native feature.");
+        Assert.True(topology.GetArrayLength() >= 1, $"{referenceCase.Id} has no verified topology entity.");
+
+        JsonElement body = bodies[0];
+        Assert.True(body.GetProperty("featureCount").GetInt32() >= 1);
+        Assert.True(body.GetProperty("volume").GetProperty("cubicMillimeters").GetDouble() > 0d);
+        double minX = ReadLength(body.GetProperty("boundingBoxMinimum").GetProperty("x"));
+        double maxX = ReadLength(body.GetProperty("boundingBoxMaximum").GetProperty("x"));
+        double minY = ReadLength(body.GetProperty("boundingBoxMinimum").GetProperty("y"));
+        double maxY = ReadLength(body.GetProperty("boundingBoxMaximum").GetProperty("y"));
+        double minZ = ReadLength(body.GetProperty("boundingBoxMinimum").GetProperty("z"));
+        double maxZ = ReadLength(body.GetProperty("boundingBoxMaximum").GetProperty("z"));
+        Assert.True(maxX > minX, $"{referenceCase.Id} has a degenerate X bounding box.");
+        Assert.True(maxY > minY, $"{referenceCase.Id} has a degenerate Y bounding box.");
+        Assert.True(maxZ > minZ, $"{referenceCase.Id} has a degenerate Z bounding box.");
+
+        double extrusionDepth = ReadLength(value.GetProperty("extrusion").GetProperty("depth"));
+        Assert.Equal(referenceCase.ExtrusionDepthMillimeters, extrusionDepth, precision: 6);
+
+        JsonElement drawing = value.GetProperty("drawing");
+        Assert.True(drawing.GetProperty("views").GetArrayLength() >= 3, $"{referenceCase.Id} has insufficient drawing views.");
+        Assert.True(drawing.GetProperty("annotations").GetArrayLength() >= 1, $"{referenceCase.Id} has no drawing annotation.");
+    }
+
+    /// <summary>Reads a serialized canonical millimetre value from the MCP contract. / 从 MCP contract 读取序列化后的毫米值。</summary>
+    private static double ReadLength(JsonElement length) => length.GetProperty("millimeters").GetDouble();
 
     /// <summary>Returns a generic rounded-plate profile; it contains no private source dimensions.</summary>
     /// <summary>返回通用圆角板 profile；不包含私密源图纸尺寸。</summary>
