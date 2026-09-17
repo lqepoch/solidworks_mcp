@@ -120,6 +120,14 @@ public interface ICadPartDocument : ICadDocument
         ExtrusionRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Cuts one semantic group of through holes from the current solid and verifies the resulting native feature.
+    /// 从当前 solid 切削一个具备工程语义的通孔组，并验证生成的 native feature。
+    /// </summary>
+    Task<OperationResult<FeatureSnapshot>> AddThroughHolePatternAsync(
+        ThroughHolePatternRequest request,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Changes one named model dimension, rebuilds the part and returns read-back evidence.</summary>
     /// <remarks>
     /// Providers must resolve the exact dimension identity and active configuration before mutation.  A raw setter

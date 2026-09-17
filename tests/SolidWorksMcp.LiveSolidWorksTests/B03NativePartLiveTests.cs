@@ -35,6 +35,7 @@ public sealed class B03NativePartLiveTests
         string workspace = Path.GetFullPath(workspaceText.Trim());
         Directory.CreateDirectory(workspace);
         string partPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.sldprt");
+        string drawingPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.slddrw");
         bool completed = false;
         try
         {
@@ -106,6 +107,64 @@ public sealed class B03NativePartLiveTests
             Assert.True(save.IsSuccess, FormatError(save.Error));
             Assert.True(File.Exists(partPath));
 
+            // This is the first real 3D-to-2D proof: the drawing is created by SOLIDWORKS from its local template,
+            // native views are inserted from the persisted part, and the saved .slddrw is reopened and inspected.
+            // 这是首个真实三维到二维证明：由 SOLIDWORKS 使用本机 template 建图，从已持久化零件插入原生视图，
+            // 保存 .slddrw 后重新打开并 inspection；这里不是 FakeCad 或仅测试内存对象。
+            OperationResult<ICadDrawingDocument> drawingCreate = await session.CreateDrawingAsync(
+                new CreateDrawingRequest
+                {
+                    Path = drawingPath,
+                    SourceDocumentId = part.DocumentId,
+                    Configuration = part.Configuration,
+                });
+            Assert.True(drawingCreate.IsSuccess, FormatError(drawingCreate.Error));
+            ICadDrawingDocument drawing = drawingCreate.Value!;
+
+            OperationResult<DrawingViewSnapshot> frontView = await drawing.AddViewAsync(
+                new DrawingViewRequest
+                {
+                    RequestedViewId = new ViewId("b03-front-view"),
+                    Name = "Front",
+                    Orientation = "Front",
+                    Position = new Coordinate2D(Length.FromMillimeters(100d), Length.FromMillimeters(130d)),
+                    ScaleDenominator = 1,
+                });
+            Assert.True(frontView.IsSuccess, FormatError(frontView.Error));
+
+            OperationResult<DrawingViewSnapshot> isometricView = await drawing.AddViewAsync(
+                new DrawingViewRequest
+                {
+                    RequestedViewId = new ViewId("b03-isometric-view"),
+                    Name = "Isometric",
+                    Orientation = "Isometric",
+                    Position = new Coordinate2D(Length.FromMillimeters(220d), Length.FromMillimeters(110d)),
+                    ScaleDenominator = 1,
+                });
+            Assert.True(isometricView.IsSuccess, FormatError(isometricView.Error));
+
+            OperationResult<RebuildReceipt> drawingRebuild = await drawing.RebuildAsync();
+            Assert.True(drawingRebuild.IsSuccess, FormatError(drawingRebuild.Error));
+            Assert.False(drawingRebuild.Value!.HasErrors);
+
+            OperationResult<CadInspectionSnapshot> drawingInspection = await session.Inspection.InspectAsync(drawing.DocumentId);
+            Assert.True(drawingInspection.IsSuccess, FormatError(drawingInspection.Error));
+            Assert.True(drawingInspection.Value!.Views.Length >= 2);
+            Assert.Contains(drawingInspection.Value.Views, view => view.Orientation.Contains("Front", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(drawingInspection.Value.Views, view => view.Orientation.Contains("Isometric", StringComparison.OrdinalIgnoreCase));
+
+            OperationResult<SaveReceipt> drawingSave = await drawing.SaveAsync();
+            Assert.True(drawingSave.IsSuccess, FormatError(drawingSave.Error));
+            Assert.True(File.Exists(drawingPath));
+
+            OperationResult<CadInspectionSnapshot> reopenedDrawing = await drawing.ReopenAndInspectAsync();
+            Assert.True(reopenedDrawing.IsSuccess, FormatError(reopenedDrawing.Error));
+            Assert.True(reopenedDrawing.Value!.Views.Length >= 2);
+            Assert.Equal(drawingSave.Value!.StateHash, reopenedDrawing.Value.Document.StateHash);
+
+            OperationResult<MutationReceipt> closeDrawing = await drawing.CloseAsync();
+            Assert.True(closeDrawing.IsSuccess, FormatError(closeDrawing.Error));
+
             // ReopenAndInspectAsync is the provider-level lifecycle proof.  It must close the exact registered path,
             // call the documented native open operation on the provider STA, and verify geometry/feature identity
             // after reopening.  ReopenAndInspectAsync 是 Provider 层的生命周期证明：必须关闭 registry 中的精确
@@ -141,19 +200,27 @@ public sealed class B03NativePartLiveTests
                 Environment.GetEnvironmentVariable("SOLIDWORKS_MCP_LIVE_KEEP_ARTIFACT"),
                 "1",
                 StringComparison.Ordinal);
-            if (completed && !keepArtifact && File.Exists(partPath))
+            if (completed && !keepArtifact)
             {
-                try
+                foreach (string artifactPath in new[] { partPath, drawingPath })
                 {
-                    File.Delete(partPath);
-                }
-                catch (IOException)
-                {
-                    Console.Error.WriteLine("live-artifact-cleanup=deferred; reason=document-still-open");
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    Console.Error.WriteLine("live-artifact-cleanup=deferred; reason=filesystem-lock");
+                    if (!File.Exists(artifactPath))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        File.Delete(artifactPath);
+                    }
+                    catch (IOException)
+                    {
+                        Console.Error.WriteLine($"live-artifact-cleanup=deferred; path={artifactPath}; reason=document-still-open");
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        Console.Error.WriteLine($"live-artifact-cleanup=deferred; path={artifactPath}; reason=filesystem-lock");
+                    }
                 }
             }
         }

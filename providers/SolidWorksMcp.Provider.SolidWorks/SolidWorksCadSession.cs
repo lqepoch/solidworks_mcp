@@ -112,16 +112,71 @@ internal sealed class SolidWorksCadSession : ICadSession
                 : UnsupportedOrClosed<ICadAssemblyDocument>(CadCapabilityNames.AssemblyMutation, "create-assembly"));
     }
 
-    public Task<OperationResult<ICadDrawingDocument>> CreateDrawingAsync(
+    public async Task<OperationResult<ICadDrawingDocument>> CreateDrawingAsync(
         CreateDrawingRequest request,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(
-            request is null
-                ? SolidWorksProviderResults.Failure<ICadDrawingDocument>(
-                    "create-drawing",
-                    new OperationError(ErrorCodes.InvalidRequest, "The drawing request is required.", ErrorCategories.Validation))
-                : UnsupportedOrClosed<ICadDrawingDocument>(CadCapabilityNames.DrawingMutation, "create-drawing"));
+        if (request is null)
+        {
+            return SolidWorksProviderResults.Failure<ICadDrawingDocument>(
+                "drawing.create",
+                new OperationError(ErrorCodes.InvalidRequest, "The drawing request is required.", ErrorCategories.Validation));
+        }
+
+        if (IsClosed)
+        {
+            return SolidWorksProviderResults.Closed<ICadDrawingDocument>("drawing.create", SessionId);
+        }
+
+        if (request.SourceDocumentId is not DocumentId sourceDocumentId)
+        {
+            return SolidWorksProviderResults.Failure<ICadDrawingDocument>(
+                "drawing.create",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "A persisted source document identity is required to create a native drawing.",
+                    ErrorCategories.Validation));
+        }
+
+        if (!registry.TryGet(sourceDocumentId, out SolidWorksDocumentDescriptor? sourceDescriptor) || sourceDescriptor is null)
+        {
+            return SolidWorksProviderResults.Failure<ICadDrawingDocument>(
+                "drawing.create",
+                new OperationError(
+                    ErrorCodes.NotFound,
+                    "The requested source document identity is not registered in this provider session.",
+                    ErrorCategories.State,
+                    remediation: "Create or register the exact source model in this provider session before creating its drawing."));
+        }
+
+        OperationResult<SolidWorksCreatedDrawing> created = await host.InvokeOnStaAsync(
+            SessionId,
+            attachmentGeneration,
+            application => SolidWorksDrawingFactory.CreateOnSta(
+                application,
+                SessionId,
+                request,
+                sourceDescriptor,
+                pathAllowlist),
+            cancellationToken).ConfigureAwait(false);
+        if (!created.IsSuccess || created.Value is null)
+        {
+            return OperationResults.Failure<ICadDrawingDocument>(created.OperationId, created.Error!, created.Evidence);
+        }
+
+        registry.Add(created.Value.Descriptor);
+        var document = new SolidWorksNativeDrawingDocument(
+            host,
+            registry,
+            SessionId,
+            attachmentGeneration,
+            created.Value.Descriptor,
+            created.Value.SourceDocumentId,
+            created.Value.SourceDocumentPath);
+        return OperationResults.Success<ICadDrawingDocument>(
+            document,
+            created.OperationId,
+            created.Evidence ?? new OperationEvidence("solidworks-provider"));
     }
 
     public async Task<OperationResult<MutationReceipt>> CloseAsync(CancellationToken cancellationToken = default)

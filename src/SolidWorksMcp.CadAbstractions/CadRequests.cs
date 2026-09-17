@@ -30,6 +30,46 @@ public sealed record CreatePartRequest
     /// 新建零件时可选的初始圆草图半径；使用显式 Length，避免 MCP/UI 把毫米误当成 SOLIDWORKS 米。
     /// </summary>
     public Length? InitialCircleRadius { get; init; }
+
+    /// <summary>
+    /// Optional centered rectangular profile for a reference-driven plate or bracket.
+    /// 可选的居中矩形草图轮廓，用于参考驱动的板件或支架；与 InitialCircleRadius 互斥。
+    /// </summary>
+    public RectangleProfileRequest? InitialRectangle { get; init; }
+
+    /// <summary>
+    /// Optional closed planar polygon profile for reference-driven non-cylindrical parts.
+    /// 可选的闭合平面多边形轮廓，用于参考驱动的非圆柱零件。
+    /// </summary>
+    /// <remarks>
+    /// Vertices are ordered around the boundary in canonical millimetres. The profile is kept in the abstraction
+    /// layer so a private drawing adapter can provide geometry without leaking vendor COM types or the source PDF.
+    /// 顶点按边界顺序使用统一毫米表达；该轮廓保留在抽象层，使私密图纸适配器可以提供几何而不泄漏厂商
+    /// COM 类型或源 PDF。
+    /// </remarks>
+    public PolygonProfileRequest? InitialPolygon { get; init; }
+}
+
+/// <summary>Planar rectangle used as the seed profile of a non-cylindrical part.</summary>
+/// <remarks>
+/// The profile is expressed in canonical millimetres and is converted only inside the native provider. The type is
+/// intentionally vendor-neutral so EngineeringModel can produce it without referencing SOLIDWORKS COM. 轮廓使用统一
+/// 毫米，只有 native provider 才转换为 SOLIDWORKS 米；该类型不携带任何 SOLIDWORKS COM 类型。
+/// </remarks>
+public sealed record RectangleProfileRequest
+{
+    /// <summary>Overall profile width in canonical millimetres.</summary>
+    public Length Width { get; init; }
+
+    /// <summary>Overall profile height in canonical millimetres.</summary>
+    public Length Height { get; init; }
+}
+
+/// <summary>Closed planar polygon used as a deterministic seed sketch.</summary>
+public sealed record PolygonProfileRequest
+{
+    /// <summary>Boundary vertices in counter-clockwise or clockwise order.</summary>
+    public ImmutableArray<Coordinate2D> Vertices { get; init; } = [];
 }
 
 /// <summary>Request to create an assembly document.</summary>
@@ -84,6 +124,28 @@ public sealed record ExtrusionRequest
     public Length Depth { get; init; }
 
     /// <summary>Target body identity; null means the active body.</summary>
+    public BodyId? TargetBodyId { get; init; }
+}
+
+/// <summary>
+/// Describes a repeated through-hole group. Centers are retained as engineering intent instead of being flattened into
+/// anonymous faces. 描述重复通孔组；中心点作为工程语义保留，不退化成无名面集合。
+/// </summary>
+public sealed record ThroughHolePatternRequest
+{
+    /// <summary>Optional stable feature identity.</summary>
+    public FeatureId? RequestedFeatureId { get; init; }
+
+    /// <summary>Semantic feature name.</summary>
+    public string Name { get; init; } = "HolePattern-1";
+
+    /// <summary>Hole diameter in canonical millimetres.</summary>
+    public Length Diameter { get; init; }
+
+    /// <summary>Hole centers on the seed sketch plane in canonical millimetres.</summary>
+    public ImmutableArray<Coordinate2D> Centers { get; init; } = [];
+
+    /// <summary>Optional target body identity; null means the active solid body.</summary>
     public BodyId? TargetBodyId { get; init; }
 }
 

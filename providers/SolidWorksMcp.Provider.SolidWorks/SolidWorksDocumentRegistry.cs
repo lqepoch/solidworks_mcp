@@ -76,6 +76,16 @@ internal sealed class SolidWorksDocumentRegistry
 internal sealed record SolidWorksCreatedPart(
     SolidWorksDocumentDescriptor Descriptor);
 
+/// <summary>Native drawing metadata returned after template creation and persisted identity verification.</summary>
+/// <remarks>
+/// The source model identity is retained as provider-neutral metadata so later view mutations can resolve the exact
+/// source path again.  保存 source model identity，使后续 view mutation 可以重新解析精确 source path，而不是依赖 ActiveDoc。
+/// </remarks>
+internal sealed record SolidWorksCreatedDrawing(
+    SolidWorksDocumentDescriptor Descriptor,
+    DocumentId SourceDocumentId,
+    string SourceDocumentPath);
+
 /// <summary>Helpers for routing and deterministic native state fingerprints.</summary>
 internal static class SolidWorksDocumentRouting
 {

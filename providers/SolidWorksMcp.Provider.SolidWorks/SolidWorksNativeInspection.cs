@@ -79,6 +79,148 @@ internal static class SolidWorksNativeInspectionReader
         }
     }
 
+    /// <summary>
+    /// Reads persisted drawing evidence, including sheet count, native drawing-view names and paper-space outlines.
+    /// 读取已持久化工程图 evidence，包括 sheet 数量、原生 drawing-view 名称和纸空间包围盒。
+    /// </summary>
+    /// <remarks>
+    /// SOLIDWORKS returns an array of arrays from IDrawingDoc.GetViews; the first item in each inner array is the
+    /// sheet, followed by its drawing views. We intentionally keep this traversal in the provider and expose only
+    /// vendor-neutral snapshots. SOLIDWORKS 的 IDrawingDoc.GetViews 返回数组套数组，每个内层数组第一项是 sheet，
+    /// 后续才是 drawing views；这个遍历只留在 Provider 内部，向上只暴露 vendor-neutral snapshot。
+    /// </remarks>
+    public static OperationResult<CadInspectionSnapshot> ReadDrawing(
+        ModelDoc2 model,
+        SolidWorksDocumentDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(descriptor);
+
+        try
+        {
+            if (!SolidWorksDocumentRouting.MatchesType(model, CadDocumentType.Drawing))
+            {
+                return SolidWorksProviderResults.Failure<CadInspectionSnapshot>(
+                    "inspect",
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The native document is not a drawing at inspection time.",
+                        ErrorCategories.State));
+            }
+
+            var drawing = (IDrawingDoc)model;
+            var views = ImmutableArray.CreateBuilder<DrawingViewSnapshot>();
+            var outlines = ImmutableArray.CreateBuilder<string>();
+            int ordinal = 0;
+            foreach (View view in EnumerateDrawingViews(drawing))
+            {
+                ordinal++;
+                try
+                {
+                    string name = view.GetName2()?.Trim() ?? $"View-{ordinal}";
+                    string orientation = view.GetOrientationName()?.Trim() ?? name;
+                    double[] position = ReadNumbers(view.Position);
+                    double[] outline = ReadNumbers(view.GetOutline());
+                    if (outline.Length >= 4)
+                    {
+                        outlines.Add(
+                            $"{name}:{outline[0].ToString("G17", System.Globalization.CultureInfo.InvariantCulture)},"
+                            + $"{outline[1].ToString("G17", System.Globalization.CultureInfo.InvariantCulture)},"
+                            + $"{outline[2].ToString("G17", System.Globalization.CultureInfo.InvariantCulture)},"
+                            + $"{outline[3].ToString("G17", System.Globalization.CultureInfo.InvariantCulture)}");
+                    }
+
+                    double x = position.Length > 0 ? position[0] : 0d;
+                    double y = position.Length > 1 ? position[1] : 0d;
+                    double scale = view.ScaleDecimal;
+                    int? denominator = scale > 0d
+                        ? Math.Max(1, (int)Math.Round(1d / scale, MidpointRounding.AwayFromZero))
+                        : null;
+                    views.Add(
+                        new DrawingViewSnapshot
+                        {
+                            ViewId = new ViewId($"{descriptor.DocumentId.Value}:view:{ordinal}"),
+                            Name = name,
+                            // GetOrientationName is the native semantic orientation; GetName2 is only the generated
+                            // drawing-view label (for example, "Drawing View1"). Do not infer orientation from the
+                            // label because SOLIDWORKS renames labels during regeneration. GetOrientationName 是原生
+                            // 语义方向；GetName2 只是生成的 drawing-view label，重建时可能被 SOLIDWORKS 改名。
+                            Orientation = orientation,
+                            Position = new Coordinate2D(Length.FromMeters(x), Length.FromMeters(y)),
+                            ScaleDenominator = denominator,
+                        });
+                }
+                finally
+                {
+                    SolidWorksDocumentRouting.Release(view);
+                }
+            }
+
+            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(model);
+            var snapshot = new CadInspectionSnapshot
+            {
+                Document = new CadDocumentSummary
+                {
+                    DocumentId = descriptor.DocumentId,
+                    DocumentType = CadDocumentType.Drawing,
+                    Path = descriptor.Path,
+                    Configuration = SolidWorksDocumentRouting.ReadConfiguration(model),
+                    StateHash = stateHash,
+                    IsDirty = model.GetSaveFlag(),
+                },
+                Views = views.ToImmutable(),
+            };
+            return OperationResults.Success(
+                snapshot,
+                $"solidworks:inspect:{descriptor.DocumentId.Value}",
+                new OperationEvidence(
+                    "solidworks-drawing-inspection",
+                    [
+                        new EvidenceObservation("document.id", descriptor.DocumentId.Value),
+                        new EvidenceObservation("sheet.count", drawing.GetSheetCount().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("view.count", views.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("view.outlines", string.Join('|', outlines)),
+                        new EvidenceObservation("state.hash", stateHash),
+                    ],
+                    stateHash: stateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<CadInspectionSnapshot>(
+                "inspect",
+                exception,
+                "SOLIDWORKS drawing inspection failed before a complete view evidence snapshot was returned.");
+        }
+    }
+
+    /// <summary>Enumerates drawing views without exposing the sheet sentinel returned by GetViews.</summary>
+    private static IEnumerable<View> EnumerateDrawingViews(IDrawingDoc drawing)
+    {
+        object? raw = drawing.GetViews();
+        if (raw is not Array sheets)
+        {
+            yield break;
+        }
+
+        for (int sheetIndex = 0; sheetIndex < sheets.Length; sheetIndex++)
+        {
+            if (sheets.GetValue(sheetIndex) is not Array sheetViews)
+            {
+                continue;
+            }
+
+            // The first element is the sheet sentinel documented by SOLIDWORKS; only View RCWs are drawing views.
+            // 官方文档规定第一项是 sheet sentinel；这里只 yield 真正的 View RCW。
+            for (int viewIndex = 0; viewIndex < sheetViews.Length; viewIndex++)
+            {
+                if (sheetViews.GetValue(viewIndex) is View view)
+                {
+                    yield return view;
+                }
+            }
+        }
+    }
+
     private static ImmutableArray<BodySnapshot> ReadBodies(
         ModelDoc2 model,
         SolidWorksDocumentDescriptor descriptor,
@@ -296,19 +438,17 @@ internal sealed class SolidWorksInspectionService(
 
                 try
                 {
-                    if (descriptor.DocumentType != CadDocumentType.Part)
+                    OperationResult<CadInspectionSnapshot> inspection = descriptor.DocumentType switch
                     {
-                        return SolidWorksProviderResults.Unsupported<CadInspectionSnapshot>(
+                        CadDocumentType.Part => SolidWorksNativeInspectionReader.ReadPart(resolved.Value, descriptor),
+                        CadDocumentType.Drawing => SolidWorksNativeInspectionReader.ReadDrawing(resolved.Value, descriptor),
+                        _ => SolidWorksProviderResults.Unsupported<CadInspectionSnapshot>(
                             "inspect",
                             new CadCapability(
                                 CadCapabilityNames.Inspection,
                                 supported: false,
-                                "B03 inspection currently supports native part documents only."));
-                    }
-
-                    OperationResult<CadInspectionSnapshot> inspection = SolidWorksNativeInspectionReader.ReadPart(
-                        resolved.Value,
-                        descriptor);
+                                "Native inspection currently covers parts and drawings; assembly evidence is a later slice.")),
+                    };
                     if (!inspection.IsSuccess || inspection.Value is null)
                     {
                         return inspection;

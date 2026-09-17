@@ -92,7 +92,11 @@ internal static class SolidWorksPartFactory
 
             model = application.INewDocument2(
                 template,
-                (int)swDocumentTypes_e.swDocPART,
+                // INewDocument2 receives the document type through the template; its second parameter is PaperSize.
+                // Passing swDocPART here is an enum/category mix-up even if some templates tolerate the numeric value.
+                // INewDocument2 由 template 决定文档类型；第二参数实际是 PaperSize。即使某些 template 容忍该数值，
+                // 传 swDocPART 仍是 enum/category 混用，必须使用已核验的默认纸张值 0。
+                0,
                 0d,
                 0d);
             if (model is null)
@@ -105,8 +109,174 @@ internal static class SolidWorksPartFactory
                         ErrorCategories.Provider));
             }
 
+            int profileCount = (request.InitialPolygon is not null ? 1 : 0)
+                + (request.InitialRectangle is not null ? 1 : 0)
+                + (request.InitialCircleRadius is not null ? 1 : 0);
+            if (profileCount > 1)
+            {
+                return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                    "part.create",
+                    new OperationError(
+                        ErrorCodes.InvalidRequest,
+                        "A native part may specify only one initial planar profile.",
+                        ErrorCategories.Validation));
+            }
+
             string? profileFeatureName = null;
-            if (request.InitialCircleRadius is Length radius)
+            if (request.InitialPolygon is PolygonProfileRequest polygonProfile)
+            {
+                if (polygonProfile.Vertices.Length < 3
+                    || polygonProfile.Vertices.Any(vertex => !double.IsFinite(vertex.X.Millimeters) || !double.IsFinite(vertex.Y.Millimeters)))
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.InvalidRequest,
+                            "A polygon profile requires at least three finite vertices.",
+                            ErrorCategories.Validation));
+                }
+
+                bool planeSelected = model.Extension.SelectByID2(
+                    "Front Plane",
+                    "PLANE",
+                    0d,
+                    0d,
+                    0d,
+                    false,
+                    0,
+                    null,
+                    0);
+                if (!planeSelected)
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.ProviderFailure,
+                            "The SOLIDWORKS Front Plane could not be selected for the polygon sketch.",
+                            ErrorCategories.Provider));
+                }
+
+                model.SketchManager.InsertSketch(true);
+                bool sketchOpen = true;
+                try
+                {
+                    // CreateLine is intentionally used instead of a vendor-neutral polygon helper: each segment is
+                    // still created by SOLIDWORKS and can therefore be inspected as native sketch evidence.
+                    // CreateLine 是有意使用的原生 primitive；每条边都由 SOLIDWORKS 创建，可在 native inspection 中核对。
+                    for (int index = 0; index < polygonProfile.Vertices.Length; index++)
+                    {
+                        Coordinate2D start = polygonProfile.Vertices[index];
+                        Coordinate2D end = polygonProfile.Vertices[(index + 1) % polygonProfile.Vertices.Length];
+                        SketchSegment? segment = model.SketchManager.CreateLine(
+                            start.X.ToMeters(),
+                            start.Y.ToMeters(),
+                            0d,
+                            end.X.ToMeters(),
+                            end.Y.ToMeters(),
+                            0d);
+                        if (segment is null)
+                        {
+                            return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                                "part.create",
+                                new OperationError(
+                                    ErrorCodes.ProviderFailure,
+                                    "SOLIDWORKS returned no sketch segment for one polygon edge.",
+                                    ErrorCategories.Provider,
+                                    remediation: "Preserve the artifact and inspect polygon topology and profile units."));
+                        }
+
+                        SolidWorksDocumentRouting.Release(segment);
+                    }
+                }
+                finally
+                {
+                    if (sketchOpen)
+                    {
+                        model.SketchManager.InsertSketch(true);
+                    }
+                }
+
+                model.ClearSelection2(true);
+                profileFeatureName = FindFirstSketchFeatureName(model);
+                if (string.IsNullOrWhiteSpace(profileFeatureName))
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "The polygon sketch was created but could not be identified in the feature tree.",
+                            ErrorCategories.Invariant,
+                            remediation: "Preserve the test artifact and inspect the SOLIDWORKS feature tree."));
+                }
+            }
+            else if (request.InitialRectangle is RectangleProfileRequest rectangleProfile)
+            {
+                if (rectangleProfile.Width.Millimeters <= 0d || rectangleProfile.Height.Millimeters <= 0d)
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.InvalidRequest,
+                            "The initial rectangle width and height must be greater than zero.",
+                            ErrorCategories.Validation));
+                }
+
+                bool planeSelected = model.Extension.SelectByID2(
+                    "Front Plane",
+                    "PLANE",
+                    0d,
+                    0d,
+                    0d,
+                    false,
+                    0,
+                    null,
+                    0);
+                if (!planeSelected)
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.ProviderFailure,
+                            "The SOLIDWORKS Front Plane could not be selected for the initial rectangle sketch.",
+                            ErrorCategories.Provider));
+                }
+
+                model.SketchManager.InsertSketch(true);
+                object? rectangleSegments = null;
+                try
+                {
+                    // CreateCornerRectangle is the verified installed-typelib primitive. Supplying symmetric corners
+                    // keeps the profile centered so declarative hole centers use the same engineering coordinates.
+                    // CreateCornerRectangle 是已核对 installed typelib 的 primitive；使用对称角点让轮廓居中，
+                    // 这样 declarative hole center 可以继续使用同一工程坐标。
+                    rectangleSegments = model.SketchManager.CreateCornerRectangle(
+                        -rectangleProfile.Width.ToMeters() / 2d,
+                        -rectangleProfile.Height.ToMeters() / 2d,
+                        0d,
+                        rectangleProfile.Width.ToMeters() / 2d,
+                        rectangleProfile.Height.ToMeters() / 2d,
+                        0d);
+                }
+                finally
+                {
+                    model.SketchManager.InsertSketch(true);
+                    SolidWorksDocumentRouting.Release(rectangleSegments);
+                }
+
+                model.ClearSelection2(true);
+                profileFeatureName = FindFirstSketchFeatureName(model);
+                if (string.IsNullOrWhiteSpace(profileFeatureName))
+                {
+                    return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                        "part.create",
+                        new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "The initial rectangle sketch was created but could not be identified in the feature tree.",
+                            ErrorCategories.Invariant,
+                            remediation: "Preserve the test artifact and inspect the SOLIDWORKS feature tree."));
+                }
+            }
+            else if (request.InitialCircleRadius is Length radius)
             {
                 if (radius.Millimeters <= 0d)
                 {

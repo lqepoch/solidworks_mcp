@@ -144,6 +144,79 @@ internal sealed class FakeCadPartDocument(FakeCadSession session, DocumentId doc
     }
 
     /// <inheritdoc />
+    public Task<OperationResult<FeatureSnapshot>> AddThroughHolePatternAsync(
+        ThroughHolePatternRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "add-through-hole-pattern";
+        if (request is null)
+        {
+            return Task.FromResult(FakeCadResults.Invalid<FeatureSnapshot>(operation, "The through-hole pattern request is required."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<FeatureSnapshot>(operation));
+        }
+
+        if (!Session.Supports(CadCapabilityNames.PartMutation, out CadCapability capability))
+        {
+            return Task.FromResult(FakeCadResults.Unsupported<FeatureSnapshot>(operation, capability));
+        }
+
+        if (Session.IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Closed<FeatureSnapshot>(operation));
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Name)
+            || request.Diameter.Millimeters <= 0d
+            || request.Centers.Length < 1)
+        {
+            return Task.FromResult(
+                FakeCadResults.Invalid<FeatureSnapshot>(
+                    operation,
+                    "A semantic name, positive diameter and at least one hole center are required."));
+        }
+
+        BodyId bodyId = request.TargetBodyId ?? bodies.Keys.OrderBy(id => id.Value, StringComparer.Ordinal).FirstOrDefault();
+        if (string.IsNullOrEmpty(bodyId.Value))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<FeatureSnapshot>(operation, "active-body"));
+        }
+
+        if (!bodies.ContainsKey(bodyId))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<FeatureSnapshot>(operation, bodyId.Value));
+        }
+
+        FeatureId featureId = request.RequestedFeatureId ?? new FeatureId($"feature-hole-pattern-{++featureSequence:000}");
+        if (features.Any(feature => feature.FeatureId == featureId))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<FeatureSnapshot>(operation, $"Feature identity '{featureId.Value}' already exists."));
+        }
+
+        var feature = new FeatureSnapshot
+        {
+            FeatureId = featureId,
+            Name = request.Name.Trim(),
+            Kind = "through-hole-pattern",
+            BodyId = bodyId,
+        };
+        features.Add(feature);
+        MarkMutated();
+        return Task.FromResult(
+            FakeCadResults.Success(
+                feature,
+                operation,
+                new EvidenceObservation("feature.id", featureId.Value),
+                new EvidenceObservation("feature.kind", feature.Kind),
+                new EvidenceObservation("hole.count", request.Centers.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("hole.diameter-millimeters", request.Diameter.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("state.hash", StateHash)));
+    }
+
+    /// <inheritdoc />
     public Task<OperationResult<DimensionSnapshot>> SetDimensionValueAsync(
         DimensionUpdateRequest request,
         CancellationToken cancellationToken = default)

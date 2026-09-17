@@ -208,6 +208,47 @@ public sealed class FakeCadProviderTests
             observation => observation.Key == "document.closed" && observation.Value == bool.TrueString);
     }
 
+    /// <summary>
+    /// A repeated through-hole group remains one semantic feature in the provider contract.
+    /// 重复通孔组在 Provider 契约中必须保持为一个工程语义特征，而不是退化成匿名几何集合。
+    /// </summary>
+    [Fact]
+    public async Task ThroughHolePatternPreservesSemanticEvidence()
+    {
+        await using var provider = new FakeCadProvider();
+        await using ICadSession session = (await provider.StartSessionAsync(new CadSessionOptions())).RequireSuccess();
+        ICadPartDocument part = (await session.CreatePartAsync(new CreatePartRequest())).RequireSuccess();
+        BodySnapshot body = (await part.CreateBodyAsync(new CreateBodyRequest { Name = "Reference plate" })).RequireSuccess();
+        _ = (await part.AddExtrusionAsync(new ExtrusionRequest
+        {
+            Name = "Plate thickness",
+            Depth = Length.FromMillimeters(8d),
+            TargetBodyId = body.BodyId,
+        })).RequireSuccess();
+
+        OperationResult<FeatureSnapshot> patternResult = await part.AddThroughHolePatternAsync(new ThroughHolePatternRequest
+        {
+            Name = "Mounting hole group",
+            Diameter = Length.FromMillimeters(6d),
+            Centers =
+            [
+                new Coordinate2D(Length.FromMillimeters(-25d), Length.FromMillimeters(-15d)),
+                new Coordinate2D(Length.FromMillimeters(25d), Length.FromMillimeters(15d)),
+            ],
+            TargetBodyId = body.BodyId,
+        });
+        FeatureSnapshot pattern = patternResult.RequireSuccess();
+
+        Assert.Equal("through-hole-pattern", pattern.Kind);
+        Assert.Equal("Mounting hole group", pattern.Name);
+        Assert.NotNull(patternResult.Evidence);
+        Assert.Equal("2", patternResult.Evidence!.Observations.Single(observation => observation.Key == "hole.count").Value);
+        Assert.Equal("6", patternResult.Evidence.Observations.Single(observation => observation.Key == "hole.diameter-millimeters").Value);
+
+        CadInspectionSnapshot inspection = (await session.Inspection.InspectAsync(part.DocumentId)).RequireSuccess();
+        Assert.Contains(inspection.Features, feature => feature.FeatureId == pattern.FeatureId && feature.Kind == "through-hole-pattern");
+    }
+
 }
 
 /// <summary>Local assertion extension shared by FakeCad tests.</summary>

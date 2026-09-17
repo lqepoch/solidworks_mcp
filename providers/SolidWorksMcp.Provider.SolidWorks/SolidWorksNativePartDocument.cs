@@ -108,6 +108,46 @@ internal sealed class SolidWorksNativePartDocument(
     }
 
     /// <inheritdoc />
+    public async Task<OperationResult<FeatureSnapshot>> AddThroughHolePatternAsync(
+        ThroughHolePatternRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Diameter.Millimeters <= 0d || request.Centers.Length == 0)
+        {
+            return SolidWorksProviderResults.Failure<FeatureSnapshot>(
+                "feature.through-hole-pattern",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "A positive hole diameter and at least one hole center are required.",
+                    ErrorCategories.Validation));
+        }
+
+        OperationResult<NativeHolePatternResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => AddThroughHolePatternOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<FeatureSnapshot>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<FeatureSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        return OperationResults.Success(
+            result.Value.Feature,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-part"));
+    }
+
+    /// <inheritdoc />
     public async Task<OperationResult<DimensionSnapshot>> SetDimensionValueAsync(
         DimensionUpdateRequest request,
         CancellationToken cancellationToken = default)
@@ -539,6 +579,293 @@ internal sealed class SolidWorksNativePartDocument(
     /// Sets one full native parameter name in the registered configuration and verifies the resulting solid.
     /// 在登记的 configuration 中设置一个完整 native parameter name，并验证变更后的 solid。
     /// </summary>
+    /// <summary>
+    /// Creates one sketch containing a semantic through-hole group and cuts it through the verified solid.
+    /// 创建包含语义通孔组的草图，并从已验证的 solid 中执行贯穿切削。
+    /// </summary>
+    private OperationResult<NativeHolePatternResult> AddThroughHolePatternOnSta(
+        ISldWorks application,
+        ThroughHolePatternRequest request)
+    {
+        const string operation = "feature.through-hole-pattern";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeHolePatternResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native document identity is no longer registered.", ErrorCategories.State));
+        }
+
+        OperationResult<ModelDoc2> resolved = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolved.IsSuccess || resolved.Value is null)
+        {
+            return OperationResults.Failure<NativeHolePatternResult>(resolved.OperationId, resolved.Error!, resolved.Evidence);
+        }
+
+        ModelDoc2 model = resolved.Value;
+        IFeature? feature = null;
+        string stage = "select-top-face";
+        try
+        {
+            if (request.Centers.Length == 0 || request.Diameter.Millimeters <= 0d)
+            {
+                return OperationResults.Failure<NativeHolePatternResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvalidRequest,
+                        "A positive hole diameter and at least one center are required.",
+                        ErrorCategories.Validation));
+            }
+
+            model.ClearSelection2(true);
+            // SelectByRay targets the actual planar top face instead of selecting the sketch reference plane again.
+            // A cut sketch on the reference plane is not a face-based feature in SW2022 and FeatureCut4 can return
+            // null without a useful COM error. SelectByRay is deterministic for this centered, normal-to-Z plate.
+            // SelectByRay 选择实际 planar top face，而不是再次选择参考平面。SW2022 中参考平面上的 cut sketch
+            // 不是可靠的面特征，FeatureCut4 可能静默返回 null；此处对居中、Z 法向板件使用确定性射线选面。
+            if (!model.Extension.SelectByRay(
+                    0d,
+                    0d,
+                    1d,
+                    0d,
+                    0d,
+                    -1d,
+                    0.001d,
+                    (int)swSelectType_e.swSelFACES,
+                    false,
+                    0,
+                    0))
+            {
+                return SolidWorksProviderResults.Failure<NativeHolePatternResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "The native top planar face could not be selected for the hole group.",
+                        ErrorCategories.Provider,
+                        remediation: "Inspect the native body orientation and planar-face selection evidence before retrying."));
+            }
+
+            stage = "create-hole-sketch";
+            model.SketchManager.InsertSketch(true);
+            bool sketchOpen = true;
+            try
+            {
+                foreach (Coordinate2D center in request.Centers)
+                {
+                    SketchSegment? circle = model.SketchManager.CreateCircleByRadius(
+                        center.X.ToMeters(),
+                        center.Y.ToMeters(),
+                        0d,
+                        request.Diameter.ToMeters() / 2d);
+                    if (circle is null)
+                    {
+                        return SolidWorksProviderResults.Failure<NativeHolePatternResult>(
+                            operation,
+                            new OperationError(
+                                ErrorCodes.ProviderFailure,
+                                "SOLIDWORKS returned no sketch segment for one requested hole.",
+                                ErrorCategories.Provider,
+                                remediation: "Preserve the artifact and inspect the sketch plane and diameter units."));
+                    }
+
+                    SolidWorksDocumentRouting.Release(circle);
+                }
+            }
+            finally
+            {
+                if (sketchOpen)
+                {
+                    model.SketchManager.InsertSketch(true);
+                }
+            }
+
+            model.ClearSelection2(true);
+            stage = "identify-hole-sketch";
+            string? sketchName = FindLatestProfileSketchFeatureName(model);
+            if (string.IsNullOrWhiteSpace(sketchName))
+            {
+                return SolidWorksProviderResults.Failure<NativeHolePatternResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The hole sketch was created but no stable ProfileFeature identity was found.",
+                        ErrorCategories.Invariant));
+            }
+
+            stage = "select-hole-sketch";
+            if (!model.Extension.SelectByID2(sketchName, "SKETCH", 0d, 0d, 0d, false, 0, null, 0))
+            {
+                return SolidWorksProviderResults.Failure<NativeHolePatternResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The newly created hole sketch could not be selected by its verified identity.",
+                        ErrorCategories.State));
+            }
+
+            stage = "feature-cut4";
+            feature = model.FeatureManager.FeatureCut4(
+                Sd: true,
+                Flip: false,
+                Dir: false,
+                T1: (int)swEndConditions_e.swEndCondThroughAll,
+                T2: (int)swEndConditions_e.swEndCondThroughAll,
+                D1: 0d,
+                D2: 0d,
+                Dchk1: false,
+                Dchk2: false,
+                Ddir1: false,
+                Ddir2: false,
+                Dang1: 0d,
+                Dang2: 0d,
+                OffsetReverse1: false,
+                OffsetReverse2: false,
+                TranslateSurface1: false,
+                TranslateSurface2: false,
+                NormalCut: false,
+                UseFeatScope: false,
+                UseAutoSelect: true,
+                AssemblyFeatureScope: false,
+                AutoSelectComponents: false,
+                PropagateFeatureToParts: false,
+                T0: 0,
+                StartOffset: 0d,
+                FlipStartOffset: false,
+                OptimizeGeometry: false);
+            if (feature is null)
+            {
+                return SolidWorksProviderResults.Failure<NativeHolePatternResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS returned no feature from FeatureCut4.",
+                        ErrorCategories.Provider));
+            }
+
+            string featureName = feature.Name?.Trim() ?? request.Name.Trim();
+            string featureKind = feature.GetTypeName2()?.Trim() ?? "Cut";
+            model.ClearSelection2(true);
+
+            stage = "rebuild";
+            if (!model.ForceRebuild3(true))
+            {
+                return SolidWorksProviderResults.Failure<NativeHolePatternResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not report a successful rebuild after the through-hole cut.",
+                        ErrorCategories.Invariant));
+            }
+
+            stage = "inspect-result";
+            OperationResult<CadInspectionSnapshot> inspection = SolidWorksNativeInspectionReader.ReadPart(model, current);
+            if (!inspection.IsSuccess || inspection.Value is null)
+            {
+                return OperationResults.Failure<NativeHolePatternResult>(inspection.OperationId, inspection.Error!, inspection.Evidence);
+            }
+
+            if (inspection.Value.HasErrors
+                || inspection.Value.Bodies.Length != 1
+                || inspection.Value.Bodies[0].Volume.CubicMillimeters <= 0d)
+            {
+                return OperationResults.Failure<NativeHolePatternResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The through-hole operation did not prove one healthy positive-volume body.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the artifact and inspect the cut feature diagnostics."),
+                    new OperationEvidence(
+                        "solidworks-provider",
+                        BuildDiagnosticEvidence(inspection.Value.Diagnostics),
+                        stateHash: inspection.Value.Document.StateHash));
+            }
+
+            BodyId bodyId = inspection.Value.Bodies[0].BodyId;
+            var snapshot = new FeatureSnapshot
+            {
+                FeatureId = new FeatureId($"{current.DocumentId.Value}:feature:{featureName}"),
+                // The persisted native feature name is the stable CAD identity. The requested semantic label remains
+                // evidence below; conflating the two would make reopen inspection impossible to reconcile.
+                // 持久化 native feature name 才是稳定 CAD identity；请求的 semantic label 单独放入 evidence，不能混为一谈，
+                // 否则 reopen inspection 无法与 feature tree 对账。
+                Name = featureName,
+                Kind = featureKind,
+                BodyId = bodyId,
+            };
+            var nextDescriptor = current with
+            {
+                StateHash = inspection.Value.Document.StateHash,
+                IsDirty = model.GetSaveFlag(),
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeHolePatternResult(snapshot, nextDescriptor, current),
+                new EvidenceObservation("feature.name", snapshot.Name),
+                new EvidenceObservation("feature.kind", snapshot.Kind),
+                new EvidenceObservation("semantic.name", request.Name.Trim()),
+                new EvidenceObservation("hole.count", request.Centers.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("hole.diameter-millimeters", request.Diameter.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("body.count", inspection.Value.Bodies.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("volume.cubic-millimeters", inspection.Value.Bodies[0].Volume.CubicMillimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("state.hash", nextDescriptor.StateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.Failure<NativeHolePatternResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.ProviderFailure,
+                    "SOLIDWORKS failed during the through-hole pattern workflow.",
+                    ErrorCategories.Provider,
+                    retryable: true,
+                    details: new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["stage"] = stage,
+                        ["exception-type"] = exception.GetType().FullName ?? exception.GetType().Name,
+                        ["hresult"] = $"0x{exception.HResult:X8}",
+                    },
+                    remediation: "Preserve the isolated artifact and inspect the reported native stage."));
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(feature);
+            SolidWorksDocumentRouting.Release(model);
+        }
+    }
+
+    private static string? FindLatestProfileSketchFeatureName(ModelDoc2 model)
+    {
+        var current = model.FirstFeature() as IFeature;
+        string? latest = null;
+        try
+        {
+            while (current is not null)
+            {
+                string typeName = current.GetTypeName2()?.Trim() ?? string.Empty;
+                string name = current.Name?.Trim() ?? string.Empty;
+                if (typeName.Equals("ProfileFeature", StringComparison.OrdinalIgnoreCase)
+                    && name.StartsWith("Sketch", StringComparison.OrdinalIgnoreCase))
+                {
+                    latest = name;
+                }
+
+                var next = current.GetNextFeature() as IFeature;
+                SolidWorksDocumentRouting.Release(current);
+                current = next;
+            }
+
+            return latest;
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(current);
+        }
+    }
+
     private OperationResult<NativeDimensionResult> SetDimensionOnSta(
         ISldWorks application,
         DimensionUpdateRequest request)
@@ -745,14 +1072,21 @@ internal sealed class SolidWorksNativePartDocument(
         }
     }
 
-    /// <summary>Reads the current dimension value in system units and normalizes COM's object return.</summary>
-    /// <remarks>使用官方的 GetSystemValue3 读回系统单位；对 COM object return 做单一转换，避免散落转换逻辑。</remarks>
+    /// <summary>Reads the current dimension value in system units on the owning STA.</summary>
+    /// <remarks>
+    /// SW2022's generated RCW exposes GetSystemValue3 as an object-returning optional-VARIANT call. In the installed
+    /// type library it can marshal either as null or as a value that is not convertible by System.Convert, even though
+    /// the same IDimension.SystemValue property is valid. Use the stable property for the read-back and keep the
+    /// conversion at this one adapter boundary. SW2022 的 generated RCW 对 GetSystemValue3 的 optional VARIANT
+    /// 读回可能得到 null 或不可由 System.Convert 转换的对象；同一个 IDimension 的 SystemValue 仍然有效。
+    /// 这里在拥有该 COM 对象的 STA 上使用稳定属性，并把单位转换限制在这个 adapter 边界。
+    /// </remarks>
     private static double ReadCurrentDimensionMeters(IDimension dimension)
     {
-        object? rawValue = dimension.GetSystemValue3(
-            (int)swInConfigurationOpts_e.swThisConfiguration,
-            null);
-        return Convert.ToDouble(rawValue, System.Globalization.CultureInfo.InvariantCulture);
+        // This is intentionally a direct property read. It is not a blind fallback: the caller immediately compares
+        // this value with the requested metres and refuses to continue when the invariant is not proven.
+        // 这是有意的直接属性读回，不是 blind fallback：调用方会立即与请求的米值比较，未证明 invariant 就停止。
+        return dimension.SystemValue;
     }
 
     private OperationResult<NativeSaveResult> SaveOnSta(ISldWorks application)
@@ -1215,6 +1549,11 @@ internal sealed class SolidWorksNativePartDocument(
 
 /// <summary>Internal result carrying the feature and the newly inspected document metadata.</summary>
 internal sealed record NativeExtrusionResult(
+    FeatureSnapshot Feature,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
+
+internal sealed record NativeHolePatternResult(
     FeatureSnapshot Feature,
     SolidWorksDocumentDescriptor Descriptor,
     SolidWorksDocumentDescriptor ExpectedDescriptor);
