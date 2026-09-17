@@ -25,6 +25,11 @@ live-evidence/
 
 图纸/
 
+# Licensed SOLIDWORKS API binaries and vendor documentation stay in the user-local cache.
+# 获授权的 SOLIDWORKS API 二进制与厂商文档只保存在用户本地缓存，不进入公共仓库。
+official-api/
+api-cache/
+
 # SOLIDWORKS may emit a machine-local diagnostic log when launched from the repository.
 # SOLIDWORKS 从仓库工作目录启动时可能生成机器本地诊断日志；它不属于产品源码或测试证据。
 console.log

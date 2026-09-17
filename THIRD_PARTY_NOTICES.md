@@ -27,6 +27,10 @@ The official ModelContextProtocol NuGet package is Apache-2.0 licensed. The test
 
 SolidWorks.Interop.*, SLDWORKS.exe, type libraries, vendor templates and official help are discovered from the user's licensed installation. They are not committed or redistributed by this public repository. Local paths may be written only to user-local generated configuration/MSBuild properties.
 
+The reproducible local-only API corpus is maintained by `scripts/sync-official-solidworks-api.ps1` under `%LOCALAPPDATA%\SolidWorksMcp\official-api`. It may copy the licensed 2022 `api` directory and cache official 2022/2026 web entry points, but it deliberately records missing or unavailable resources instead of claiming that a 2026 offline package exists. See `docs/research/official-solidworks-api-local.md` for the source URLs and redistribution boundary. This local corpus is not a product dependency and is not included in packages or Git history.
+
+`scripts/sync-official-solidworks-api.ps1` 只在 `%LOCALAPPDATA%\SolidWorksMcp\official-api` 维护本地 API 研究资料；它可以复制获授权的 2022 `api` 目录并缓存 2022/2026 官方网页入口，但会明确记录缺失资源，不会把不存在的 2026 离线包伪装成成功。详见 `docs/research/official-solidworks-api-local.md`。
+
 ## Standards and enterprise rules
 
 The project stores rule metadata, identifiers, effective dates, URLs and derived legal rule data. It does not redistribute copyrighted standards or official manuals. Enterprise/customer rule packs remain external inputs.
