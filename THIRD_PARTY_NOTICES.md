@@ -2,11 +2,12 @@
 
 This file records third-party material used or consulted by the project. The bootstrap commit does not copy source code from any upstream repository into product assemblies.
 
-The product repository itself is distributed under the MIT License in LICENSE. That license does not grant rights to SOLIDWORKS vendor binaries or copyrighted standards/manuals.
+The product repository itself is distributed under the MIT License in LICENSE. That license does not grant rights to SOLIDWORKS vendor binaries or copyrighted standards/manuals. The tracked `references/` directories are source snapshots under their respective upstream licenses; they are not product dependencies.
 
 ## Upstream research repositories
 
-Exact commit pins, URLs, license evidence, reviewed files and adoption status are tracked in references/manifest.json. The source checkouts are local-only and excluded from normal product build.
+Exact commit pins, URLs, license evidence, reviewed files and adoption status are tracked in references/manifest.json. The
+source snapshots are intentionally committed for auditability but remain excluded from normal product build/package/runtime.
 
 | Upstream | License | Current use | Direct code adaptation |
 | --- | --- | --- | --- |

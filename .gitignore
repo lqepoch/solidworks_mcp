@@ -12,10 +12,12 @@ TestResults/
 Directory.Build.generated.props
 SolidWorksMcp.local.props
 
-# The reference corpus is intentionally local-only. Keep only its manifest/docs tracked.
-references/*
-!references/manifest.json
-!references/README.md
+# Upstream reference source snapshots are intentionally tracked for auditable local design review. The working Git
+# metadata/checkouts remain ignored; the product build never includes anything below references/.
+# 上游参考源码快照按要求纳入版本控制以便审计；工作 Git metadata/checkout 仍忽略，产品 build 永不包含 references/。
+references/.checkouts/
+references/.staging/
+references/*/.git/
 
 # Local test evidence may contain proprietary paths or CAD content.
 test-evidence/

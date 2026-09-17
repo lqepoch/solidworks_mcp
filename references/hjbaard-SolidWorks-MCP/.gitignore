@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+*.so
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Generated output (exports, screenshots)
+out/
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Claude Code local machine overrides (keep shared settings.json if added)
+.claude/settings.local.json

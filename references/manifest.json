@@ -1,10 +1,11 @@
 ﻿{
   "schemaVersion": "1.0",
-  "retrievedAt": "2026-09-16T09:54:13.8519938+08:00",
+  "retrievedAt": "2026-09-17T14:30:00+08:00",
   "policy": {
-    "purpose": "Local research corpus only; reference repositories never participate in product build.",
+    "purpose": "Tracked upstream source snapshots for auditable local research; reference repositories never participate in product build/package/runtime.",
     "copying": "No direct product-code adaptation is approved by this bootstrap commit.",
-    "proprietarySources": "SOLIDWORKS binaries and copyrighted manuals remain local and are never copied into this repository."
+    "proprietarySources": "SOLIDWORKS binaries, confidential drawing PDFs and copyrighted manuals remain local and are never copied into this repository.",
+    "storage": "Tracked source snapshots without nested .git metadata; ignored working checkouts live under references/.checkouts."
   },
   "repositories": [
     {
@@ -17,10 +18,31 @@
       "license": "MIT",
       "licenseSource": "https://github.com/jaylamping/solidworks-mcp/blob/a0f07cdab596c05739317119256a191fe51962e7/LICENSE",
       "role": "STA worker, COM session safety, checkpoints and assembly coverage reference.",
-      "reviewedFiles": [],
-      "capabilities": [],
-      "adoptedIdeas": [],
-      "rejectedIdeas": [],
+      "reviewedFiles": [
+        "workers/SolidWorksComWorker/Session/WorkerSessionHost.cs",
+        "workers/SolidWorksComWorker/Interop/RunningObjectTable.cs",
+        "workers/SolidWorksComWorker/Interop/ComCallGuard.cs",
+        "workers/SolidWorksComWorker/Interop/CommandSafety.cs",
+        "workers/SolidWorksComWorker/Interop/PathGuard.cs",
+        "tools/manifest.json"
+      ],
+      "capabilities": [
+        "Dedicated COM worker process and session protocol",
+        "Running Object Table discovery and process identity",
+        "Structured COM error guards",
+        "Command safety metadata and path allowlists",
+        "Generated tool/error catalogs"
+      ],
+      "adoptedIdeas": [
+        "Process-bound session identity and explicit command safety metadata",
+        "Separate COM worker boundary as an architectural reference",
+        "Allowlist and generated-catalog concepts, reimplemented in C# domain types"
+      ],
+      "rejectedIdeas": [
+        "Node.js and JavaScript as a required product runtime",
+        "Direct adaptation of upstream worker code",
+        "Treating generated docs or screenshots as geometry proof"
+      ],
       "directCodeAdaptation": null
     },
     {
@@ -33,10 +55,32 @@
       "license": "MIT",
       "licenseSource": "https://github.com/czuryk/SolidworksMCP/blob/38468b32890a9fc4c4aeec50fa97f679496c4524/LICENSE",
       "role": "Transaction, invariant, rollback and geometry-verification reference.",
-      "reviewedFiles": [],
-      "capabilities": [],
-      "adoptedIdeas": [],
-      "rejectedIdeas": [],
+      "reviewedFiles": [
+        "solidworks_mcp/automation/runtime.py",
+        "solidworks_mcp/automation/transactions.py",
+        "solidworks_mcp/automation/com_utils.py",
+        "solidworks_mcp/automation/geometry_probe.py",
+        "solidworks_mcp/utils/sw_finder.py",
+        "solidworks_mcp/utils/units.py",
+        "solidworks_mcp/automation/features.py"
+      ],
+      "capabilities": [
+        "Transaction and structured error concepts",
+        "COM utility normalization and modal detection",
+        "Geometry probing and feature automation",
+        "Registry/common-path installation discovery",
+        "Explicit unit conversion"
+      ],
+      "adoptedIdeas": [
+        "Inspect/rebuild/verify as a compound operation contract",
+        "Unit conversion at the CAD boundary",
+        "Separate installation discovery from feature execution"
+      ],
+      "rejectedIdeas": [
+        "Python, pywin32, and Pythoncom as a product dependency",
+        "Fail-open checkpoint behavior",
+        "Unbounded dynamic tool or eval-style dispatch"
+      ],
       "directCodeAdaptation": null
     },
     {
@@ -49,10 +93,30 @@
       "license": "Apache-2.0",
       "licenseSource": "https://github.com/Slacker-LLC/solidworks-mcp/blob/6019ce014c7b64a2982e552e9806e923608cbf1a/LICENSE",
       "role": "Drawing API, explicit units, declarative selection and screenshot evidence reference.",
-      "reviewedFiles": [],
-      "capabilities": [],
-      "adoptedIdeas": [],
-      "rejectedIdeas": [],
+      "reviewedFiles": [
+        "solidworks_mcp/sw_core.py",
+        "solidworks_mcp/sw_drawing.py",
+        "solidworks_mcp/sw_inspect.py",
+        "solidworks_mcp/sw_file.py",
+        "tools/tlb_probe.py",
+        "NOTICE"
+      ],
+      "capabilities": [
+        "Drawing document and view operations",
+        "Inspection and file lifecycle helpers",
+        "Type-library probing",
+        "Apache-2.0 provenance and NOTICE handling"
+      ],
+      "adoptedIdeas": [
+        "Keep drawing operations separate from general document lifecycle",
+        "Use installed type-library information before implementing COM calls",
+        "Preserve upstream NOTICE obligations in reference metadata"
+      ],
+      "rejectedIdeas": [
+        "Python runtime and dynamic dispatch as the production chain",
+        "Unverified annotation mutation without coverage evidence",
+        "Treating a screenshot as the primary CAD correctness assertion"
+      ],
       "directCodeAdaptation": null
     },
     {
@@ -65,10 +129,31 @@
       "license": "MIT",
       "licenseSource": "https://github.com/hjbaard/SolidWorks-MCP/blob/e94e18862efd7b51cdd8acb379a7bae4ba34de54/LICENSE",
       "role": "Build-measure-verify-correct workflow and live-test reference.",
-      "reviewedFiles": [],
-      "capabilities": [],
-      "adoptedIdeas": [],
-      "rejectedIdeas": [],
+      "reviewedFiles": [
+        "src/solidworks_mcp/com_worker.py",
+        "src/solidworks_mcp/session.py",
+        "src/solidworks_mcp/binding.py",
+        "src/solidworks_mcp/units.py",
+        "scripts/m4_hole.py",
+        "scripts/m4_pattern.py",
+        "scripts/m5_demo_bracket.py"
+      ],
+      "capabilities": [
+        "Single-threaded COM worker",
+        "Early-binding and typelib compatibility workarounds",
+        "Unit conversion",
+        "Non-trivial bracket, hole and pattern examples"
+      ],
+      "adoptedIdeas": [
+        "Make COM thread affinity explicit",
+        "Use small feature-focused fixtures for live verification",
+        "Keep unit conversion at the session boundary"
+      ],
+      "rejectedIdeas": [
+        "Python and pywin32 as a required runtime",
+        "Unbounded cancellation assumptions for an in-flight COM call",
+        "Directly reusing scripts as production implementation"
+      ],
       "directCodeAdaptation": null
     },
     {
@@ -81,10 +166,31 @@
       "license": "Apache-2.0",
       "licenseSource": "https://github.com/modelcontextprotocol/csharp-sdk/blob/324ccd83c357acf611e1cf3a6935a945ee600442/LICENSE",
       "role": "Official MCP C# SDK source and stdio/DI contract reference.",
-      "reviewedFiles": [],
-      "capabilities": [],
-      "adoptedIdeas": [],
-      "rejectedIdeas": [],
+      "reviewedFiles": [
+        "src/ModelContextProtocol.Core/Server/StdioServerTransport.cs",
+        "src/ModelContextProtocol/McpServerBuilderExtensions.cs",
+        "src/ModelContextProtocol/McpServerServiceCollectionExtensions.cs",
+        "tests/ModelContextProtocol.Tests/Transport/StdioServerTransportTests.cs",
+        "tests/ModelContextProtocol.Tests/StdioServerIntegrationTests.cs",
+        "LICENSE",
+        "THIRD-PARTY-NOTICES.txt"
+      ],
+      "capabilities": [
+        "Official MCP C# server builder and DI integration",
+        "stdio transport",
+        "Protocol conformance and integration tests",
+        "Apache-2.0 and third-party notice process"
+      ],
+      "adoptedIdeas": [
+        "Use the official C# SDK boundary for stdio MCP hosting",
+        "Model transport behavior from upstream conformance tests",
+        "Keep protocol concerns in SolidWorksMcp.Protocol/Server"
+      ],
+      "rejectedIdeas": [
+        "Copying SDK implementation into the product",
+        "Using the reference checkout as a build dependency",
+        "Skipping protocol contract tests"
+      ],
       "directCodeAdaptation": null
     }
   ]

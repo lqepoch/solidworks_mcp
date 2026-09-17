@@ -39,7 +39,9 @@ Refresh the exact upstream pins with:
 
     powershell -ExecutionPolicy Bypass -File .\scripts\sync-references.ps1
 
-See references/manifest.json, THIRD_PARTY_NOTICES.md and research Issues #55-#59 for the license/provenance rules. Reference source is local-only and excluded from product build.
+See references/manifest.json, THIRD_PARTY_NOTICES.md and research Issues #55-#59 for the license/provenance rules. The
+exact upstream source snapshots are tracked under references/ for auditable design review, remain excluded from product
+build/package/runtime, and retain their upstream license files.
 
 ## Architecture boundary
 

@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solidworks-mcp"
+version = "0.1.0"
+description = "MCP server that drives a running SOLIDWORKS session over its COM API"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.10"
+authors = [{ name = "JIALE LIU" }]
+keywords = ["mcp", "model-context-protocol", "solidworks", "cad", "com", "automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: Manufacturing",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    # Capped below 2.0: that release drops the low-level Server.list_tools() /
+    # call_tool() decorator API this server is built on, and renames Tool's
+    # inputSchema field. Porting to it is a separate piece of work.
+    "mcp>=1.29,<2",
+    "pywin32>=306",
+    "pillow>=10",
+]
+
+[project.scripts]
+solidworks-mcp = "solidworks_mcp.server:run"
+
+[project.urls]
+Homepage = "https://github.com/limuzi013/solidworks-mcp"
+Issues = "https://github.com/limuzi013/solidworks-mcp/issues"
+
+[tool.setuptools]
+packages = ["solidworks_mcp"]

@@ -1,7 +1,16 @@
-﻿# Local reference corpus
+# Tracked upstream reference snapshots
 
-The repositories listed in manifest.json are cloned here only for source-level research. The directory is gitignored so upstream source cannot accidentally enter the product repository. Recreate or refresh it with:
+The repositories listed in `manifest.json` are real upstream source snapshots pinned to exact commits. They are tracked
+in this repository for auditable design review, but are never referenced by a product project, included in a package, or
+loaded by the MCP runtime. Upstream `.git` metadata lives in the ignored `.checkouts/` directory.
+
+`sync-references.ps1` refreshes the checkouts and replaces only the corresponding tracked snapshot after verifying the
+remote URL, clean checkout and exact commit:
 
     powershell -ExecutionPolicy Bypass -File .\scripts\sync-references.ps1
 
-The sync script checks the remote URL, fetches the exact manifest commit, and checks it out detached. It does not overwrite local modifications; remove or quarantine a modified reference checkout before retrying.
+The sync script refuses dirty upstream working checkouts and refuses to overwrite modified tracked snapshots. Each
+upstream license/copyright/notice file is retained in its snapshot; provenance and any direct adaptation must be
+recorded in `manifest.json` and `THIRD_PARTY_NOTICES.md` before product code is derived from it.
+
+The confidential local `图纸/` corpus is unrelated to this directory, remains ignored, and must never be copied here.
