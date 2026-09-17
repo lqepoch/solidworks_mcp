@@ -11,8 +11,11 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="ModelContextProtocol" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <ProjectReference Include="..\..\providers\SolidWorksMcp.Provider.SolidWorks\SolidWorksMcp.Provider.SolidWorks.csproj" />
+    <ProjectReference Include="..\..\src\SolidWorksMcp.Server\SolidWorksMcp.Server.csproj" />
   </ItemGroup>
 </Project>

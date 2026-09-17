@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using SolidWorksMcp.AutoDrawing;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Core;
 
@@ -23,7 +24,8 @@ public static class ServerComposition
     public static IServiceCollection AddSolidWorksMcp(
         this IServiceCollection services,
         ICadProvider? provider = null,
-        SolidWorksMcpConfiguration? configuration = null)
+        SolidWorksMcpConfiguration? configuration = null,
+        CadSessionOptions? sessionOptions = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         if (provider is not null)
@@ -37,6 +39,7 @@ public static class ServerComposition
         }
 
         services.TryAddSingleton(configuration ?? new SolidWorksMcpConfiguration());
+        services.TryAddSingleton(sessionOptions ?? new CadSessionOptions());
         services.TryAddSingleton(McpToolCatalog.CreateDefault());
         services.TryAddSingleton<McpOperationCorrelation>();
         services.TryAddSingleton<McpCapabilityNegotiator>();

@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using SolidWorksMcp.AutoDrawing;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
@@ -136,6 +137,92 @@ public sealed class CadMcpTools(
         return McpToolResultWriter.Write(result);
     }
 
+    /// <summary>
+    /// Builds one bounded real part-to-drawing artifact set through the provider boundary.
+    /// 通过 Provider boundary 构建一组有界的真实零件到工程图 artifact。
+    /// </summary>
+    /// <remarks>
+    /// This is the first high-level compiler-facing MCP operation. It intentionally does not expose one tool per COM
+    /// primitive: the deterministic sequence is implemented by <see cref="PartDrawingBuildService"/>, while the native
+    /// provider still owns all SOLIDWORKS calls and read-back invariants. 这是第一个面向 compiler 的高层 MCP operation，
+    /// 不按每个 COM primitive 暴露 tool；确定性序列由工程服务编排，SOLIDWORKS 调用和 read-back invariant 仍归 Provider。
+    /// </remarks>
+    [McpServerTool(Name = "cad.build-part-drawing")]
+    [Description("Build one part and its engineering drawing. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Side effects: creates a real part, three views, a native model-dimension insertion, and a PDF export.")]
+    public async Task<CallToolResult> BuildPartDrawingAsync(
+        [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
+        [Description("Stable part document identity.")] string documentId,
+        [Description("Stable drawing document identity.")] string drawingDocumentId,
+        [Description("Active configuration name.")] string configuration,
+        [Description("Explicit absolute .sldprt output path below the configured allowlist.")] string partPath,
+        [Description("Explicit absolute .slddrw output path below the configured allowlist.")] string drawingPath,
+        [Description("Explicit absolute PDF output path below the configured allowlist.")] string pdfPath,
+        [Description("Positive extrusion depth in millimetres.")] double extrusionDepthMillimeters,
+        [Description("JSON closed line/arc profile in millimetres; same wire format as cad.create-part.")] string initialSketchProfileJson,
+        [Description("Drawing scale denominator for the deterministic seed views.")] int scaleDenominator = 1,
+        [Description("Optional application operation correlation key.")] string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        string correlationId = correlation.Resolve(operationId);
+        if (!TryValidateBuild(
+                schemaVersion,
+                documentId,
+                drawingDocumentId,
+                configuration,
+                partPath,
+                drawingPath,
+                pdfPath,
+                extrusionDepthMillimeters,
+                initialSketchProfileJson,
+                scaleDenominator,
+                out OperationError? validationError,
+                out SketchProfileRequest? sketchProfile))
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, validationError!));
+        }
+
+        // Check both capability gates before a provider session is started. This keeps unsupported high-level builds
+        // side-effect free and makes the capability claim explicit in tools/list and cad.capabilities.
+        // 在启动 Provider session 前同时检查两项 capability，确保 unsupported build 无副作用。
+        OperationError? drawingCapabilityError = capabilities.ValidateInvocation("cad.build-part-drawing");
+        if (drawingCapabilityError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, drawingCapabilityError));
+        }
+
+        OperationError? partCapabilityError = capabilities.ValidateInvocation("cad.create-part");
+        if (partCapabilityError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, partCapabilityError));
+        }
+
+        OperationResult<ICadSession> sessionResult = await sessions.GetOrStartAsync(cancellationToken).ConfigureAwait(false);
+        if (!sessionResult.IsSuccess || sessionResult.Value is null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, sessionResult.Error!, sessionResult.Evidence));
+        }
+
+        OperationResult<PartDrawingBuildResult> built = await PartDrawingBuildService.ExecuteAsync(
+            sessionResult.Value,
+            new PartDrawingBuildRequest
+            {
+                DocumentId = new DocumentId(documentId),
+                DrawingDocumentId = new DocumentId(drawingDocumentId),
+                Configuration = configuration,
+                PartPath = partPath,
+                DrawingPath = drawingPath,
+                PdfPath = pdfPath,
+                InitialSketchProfile = sketchProfile!,
+                ExtrusionDepth = Length.FromMillimeters(extrusionDepthMillimeters),
+                ScaleDenominator = scaleDenominator,
+            },
+            cancellationToken).ConfigureAwait(false);
+        OperationResult<PartDrawingBuildResult> result = built.IsSuccess
+            ? OperationResults.Success(built.Value!, correlationId, built.Evidence!)
+            : OperationResults.Failure<PartDrawingBuildResult>(correlationId, built.Error!, built.Evidence);
+        return McpToolResultWriter.Write(result);
+    }
+
     /// <summary>Inspects one stable document identity and returns provider evidence.</summary>
     [McpServerTool(Name = "cad.inspect")]
     [Description("Inspect one CAD document. Preconditions: schemaVersion=1.0 and stable document ID. Side effects: none.")]
@@ -235,6 +322,53 @@ public sealed class CadMcpTools(
         }
 
         return error is null;
+    }
+
+    private static bool TryValidateBuild(
+        string? schemaVersion,
+        string? documentId,
+        string? drawingDocumentId,
+        string? configuration,
+        string? partPath,
+        string? drawingPath,
+        string? pdfPath,
+        double extrusionDepthMillimeters,
+        string? initialSketchProfileJson,
+        int scaleDenominator,
+        out OperationError? error,
+        out SketchProfileRequest? sketchProfile)
+    {
+        error = null;
+        sketchProfile = null;
+        if (!string.Equals(schemaVersion, ProtocolSchema.CurrentVersion, StringComparison.Ordinal))
+        {
+            error = InvalidInput("schemaVersion is unsupported");
+        }
+        else if (string.IsNullOrWhiteSpace(documentId) || string.IsNullOrWhiteSpace(drawingDocumentId))
+        {
+            error = InvalidInput("documentId and drawingDocumentId are required");
+        }
+        else if (string.IsNullOrWhiteSpace(configuration)
+            || string.IsNullOrWhiteSpace(partPath)
+            || string.IsNullOrWhiteSpace(drawingPath)
+            || string.IsNullOrWhiteSpace(pdfPath))
+        {
+            error = InvalidInput("configuration, partPath, drawingPath and pdfPath are required");
+        }
+        else if (!double.IsFinite(extrusionDepthMillimeters) || extrusionDepthMillimeters <= 0d)
+        {
+            error = InvalidInput("extrusionDepthMillimeters must be finite and greater than zero");
+        }
+        else if (scaleDenominator <= 0)
+        {
+            error = InvalidInput("scaleDenominator must be greater than zero");
+        }
+        else if (!SketchProfileMcpCodec.TryParse(initialSketchProfileJson, out sketchProfile, out string? profileError))
+        {
+            error = InvalidInput(profileError ?? "initialSketchProfileJson-invalid");
+        }
+
+        return error is null && sketchProfile is not null;
     }
 
     private static bool TryValidate(InspectToolInput? input, out OperationError? error)

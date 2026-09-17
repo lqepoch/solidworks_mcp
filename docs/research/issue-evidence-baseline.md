@@ -82,6 +82,34 @@ The next native step must invoke this MCP tool against the same one-process Live
 part/drawing artifacts. Every Live invocation continues to close stale SOLIDWORKS processes before starting exactly one
 fresh owned process; an existing user session is never reused implicitly.
 
+## MCP-to-native part drawing evidence (partial)
+
+`cad.build-part-drawing` is now the first high-level compiler-facing operation. Its bounded workflow is:
+
+    validated profile -> native part -> verified extrusion -> persisted part
+    -> Front/Top/Isometric views -> native Model Dimension insertion
+    -> persisted drawing reopen -> PDF export
+
+The orchestration lives in `src/SolidWorksMcp.AutoDrawing/PartDrawingBuildService.cs`; the MCP layer only validates the
+compact request and starts the exact session. It does not expose one MCP tool per COM primitive. The live test binds
+`CadSessionOptions.RequestedProcessId` to the harness-owned PID, so it cannot silently attach to another ROT session.
+
+Fresh-process Live evidence:
+
+    `$env:SOLIDWORKS_MCP_LIVE_KEEP_ARTIFACT='1'; powershell -ExecutionPolicy Bypass -File .\\scripts\\Invoke-SolidWorksLiveTests.ps1 -RepositoryRoot D:\\Program\\solidworks_mcp -Workspace C:\\Users\\lqepo\\AppData\\Local\\SolidWorksMcp\\test-workspace -SolidWorksPath D:\\Solidworks2022\\SOLIDWORKS\\SLDWORKS.exe -NoBuild -Filter FullyQualifiedName~McpBuildPartDrawingLiveTests`
+
+    `exit 0; Live 1 passed; 0 failed; 0 skipped; elapsed 1m08s`
+
+The run produced non-empty native `.SLDPRT` (67,894 bytes), `.SLDDRW` (35,097 bytes) and PDF (14,561 bytes) artifacts
+in the isolated user-local workspace. The PDF has one page; rendered visual inspection showed the generated D-shaped
+front view, isometric solid and native `40.00` dimension. The harness reported `SLDWORKS_COUNT=0` after graceful
+shutdown. These are generic generated artifacts only; no private source drawing or private dimensions entered Git,
+logs, Issues or public evidence. This proves the 3D-to-2D MCP/native path for the current bounded profile slice, not the
+full requirement graph, tolerance engine, drawing QA or release gate.
+
+Hosted-safe follow-up after this change: `scripts/build-hosted.ps1` exited 0 with 0 warnings/errors; Unit 65,
+Contract 10 and FakeCad 10 passed, with no SOLIDWORKS dependency.
+
 ## Authoritative execution DAG
 
 The root Epic comment defines this critical path:
@@ -527,7 +555,9 @@ Evidence command and result:
     dotnet test SolidWorksMcp.hosted.slnx --configuration Release --no-build -p:SolidWorksMcpNativeProviderEnabled=false -p:SolidWorksMcpHostedBuild=true --logger "console;verbosity=minimal" # exit 0; Unit 58 + Contract 7 + FakeCad 7 passed
 
 The native executable was started as a local stdio child and successfully completed MCP `initialize`, `tools/list`
-and `cad.capabilities` requests. The response identified the native provider and exposed four tools. The smoke test
+and `cad.capabilities` requests. At that historical smoke-test revision, the response identified the native provider
+and exposed four tools. The current bounded compiler-facing surface is superseded by the five-tool registry described
+below. The smoke test
 did not start or stop SOLIDWORKS and did not perform a CAD mutation; the current machine had zero running
 `SLDWORKS.exe` sessions at the time of the check. Therefore native MCP create-part evidence and a full
 `Codex -> MCP -> Provider -> SOLIDWORKS` mutation proof remain pending an explicitly user-started SOLIDWORKS
@@ -570,8 +600,8 @@ images, manifests and CAD artifacts are not committed, uploaded or written to Is
   OCR/text similarity. Required approved requirements without semantic annotation coverage block release; optional
   omissions remain warnings; orphan keys are visible warnings rather than silently accepted coverage.
 - `CadAbstractions.DrawingAnnotationRequest` and `DrawingAnnotationSnapshot` preserve those coverage keys across the
-  provider boundary. FakeCad round-trips them, and the native drawing provider now supports an explicit `Kind=note`
-  slice with native identity/text/position read-back; associative Model Dimension/PMI insertion remains deferred.
+  provider boundary. FakeCad round-trips them, and the native drawing provider supports explicit `Kind=note` plus the
+  bounded `Kind=model-dimensions` insertion proven by the newer MCP Live slice; broad PMI normalization remains deferred.
 
 The two sampled slots are intentionally not named here. A future iteration must run the same script again and sample
 exactly two new candidates (or two new random candidates) before making a reference-driven design decision.

@@ -28,7 +28,7 @@ public sealed class McpServerIntegrationTests
 
         IList<McpClientTool> tools = await host.Client.ListToolsAsync();
 
-        Assert.Equal(4, tools.Count);
+        Assert.Equal(5, tools.Count);
         McpClientTool createTool = Assert.Single(tools, tool => tool.Name == "cad.create-part");
         Assert.Contains("Preconditions", createTool.Description, StringComparison.Ordinal);
         Assert.Contains("Side effects", createTool.Description, StringComparison.Ordinal);
@@ -113,6 +113,43 @@ public sealed class McpServerIntegrationTests
 
         Assert.False(result.IsError);
         Assert.Equal(1, countingProvider.StartSessionCount);
+    }
+
+    /// <summary>High-level build tool executes the complete FakeCad 3D-to-2D orchestration without primitive tool spam.</summary>
+    /// <remarks>
+    /// The same request shape is used by the native Live path; FakeCad only proves orchestration and contract ordering.
+    /// 相同请求形状会被 native Live path 使用；FakeCad 这里只证明编排和契约顺序，不冒充真实 SOLIDWORKS 几何。
+    /// </remarks>
+    [Fact]
+    public async Task BuildPartDrawingToolRunsTheHighLevelWorkflow()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "cad.build-part-drawing",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = "mcp-build-part-001",
+                ["drawingDocumentId"] = "mcp-build-drawing-001",
+                ["configuration"] = "Default",
+                ["partPath"] = "C:\\mcp-artifacts\\mcp-build-part-001.sldprt",
+                ["drawingPath"] = "C:\\mcp-artifacts\\mcp-build-drawing-001.slddrw",
+                ["pdfPath"] = "C:\\mcp-artifacts\\mcp-build-drawing-001.pdf",
+                ["extrusionDepthMillimeters"] = 8d,
+                ["initialSketchProfileJson"] = "{\"segments\":["
+                    + "{\"kind\":\"line\",\"startXMillimeters\":-20,\"startYMillimeters\":-15,\"endXMillimeters\":0,\"endYMillimeters\":-15},"
+                    + "{\"kind\":\"arc\",\"startXMillimeters\":0,\"startYMillimeters\":-15,\"throughXMillimeters\":0,\"throughYMillimeters\":15,\"endXMillimeters\":15,\"endYMillimeters\":0},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":15,\"startYMillimeters\":0,\"endXMillimeters\":-20,\"endYMillimeters\":15},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":-20,\"startYMillimeters\":15,\"endXMillimeters\":-20,\"endYMillimeters\":-15}"
+                    + "]}",
+            });
+
+        Assert.False(result.IsError);
+        Assert.Equal(1, countingProvider.StartSessionCount);
+        Assert.Contains("CAD operation completed", result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.NotNull(result.StructuredContent);
     }
 
     /// <summary>Disconnected profile JSON fails before provider/session startup.</summary>

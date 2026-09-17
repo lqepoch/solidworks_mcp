@@ -9,9 +9,10 @@ namespace SolidWorksMcp.Server;
 /// replace the later transaction/single-STA dispatcher; it is only the A02 composition boundary.
 /// 这里仅负责 A02 的 session 生命周期，不替代后续的 Transaction 与 STA Dispatcher。
 /// </remarks>
-public sealed class CadSessionAccessor(ICadProvider provider) : IAsyncDisposable
+public sealed class CadSessionAccessor(ICadProvider provider, CadSessionOptions sessionOptions) : IAsyncDisposable
 {
     private readonly ICadProvider provider = provider ?? throw new ArgumentNullException(nameof(provider));
+    private readonly CadSessionOptions sessionOptions = sessionOptions ?? throw new ArgumentNullException(nameof(sessionOptions));
     private readonly SemaphoreSlim gate = new(1, 1);
     private ICadSession? session;
     private bool disposed;
@@ -57,7 +58,7 @@ public sealed class CadSessionAccessor(ICadProvider provider) : IAsyncDisposable
             }
 
             OperationResult<ICadSession> started = await provider.StartSessionAsync(
-                new CadSessionOptions(),
+                sessionOptions,
                 cancellationToken).ConfigureAwait(false);
             if (!started.IsSuccess)
             {

@@ -19,7 +19,7 @@ public sealed class McpCompatibilityContractTests
     {
         McpToolDescriptor[] tools = [.. McpToolCatalog.CreateDefault().Tools];
 
-        Assert.Equal(["cad.health", "cad.capabilities", "cad.create-part", "cad.inspect"], tools.Select(tool => tool.Name));
+        Assert.Equal(["cad.health", "cad.capabilities", "cad.create-part", "cad.build-part-drawing", "cad.inspect"], tools.Select(tool => tool.Name));
         Assert.All(tools, tool =>
         {
             Assert.False(string.IsNullOrWhiteSpace(tool.Tier));
@@ -27,7 +27,8 @@ public sealed class McpCompatibilityContractTests
             Assert.False(string.IsNullOrWhiteSpace(tool.SideEffects));
         });
         Assert.Equal(CadCapabilityNames.PartMutation, tools[2].RequiredCapability);
-        Assert.Equal(CadCapabilityNames.Inspection, tools[3].RequiredCapability);
+        Assert.Equal(CadCapabilityNames.DrawingMutation, tools[3].RequiredCapability);
+        Assert.Equal(CadCapabilityNames.Inspection, tools[4].RequiredCapability);
     }
 
     /// <summary>Experimental behavior stays unavailable until its explicit feature flag is enabled.</summary>
