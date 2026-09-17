@@ -694,3 +694,36 @@ Final evidence on the local SOLIDWORKS 2022 machine:
 The focused Live run created and verified the actual rounded non-cylindrical part and drawing workflow while round-tripping native topology selectors. The harness closed any old SOLIDWORKS process before launch and closed the exact owned PID after the test; no extra SOLIDWORKS session was left running.
 
 该 focused Live run 实际创建并验证了圆弧边界的非圆柱零件及其工程图流程，同时 round-trip native topology selector。Harness 启动前关闭旧 SOLIDWORKS，测试后关闭精确 owned PID；结束时没有遗留额外 SOLIDWORKS session。
+
+## High-level MCP repeated-hole drawing evidence / 高层 MCP 重复孔组出图证据
+
+The high-level `cad.build-part-drawing` MCP tool now accepts a bounded `throughHolePatternJson` value. The input is
+validated before provider/session startup and becomes one `ThroughHolePatternRequest`; it is not expanded into a list
+of unrelated primitive-hole tools. `PartDrawingBuildService` executes the native sketch-and-through-cut mutation after
+the verified non-cylindrical profile extrusion, then carries the verified native feature snapshot and count/diameter
+observations into the versioned MCP result envelope. The drawing stage remains deterministic and currently emits
+Front/Top/Isometric seed views plus verified native model dimensions; native Hole Callout/BOM/Release QA are separate
+follow-up slices.
+
+高层 `cad.build-part-drawing` MCP tool 现在接收 bounded `throughHolePatternJson`。输入在 Provider/session 启动前完成
+校验，并形成一个 `ThroughHolePatternRequest`；不会退化成一串互不相关的 primitive-hole tool。`PartDrawingBuildService`
+在已验证的非圆柱 profile extrusion 后执行 native sketch + through-cut mutation，并把 native feature snapshot 以及
+孔数量/直径 evidence 带入版本化 MCP result envelope。当前二维阶段仍是确定性的 Front/Top/Isometric seed views
+加 native model dimensions；原生 Hole Callout、BOM 和 Release QA 属于后续切片。
+
+Final evidence on the local SOLIDWORKS 2022 machine:
+
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 65 + Contract 11 + FakeCad 10 passed
+    dotnet build tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~McpBuildPartDrawingLiveTests -NoBuild # exit 0; 1 passed; 0 failed; before 0; after 0
+
+The successful preserved-artifact run created one actual native `.SLDPRT`, `.SLDDRW` and PDF in the isolated local test
+workspace. The artifacts are intentionally not committed to the repository. The rendered PDF visibly contains the
+non-cylindrical front view with two real through holes, an isometric view with the hole openings and a native 40.00
+model dimension. The Live harness closed any old SOLIDWORKS process before launch and closed the exact owned PID after
+the run; the final process inventory was zero `SLDWORKS.exe`.
+
+成功的保留产物运行在隔离的本机 test workspace 生成了一套真实 `.SLDPRT`、`.SLDDRW` 与 PDF；这些产物刻意不提交到仓库。
+渲染后的 PDF 可见非圆柱正视图、两个真实通孔、带孔开口的等轴测视图，以及 native 40.00 model dimension。Live harness
+启动前关闭旧 SOLIDWORKS，结束后关闭精确 owned PID；最终进程清单为零个 `SLDWORKS.exe`。

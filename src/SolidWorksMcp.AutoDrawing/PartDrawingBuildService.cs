@@ -85,6 +85,24 @@ public static class PartDrawingBuildService
                 return Failure(extrusion);
             }
 
+            FeatureSnapshot? holePattern = null;
+            if (request.ThroughHolePattern is not null)
+            {
+                // Keep the repeated-hole group as one engineering feature. The native provider creates the actual
+                // sketch/cut and verifies its rebuilt solid; this orchestration layer must not flatten it into
+                // anonymous cylinders. 重复孔组始终保留为一个工程 feature；native Provider 负责创建真实 sketch/cut
+                // 并验证 rebuild 后 solid，本层不能把它退化成匿名圆柱。
+                OperationResult<FeatureSnapshot> holeResult = await part.AddThroughHolePatternAsync(
+                    request.ThroughHolePattern,
+                    cancellationToken).ConfigureAwait(false);
+                if (!holeResult.IsSuccess || holeResult.Value is null)
+                {
+                    return Failure(holeResult);
+                }
+
+                holePattern = holeResult.Value;
+            }
+
             OperationResult<SaveReceipt> partSave = await part.SaveAsync(cancellationToken).ConfigureAwait(false);
             if (!partSave.IsSuccess)
             {
@@ -203,6 +221,7 @@ public static class PartDrawingBuildService
                 Part = partInspection.Value,
                 Drawing = drawingInspection.Value,
                 Extrusion = extrusion.Value,
+                HolePattern = holePattern,
                 Views = views.ToImmutable(),
                 ModelDimensions = modelDimensions.Value,
                 Pdf = pdf.Value,
@@ -218,6 +237,14 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.document.id", drawing.DocumentId.Value),
                         new EvidenceObservation("drawing.view.count", drawingInspection.Value.Views.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("drawing.annotation.count", drawingInspection.Value.Annotations.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("part.hole-pattern", holePattern?.Name ?? "none"),
+                        new EvidenceObservation("part.hole-pattern.kind", holePattern?.Kind ?? "none"),
+                        new EvidenceObservation(
+                            "part.hole-pattern.count",
+                            request.ThroughHolePattern?.Centers.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
+                        new EvidenceObservation(
+                            "part.hole-pattern.diameter-millimeters",
+                            request.ThroughHolePattern?.Diameter.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
                         new EvidenceObservation("export.format", pdf.Value.Format),
                     ],
                     [part.Path, drawing.Path, pdf.Value.TargetPath]));
@@ -318,6 +345,12 @@ public sealed record PartDrawingBuildRequest
 
     /// <summary>Stable semantic body name for providers that require an explicit empty body.</summary>
     public string BodyName { get; init; } = "Body-1";
+
+    /// <summary>
+    /// Optional repeated through-hole group retained as one engineering feature.
+    /// 可选的重复通孔组；作为一个工程 feature 保留，而不是展开成匿名孔面。
+    /// </summary>
+    public ThroughHolePatternRequest? ThroughHolePattern { get; init; }
 }
 
 /// <summary>Verified outputs of the bounded part-to-drawing workflow.</summary>
@@ -331,6 +364,9 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>Verified native extrusion feature.</summary>
     public required FeatureSnapshot Extrusion { get; init; }
+
+    /// <summary>Verified native repeated-hole group, when requested.</summary>
+    public FeatureSnapshot? HolePattern { get; init; }
 
     /// <summary>Views requested by the deterministic seed plan.</summary>
     public required ImmutableArray<DrawingViewSnapshot> Views { get; init; }

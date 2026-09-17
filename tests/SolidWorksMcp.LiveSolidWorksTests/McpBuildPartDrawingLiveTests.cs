@@ -66,10 +66,12 @@ public sealed class McpBuildPartDrawingLiveTests
                     ["pdfPath"] = pdfPath,
                     ["extrusionDepthMillimeters"] = 10d,
                     ["initialSketchProfileJson"] = DProfileJson,
+                    ["throughHolePatternJson"] = ThroughHolePatternJson,
                     ["scaleDenominator"] = 1,
                 });
 
             Assert.False(result.IsError, string.Join(Environment.NewLine, result.Content));
+            Assert.Contains("part.hole-pattern", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.True(File.Exists(partPath), "The MCP workflow did not persist the native .sldprt artifact.");
             Assert.True(File.Exists(drawingPath), "The MCP workflow did not persist the native .slddrw artifact.");
             Assert.True(File.Exists(pdfPath), "The MCP workflow did not export the native PDF artifact.");
@@ -99,6 +101,11 @@ public sealed class McpBuildPartDrawingLiveTests
         + "{\"kind\":\"line\",\"startXMillimeters\":20,\"startYMillimeters\":-20,\"endXMillimeters\":20,\"endYMillimeters\":0},"
         + "{\"kind\":\"arc\",\"startXMillimeters\":20,\"startYMillimeters\":0,\"throughXMillimeters\":0,\"throughYMillimeters\":22,\"endXMillimeters\":-20,\"endYMillimeters\":0},"
         + "{\"kind\":\"line\",\"startXMillimeters\":-20,\"startYMillimeters\":0,\"endXMillimeters\":-20,\"endYMillimeters\":-20}"
+        + "]}";
+
+    private const string ThroughHolePatternJson = "{\"name\":\"MCP-Mounting-Hole-Group\",\"diameterMillimeters\":6,\"centers\":["
+        + "{\"xMillimeters\":14,\"yMillimeters\":-10},"
+        + "{\"xMillimeters\":14,\"yMillimeters\":10}"
         + "]}";
 
     private static void TryDeleteArtifact(string path)

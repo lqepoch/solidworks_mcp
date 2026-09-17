@@ -148,7 +148,7 @@ public sealed class CadMcpTools(
     /// 不按每个 COM primitive 暴露 tool；确定性序列由工程服务编排，SOLIDWORKS 调用和 read-back invariant 仍归 Provider。
     /// </remarks>
     [McpServerTool(Name = "cad.build-part-drawing")]
-    [Description("Build one part and its engineering drawing. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Side effects: creates a real part, three views, a native model-dimension insertion, and a PDF export.")]
+    [Description("Build one part and its engineering drawing. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group. Side effects: creates a real part, three views, native model-dimension insertion, and a PDF export.")]
     public async Task<CallToolResult> BuildPartDrawingAsync(
         [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
         [Description("Stable part document identity.")] string documentId,
@@ -159,6 +159,7 @@ public sealed class CadMcpTools(
         [Description("Explicit absolute PDF output path below the configured allowlist.")] string pdfPath,
         [Description("Positive extrusion depth in millimetres.")] double extrusionDepthMillimeters,
         [Description("JSON closed line/arc profile in millimetres; same wire format as cad.create-part.")] string initialSketchProfileJson,
+        [Description("Optional JSON semantic through-hole group: {name, diameterMillimeters, centers:[{xMillimeters,yMillimeters}]}.")] string? throughHolePatternJson = null,
         [Description("Drawing scale denominator for the deterministic seed views.")] int scaleDenominator = 1,
         [Description("Optional application operation correlation key.")] string? operationId = null,
         CancellationToken cancellationToken = default)
@@ -174,9 +175,11 @@ public sealed class CadMcpTools(
                 pdfPath,
                 extrusionDepthMillimeters,
                 initialSketchProfileJson,
+                throughHolePatternJson,
                 scaleDenominator,
                 out OperationError? validationError,
-                out SketchProfileRequest? sketchProfile))
+                out SketchProfileRequest? sketchProfile,
+                out ThroughHolePatternRequest? holePattern))
         {
             return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, validationError!));
         }
@@ -215,6 +218,7 @@ public sealed class CadMcpTools(
                 InitialSketchProfile = sketchProfile!,
                 ExtrusionDepth = Length.FromMillimeters(extrusionDepthMillimeters),
                 ScaleDenominator = scaleDenominator,
+                ThroughHolePattern = holePattern,
             },
             cancellationToken).ConfigureAwait(false);
         OperationResult<PartDrawingBuildResult> result = built.IsSuccess
@@ -334,12 +338,15 @@ public sealed class CadMcpTools(
         string? pdfPath,
         double extrusionDepthMillimeters,
         string? initialSketchProfileJson,
+        string? throughHolePatternJson,
         int scaleDenominator,
         out OperationError? error,
-        out SketchProfileRequest? sketchProfile)
+        out SketchProfileRequest? sketchProfile,
+        out ThroughHolePatternRequest? holePattern)
     {
         error = null;
         sketchProfile = null;
+        holePattern = null;
         if (!string.Equals(schemaVersion, ProtocolSchema.CurrentVersion, StringComparison.Ordinal))
         {
             error = InvalidInput("schemaVersion is unsupported");
@@ -366,6 +373,10 @@ public sealed class CadMcpTools(
         else if (!SketchProfileMcpCodec.TryParse(initialSketchProfileJson, out sketchProfile, out string? profileError))
         {
             error = InvalidInput(profileError ?? "initialSketchProfileJson-invalid");
+        }
+        else if (!ThroughHolePatternMcpCodec.TryParse(throughHolePatternJson, out holePattern, out string? holePatternError))
+        {
+            error = InvalidInput(holePatternError ?? "throughHolePatternJson-invalid");
         }
 
         return error is null && sketchProfile is not null;

@@ -144,12 +144,55 @@ public sealed class McpServerIntegrationTests
                     + "{\"kind\":\"line\",\"startXMillimeters\":15,\"startYMillimeters\":0,\"endXMillimeters\":-20,\"endYMillimeters\":15},"
                     + "{\"kind\":\"line\",\"startXMillimeters\":-20,\"startYMillimeters\":15,\"endXMillimeters\":-20,\"endYMillimeters\":-15}"
                     + "]}",
+                ["throughHolePatternJson"] = "{\"name\":\"Mounting-Hole-Group\",\"diameterMillimeters\":6,\"centers\":["
+                    + "{\"xMillimeters\":12,\"yMillimeters\":-8},"
+                    + "{\"xMillimeters\":12,\"yMillimeters\":8}"
+                    + "]}",
             });
 
         Assert.False(result.IsError);
         Assert.Equal(1, countingProvider.StartSessionCount);
         Assert.Contains("CAD operation completed", result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
         Assert.NotNull(result.StructuredContent);
+        Assert.Contains("part.hole-pattern", result.StructuredContent!.Value.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>Invalid repeated-hole JSON fails before a provider session can mutate a document.</summary>
+    /// <remarks>
+    /// The profile is valid on purpose; only the semantic hole-group name is invalid. This isolates the codec's
+    /// fail-closed boundary instead of accidentally testing profile validation. 轮廓故意保持有效，只让重复孔组
+    /// 的语义名称无效，从而单独证明 codec 在 Provider/session 之前 fail closed。
+    /// </remarks>
+    [Fact]
+    public async Task InvalidRepeatedHolePatternFailsBeforeBusinessExecution()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "cad.build-part-drawing",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = "mcp-invalid-hole-pattern-part-001",
+                ["drawingDocumentId"] = "mcp-invalid-hole-pattern-drawing-001",
+                ["configuration"] = "Default",
+                ["partPath"] = "C:\\mcp-artifacts\\invalid-hole-pattern-part-001.sldprt",
+                ["drawingPath"] = "C:\\mcp-artifacts\\invalid-hole-pattern-drawing-001.slddrw",
+                ["pdfPath"] = "C:\\mcp-artifacts\\invalid-hole-pattern-drawing-001.pdf",
+                ["extrusionDepthMillimeters"] = 8d,
+                ["initialSketchProfileJson"] = "{\"segments\":["
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":0,\"endXMillimeters\":20,\"endYMillimeters\":0},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":20,\"startYMillimeters\":0,\"endXMillimeters\":20,\"endYMillimeters\":20},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":20,\"startYMillimeters\":20,\"endXMillimeters\":0,\"endYMillimeters\":20},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":20,\"endXMillimeters\":0,\"endYMillimeters\":0}"
+                    + "]}",
+                ["throughHolePatternJson"] = "{\"diameterMillimeters\":6,\"centers\":[{\"xMillimeters\":5,\"yMillimeters\":5}]}",
+            });
+
+        Assert.True(result.IsError);
+        Assert.Contains(ErrorCodes.InvalidRequest, result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
     }
 
     /// <summary>Disconnected profile JSON fails before provider/session startup.</summary>
