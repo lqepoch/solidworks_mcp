@@ -199,3 +199,46 @@ not a 2026 runtime claim.
 aligned view 只能沿 alignment vector 移动，因此实现先 `RemoveAlignment` 再 `SetXform`，不盲信 CreateSectionViewAt5 初始
 坐标。该流程已在全新 SOLIDWORKS 2022 进程中通过 MCP `cad.build-part-drawing` 和保留 PDF artifact 真实验证。本机没有
 可验证的 2026 runtime，因此不把它表述为 2026 运行时证据。
+
+### D04 detail-view API boundary / D04 局部放大 API 边界
+
+The locally installed SOLIDWORKS 2022 interop assembly (`30.0.0.5041`) was reflected before implementation. The
+verified detail-view signatures and runtime facts are:
+
+| Interface / method | Verified signature | Official source | Runtime note |
+| --- | --- | --- | --- |
+| `ISketchManager.CreateCircle` | `SketchSegment CreateCircle(Double X1, Double Y1, Double Z1, Double X2, Double Y2, Double Z2)` | [CreateCircle Method](https://help.solidworks.com/2024/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISketchManager~CreateCircle.html) | Creates the source detail profile from center and circumference point. The active drawing view owns the sketch coordinate system. |
+| `IDrawingDoc.CreateDetailViewAt4` | `Object CreateDetailViewAt4(Double X, Double Y, Double Z, Int32 Style, Int32 ScaleNumerator, Int32 ScaleDenominator, String Label, Int32 ShowType, Boolean FullOutline, Boolean JaggedOutline, Boolean UseDocTextFormat, Int32 LineStyle)` | [CreateDetailViewAt4 Method](https://help.solidworks.com/2024/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDrawingDoc~CreateDetailViewAt4.html) | `swDetViewSTANDARD=0` and `swDetCircleCIRCLE=1` are passed explicitly. The target view position is sheet coordinates; the selected source circle must already exist. |
+| `IView.GetDetail` / `IView.GetBaseView` | `Object GetDetail()` / `Object GetBaseView()` | [GetDetail Method](https://help.solidworks.com/2022/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.IView~GetDetail.html) / [IView Interface](https://help.solidworks.com/2022/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.IView.html) | Read-back proves the returned view is a native detail view and that its `DetailCircle` parent/base binding is exact. |
+| `IView.GetPolyLineCount5` / `IView.GetPolyLinesAndCurvesCount` | `Int32 GetPolyLineCount5(Int16 Filter, out Int32 PointCount)` / `Int32 GetPolyLinesAndCurvesCount(Int16 Filter, out Int32 PointCount)` | [GetPolyLineCount5 Method](https://help.solidworks.com/2023/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.IView~GetPolyLineCount5.html) / [GetPolyLinesAndCurves Method](https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~GetPolyLinesAndCurves.html) | Projected model edges are verified through these APIs; `GetLineCount`/`GetArcCount` alone only describe drawing sketch entities and are insufficient proof. |
+| `IView.UpdateViewDisplayGeometry` | `Void UpdateViewDisplayGeometry()` | [UpdateViewDisplayGeometry Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~UpdateViewDisplayGeometry.html) | Called after rebuild and explicit HLR mode before projected-geometry read-back and PDF export. |
+
+The provider contract accepts the detail center in paper coordinates. Before `CreateCircle`, the native adapter resolves
+the exact parent `IView`, reads its paper-space `Position` and `Angle`, and converts the requested center into the active
+view-local sketch space. This conversion is mandatory: passing paper coordinates directly creates a valid circle and a
+valid `CreateDetailViewAt4` return value, but the native detail contains only its boundary and exports as a blank label-only
+view. The adapter now fails closed unless the returned view has the exact parent/detail association, a native profile,
+positive outline, and projected polyline/curve evidence.
+
+Provider contract 接受纸空间 detail center。native adapter 先解析精确的 parent `IView`，读取纸空间 `Position` 和 `Angle`，
+再把请求中心转换到 active view 的局部 sketch 坐标后调用 `CreateCircle`。这个转换是必须的：直接传纸空间坐标虽然
+会得到合法圆和合法的 `CreateDetailViewAt4` 返回值，但 native detail 只包含边界，导出后会变成只有标签的空视图。
+因此 adapter 只有在 parent/detail 关联、native profile、正 outline 以及 projected polyline/curve evidence 均读回成功时
+才返回成功。
+
+Fresh-process Live evidence from two redacted single-part classes:
+
+    `SLDWORKS_COUNT_BEFORE=0`
+    `SLDWORKS_COUNT_AFTER_OLD=0`
+    `drawing.detail.view.detail-local-circle-center.meters=0,0.01`
+    `drawing.detail.view.detail-source-circle-params.meters=0,0.01,0,0,0,1,0.012...`
+    `drawing.detail.view.detail-polyline-count=2`
+    `drawing.detail.view.detail-parent-native-name=Drawing View1`
+    `SLDWORKS_COUNT_AFTER=0`
+
+The retained rounded-plate PDF was rendered and visually inspected: the parent Front view contains the native detail
+circle/label, and the Detail A view contains the enlarged hole and center marks. The second formed U-bracket case remains
+a real curved non-cylindrical single-part drawing without a detail request. These are generic local fixtures; private source
+PDFs, source filenames, exact private dimensions and source renders remain outside Git, logs and artifacts.
+
+Official sample sequence cross-check: [Create Detail Circle and Detail View Example (C#)](https://help.solidworks.com/2023/english/api/sldworksapi/Create_Detail_Circle_and_Detail_View_Example_CSharp.htm).

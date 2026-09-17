@@ -149,12 +149,18 @@ public static class PartDrawingBuildService
             }
 
             DrawingViewSnapshot? sectionView = null;
+            ImmutableArray<EvidenceObservation> detailEvidence = [];
+            DrawingViewSnapshot? detailView = null;
+
             if (request.ThroughHolePattern is not null && views.Count > 0)
             {
                 // A verified internal-hole group is the first deterministic section trigger. The vertical cutting line
                 // passes through the two symmetric hole centers in the Front view and the generated A-A view occupies
                 // the free upper-right region. 已验证的内部孔组是首个确定性剖视触发条件；竖直剖切线穿过 Front view
-                // 中两个对称孔中心，A-A view 放置在右上方空闲区域。
+                // 中两个对称孔中心，A-A view 放置在右上方空闲区域；Detail 的显式 parent binding 不受该 section
+                // 的业务触发条件影响。The detail itself is materialized after all annotation writes below so its
+                // final native display cache is the one that gets persisted.
+                // Detail 的 native display cache 会在下方所有 annotation 写入之后 materialize 并持久化。
                 OperationResult<DrawingViewSnapshot> section = await drawing.AddSectionViewAsync(
                     new DrawingSectionViewRequest
                     {
@@ -246,6 +252,40 @@ public static class PartDrawingBuildService
                 patternCallout = callout.Value;
             }
 
+            if (request.DetailView is not null)
+            {
+                // Create the derived Detail View after model-item and semantic-note writes. Some SOLIDWORKS 2022
+                // drawing mutations invalidate an already-created derived-view display cache during rebuild; making
+                // the detail the last view mutation lets its own read-back and the final rebuild prove its geometry.
+                // 在 model-item 和语义 note 写入之后再创建 derived Detail View。SOLIDWORKS 2022 某些 drawing
+                // mutation 会在 rebuild 时使已创建 derived view 的 display cache 失效；让 detail 成为最后一个
+                // view mutation，才能由自身 read-back 与最终 rebuild 共同证明其几何仍然存在。
+                OperationResult<DrawingViewSnapshot> detail = await drawing.AddDetailViewAsync(
+                    request.DetailView,
+                    cancellationToken).ConfigureAwait(false);
+                if (!detail.IsSuccess || detail.Value is null)
+                {
+                    return Failure(detail);
+                }
+
+                detailView = detail.Value;
+                views.Add(detail.Value);
+                if (detail.Evidence is not null)
+                {
+                    // Preserve provider-native detail proof inside the compiler result, but namespace it under the
+                    // high-level workflow so callers can distinguish it from ordinary view observations. 将 Provider
+                    // 的 native detail proof 保留到 compiler result，并加上 workflow namespace，避免与普通 view
+                    // observation 混淆；这些 facts 仍然来自真实 SOLIDWORKS read-back。
+                    detailEvidence =
+                    [
+                        .. detail.Evidence.Observations.Select(observation => new EvidenceObservation(
+                            $"drawing.detail.{observation.Key}",
+                            observation.Value,
+                            observation.ExpectedValue)),
+                    ];
+                }
+            }
+
             OperationResult<RebuildReceipt> drawingRebuild = await drawing.RebuildAsync(cancellationToken).ConfigureAwait(false);
             if (!drawingRebuild.IsSuccess || drawingRebuild.Value is null || drawingRebuild.Value.HasErrors)
             {
@@ -333,6 +373,7 @@ public static class PartDrawingBuildService
                 HolePattern = holePattern,
                 Views = views.ToImmutable(),
                 SectionView = sectionView,
+                DetailView = detailView,
                 ModelDimensions = modelDimensions,
                 ManufacturingAnnotations = manufacturingAnnotations,
                 PatternCallout = patternCallout,
@@ -354,6 +395,9 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.view.count", drawingInspection.Value.Views.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("drawing.section-view", sectionView?.Name ?? "none"),
                         new EvidenceObservation("drawing.section-view.trigger", sectionView is null ? "not-requested" : "verified-internal-hole-group"),
+                        new EvidenceObservation("drawing.detail-view", detailView?.Name ?? "none"),
+                        new EvidenceObservation("drawing.detail-view.trigger", detailView is null ? "not-requested" : "explicit-approved-region"),
+                        .. detailEvidence,
                         new EvidenceObservation("drawing.annotation.count", drawingInspection.Value.Annotations.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("drawing.manufacturing.native-import.count", manufacturingAnnotations.Items.Count(item => item.Code == "annotation-native-materialized").ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("drawing.manufacturing.plan-fingerprint", manufacturingAnnotations.Fingerprint),
@@ -529,6 +573,13 @@ public sealed record PartDrawingBuildRequest
     /// 可选的重复通孔组；作为一个工程 feature 保留，而不是展开成匿名孔面。
     /// </summary>
     public ThroughHolePatternRequest? ThroughHolePattern { get; init; }
+
+    /// <summary>
+    /// Optional explicit detail-view request. The request names the parent view, source circle and enlarged-view
+    /// position; it is never inferred from a screenshot or an arbitrary active selection.
+    /// 可选的显式局部放大视图请求；请求明确父视图、源圆和放大视图位置，绝不从截图或任意 active selection 猜测。
+    /// </summary>
+    public DrawingDetailViewRequest? DetailView { get; init; }
 }
 
 /// <summary>Verified outputs of the bounded part-to-drawing workflow.</summary>
@@ -551,6 +602,9 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>Verified native section view generated for the internal-hole trigger, when requested.</summary>
     public DrawingViewSnapshot? SectionView { get; init; }
+
+    /// <summary>Verified native detail view generated from an explicit approved source region, when requested.</summary>
+    public DrawingViewSnapshot? DetailView { get; init; }
 
     /// <summary>Native model-dimension annotation result.</summary>
     public required DrawingAnnotationSnapshot ModelDimensions { get; init; }

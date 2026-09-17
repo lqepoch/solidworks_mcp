@@ -36,6 +36,10 @@ close the owned process, this section is the current state.
   visual review showed the rounded plate, two holes, isometric view and native model dimension, and bundled `pypdf`
   extraction confirmed the rendered dimension text exists. These are real SOLIDWORKS 2022 artifacts and are not public
   fixtures.
+- D04 native detail-view evidence is now real rather than label-only. The rounded-plate PDF shows the source detail circle
+  around a native hole in Front and the enlarged hole/center marks in Detail A. The provider records the paper-to-active-view
+  coordinate conversion, native `DetailCircle` parent/base binding, and projected geometry counts; the latest retained run
+  read back `detail-polyline-count=2` and finished with `SLDWORKS_COUNT_AFTER=0`.
 - Fresh-process command and result:
 
       `$env:SOLIDWORKS_MCP_LIVE_KEEP_ARTIFACT='1'; powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -RepositoryRoot D:\Program\solidworks_mcp -Workspace C:\Users\lqepo\AppData\Local\SolidWorksMcp\test-workspace -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -NoBuild`

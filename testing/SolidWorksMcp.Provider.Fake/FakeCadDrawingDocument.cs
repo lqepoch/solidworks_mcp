@@ -147,6 +147,61 @@ internal sealed class FakeCadDrawingDocument(
     }
 
     /// <inheritdoc />
+    public Task<OperationResult<DrawingViewSnapshot>> AddDetailViewAsync(
+        DrawingDetailViewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "add-detail-view";
+        if (request is null
+            || string.IsNullOrWhiteSpace(request.Name)
+            || string.IsNullOrWhiteSpace(request.Label)
+            || string.IsNullOrWhiteSpace(request.ParentViewId.Value)
+            || request.DetailRadius.Millimeters <= 0d
+            || request.ScaleNumerator <= 0
+            || request.ScaleDenominator <= 0)
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingViewSnapshot>(operation, "A detail view needs a parent, label, positive circle radius and positive scale."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<DrawingViewSnapshot>(operation));
+        }
+
+        if (!views.Any(view => view.ViewId == request.ParentViewId))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<DrawingViewSnapshot>(operation, request.ParentViewId.Value));
+        }
+
+        ViewId viewId = request.RequestedViewId ?? new ViewId($"detail-view-{++viewSequence:000}");
+        if (views.Any(view => view.ViewId == viewId))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingViewSnapshot>(operation, $"View identity '{viewId.Value}' already exists."));
+        }
+
+        var snapshot = new DrawingViewSnapshot
+        {
+            ViewId = viewId,
+            Name = request.Name.Trim(),
+            Orientation = $"Detail {request.Label.Trim()}-{request.Label.Trim()}",
+            Position = request.Position,
+            ScaleDenominator = request.ScaleDenominator,
+        };
+        views.Add(snapshot);
+        MarkMutated();
+        return Task.FromResult(
+            FakeCadResults.Success(
+                snapshot,
+                operation,
+                new EvidenceObservation("view.id", viewId.Value),
+                new EvidenceObservation("view.kind", "detail"),
+                new EvidenceObservation("view.parent-id", request.ParentViewId.Value),
+                new EvidenceObservation("view.label", request.Label.Trim()),
+                new EvidenceObservation("view.scale", $"{request.ScaleNumerator}:{request.ScaleDenominator}"),
+                new EvidenceObservation("state.hash", StateHash)));
+    }
+
+    /// <inheritdoc />
     public Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
         DrawingAnnotationRequest request,
         CancellationToken cancellationToken = default)

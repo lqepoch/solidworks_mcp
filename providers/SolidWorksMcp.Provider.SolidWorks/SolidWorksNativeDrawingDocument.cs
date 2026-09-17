@@ -170,6 +170,63 @@ internal sealed class SolidWorksNativeDrawingDocument(
     }
 
     /// <summary>
+    /// Creates one native circular detail view from a declared parent-view region.
+    /// 根据声明式父视图区域创建一个 native 圆形局部放大视图。
+    /// </summary>
+    /// <remarks>
+    /// The implementation follows the installed SOLIDWORKS 2022 typelib signature for
+    /// <c>IDrawingDoc.CreateDetailViewAt4</c>. The parent view is resolved by the facade's exact binding, the circle
+    /// is created and selected on the provider STA, and the returned view outline is verified before the binding is
+    /// committed. 该实现遵循本机 SOLIDWORKS 2022 typelib 中 <c>IDrawingDoc.CreateDetailViewAt4</c> 的签名：先按
+    /// facade 精确 binding 解析父视图，在 Provider STA 创建并选择圆，再验证返回 view outline 后提交 binding。
+    /// </remarks>
+    public async Task<OperationResult<DrawingViewSnapshot>> AddDetailViewAsync(
+        DrawingDetailViewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.Name)
+            || string.IsNullOrWhiteSpace(request.Label)
+            || string.IsNullOrWhiteSpace(request.ParentViewId.Value)
+            || request.DetailRadius.Millimeters <= 0d
+            || !double.IsFinite(request.DetailRadius.Millimeters)
+            || request.ScaleNumerator <= 0
+            || request.ScaleDenominator <= 0)
+        {
+            return SolidWorksProviderResults.Failure<DrawingViewSnapshot>(
+                "drawing.detail-view.create",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "A detail view needs a parent, label, positive circle radius and positive scale.",
+                    ErrorCategories.Validation));
+        }
+
+        OperationResult<NativeDrawingViewResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => AddDetailViewOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<DrawingViewSnapshot>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<DrawingViewSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        nativeViewNames[result.Value.View.ViewId.Value] = result.Value.NativeName;
+        return OperationResults.Success(
+            result.Value.View,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-drawing"));
+    }
+
+    /// <summary>
     /// Creates a native SOLIDWORKS note in the requested drawing view.
     /// 创建真实 SOLIDWORKS 原生 note，并绑定到请求的 drawing view。
     /// </summary>
@@ -399,6 +456,410 @@ internal sealed class SolidWorksNativeDrawingDocument(
             result.Value.Snapshot,
             result.OperationId,
             result.Evidence ?? new OperationEvidence("solidworks-drawing"));
+    }
+
+    private OperationResult<NativeDrawingViewResult> AddDetailViewOnSta(
+        ISldWorks application,
+        DrawingDetailViewRequest request)
+    {
+        const string operation = "drawing.detail-view.create";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native drawing identity is no longer registered.", ErrorCategories.State));
+        }
+
+        if (!nativeViewNames.TryGetValue(request.ParentViewId.Value, out string? parentNativeName)
+            || string.IsNullOrWhiteSpace(parentNativeName))
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.SelectionStale,
+                    "The detail parent ViewId is not bound to a current native drawing view.",
+                    ErrorCategories.State,
+                    remediation: "Re-inspect the drawing and use the current declarative parent ViewId."));
+        }
+
+        OperationResult<ModelDoc2> resolvedDrawing = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolvedDrawing.IsSuccess || resolvedDrawing.Value is null)
+        {
+            return OperationResults.Failure<NativeDrawingViewResult>(
+                resolvedDrawing.OperationId,
+                resolvedDrawing.Error!,
+                resolvedDrawing.Evidence);
+        }
+
+        View? parentView = null;
+        SketchSegment? detailCircle = null;
+        Curve? sourceDetailCurve = null;
+        View? detailView = null;
+        View? detailParentFromDefinition = null;
+        View? detailViewFromDefinition = null;
+        View? detailBaseView = null;
+        DetailCircle? detailDefinition = null;
+        DisplayData? detailDisplayData = null;
+        object? rawDetailView = null;
+        try
+        {
+            var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            parentView = FindNativeView(
+                drawing,
+                current.DocumentId.Value,
+                request.ParentViewId.Value,
+                parentNativeName,
+                out string? resolvedParentName);
+            if (parentView is null || string.IsNullOrWhiteSpace(resolvedParentName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The declared detail parent view could not be resolved in the current drawing.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and use the current declarative parent ViewId."));
+            }
+
+            double[] parentOutline = ReadNumbers(parentView.GetOutline());
+            if (parentOutline.Length < 4
+                || parentOutline[2] <= parentOutline[0]
+                || parentOutline[3] <= parentOutline[1]
+                || request.DetailCenter.X.ToMeters() < parentOutline[0]
+                || request.DetailCenter.X.ToMeters() > parentOutline[2]
+                || request.DetailCenter.Y.ToMeters() < parentOutline[1]
+                || request.DetailCenter.Y.ToMeters() > parentOutline[3])
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The declared detail circle center is outside the resolved parent view outline.",
+                        ErrorCategories.State,
+                        remediation: "Use the parent view's verified paper-space outline to choose an explicit detail region."));
+            }
+
+            // SOLIDWORKS uses two coordinate spaces here: CreateDetailViewAt4 positions the derived view in sheet
+            // coordinates, while CreateCircle creates the source profile in the currently active view's local sketch
+            // coordinates. Passing paper coordinates directly therefore creates a valid, selected circle outside the
+            // visible parent geometry and produces the exact failure mode we must reject: a label-only blank detail.
+            // SOLIDWORKS 在这里使用两个坐标系：CreateDetailViewAt4 的目标位置是图纸坐标，而 CreateCircle 在当前
+            // active view 的局部 sketch 坐标中创建源 profile。若直接传入纸空间坐标，圆虽然合法且被选中，却会落在
+            // parent geometry 之外，最终产生必须拒绝的“只有标签、detail 为空”结果。
+            double[] parentPosition = ReadNumbers(parentView.Position);
+            if (parentPosition.Length < 2
+                || !double.IsFinite(parentPosition[0])
+                || !double.IsFinite(parentPosition[1]))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not expose a finite paper-space position for the detail parent view.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the parent view position before creating a detail view."));
+            }
+
+            double requestedCenterX = request.DetailCenter.X.ToMeters();
+            double requestedCenterY = request.DetailCenter.Y.ToMeters();
+            double deltaX = requestedCenterX - parentPosition[0];
+            double deltaY = requestedCenterY - parentPosition[1];
+            double parentAngle = parentView.Angle;
+            double cosine = Math.Cos(parentAngle);
+            double sine = Math.Sin(parentAngle);
+            double localCenterX = (cosine * deltaX) + (sine * deltaY);
+            double localCenterY = (-sine * deltaX) + (cosine * deltaY);
+
+            if (!drawing.ActivateView(resolvedParentName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "SOLIDWORKS did not activate the exact detail parent view.",
+                        ErrorCategories.State,
+                        remediation: "Preserve the drawing and inspect the parent-view binding."));
+            }
+
+            // Use the six-argument CreateCircle form shown by the official 2022 sample. It creates a true circle
+            // from a center and point-on-circumference. The official sample leaves this newly-created profile selected
+            // in the active drawing view for CreateDetailViewAt4 to consume. 使用官方 2022 sample 的六参数
+            // CreateCircle：由圆心和圆周点创建真实圆；sample 保留新建 profile 的 active-view selection，供
+            // CreateDetailViewAt4 消费。
+            detailCircle = resolvedDrawing.Value.SketchManager.CreateCircle(
+                localCenterX,
+                localCenterY,
+                0d,
+                localCenterX + request.DetailRadius.ToMeters(),
+                localCenterY,
+                0d);
+            if (detailCircle is null)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS did not create the exact detail circle in the active parent view.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and verify that the detail circle lies over parent-view geometry."));
+            }
+
+            // The official sample relies on CreateCircle leaving the segment selected. Because our compiler may have
+            // just created a section view, make that precondition explicit and verify the selection result before the
+            // COM call. 官方 sample 依赖 CreateCircle 自动保持 segment selected；但 compiler 前一步可能刚创建过
+            // section view，因此这里显式恢复并验证 selection 前置条件，再进入 COM call。
+            if (!detailCircle.Select4(false, null))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "SOLIDWORKS did not select the newly created detail circle for native detail creation.",
+                        ErrorCategories.State,
+                        remediation: "Preserve the drawing and inspect the active parent view and detail-circle selection."));
+            }
+
+            sourceDetailCurve = detailCircle.GetCurve() as Curve;
+            double[] sourceCircleParameters = ReadNumbers(sourceDetailCurve?.CircleParams);
+            if (sourceDetailCurve is null
+                || !sourceDetailCurve.IsCircle()
+                || sourceCircleParameters.Length < 7)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not expose a complete native circle curve for the declared detail region.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the detail-circle sketch geometry before retrying."));
+            }
+
+            // The installed 2022 typelib exposes CreateDetailViewAt4 as an object-returning method. Its fourth
+            // argument is swDetViewStyle_e (0 = standard); its eighth is swDetCircleShowType_e (1 = circle).
+            // The two enums are deliberately kept separate: swapping them creates a label-only/empty detail view.
+            // 本机 2022 typelib 将 CreateDetailViewAt4 暴露为 object 返回值；第四参数是 swDetViewStyle_e
+            // （0 = standard），第八参数是 swDetCircleShowType_e（1 = circle）。两个 enum 不能混用；混用会产生
+            // 只有标签而没有实际放大轮廓的 detail view。
+            rawDetailView = drawing.CreateDetailViewAt4(
+                request.Position.X.ToMeters(),
+                request.Position.Y.ToMeters(),
+                0d,
+                (int)swDetViewStyle_e.swDetViewSTANDARD,
+                request.ScaleNumerator,
+                request.ScaleDenominator,
+                request.Label.Trim(),
+                (int)swDetCircleShowType_e.swDetCircleCIRCLE,
+                request.FullOutline,
+                request.JaggedOutline,
+                false,
+                0);
+            detailView = rawDetailView as View;
+            if (detailView is null)
+            {
+                SolidWorksDocumentRouting.Release(rawDetailView);
+                rawDetailView = null;
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS returned no native detail view from CreateDetailViewAt4.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the selected detail circle and parent view."));
+            }
+
+            string nativeName = detailView.GetName2()?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(nativeName) || !drawing.ActivateView(nativeName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS created a detail view but could not activate its exact native view.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the native detail-view binding."));
+            }
+
+            // The official 2022 sample activates the returned detail view and clears the source sketch selection before
+            // reading the detail definition. This finalizes the parent/detail relationship before rebuild/read-back.
+            // 官方 2022 sample 会激活返回的 detail view，并在读取 detail definition 前清除源 sketch selection；这里
+            // 保持相同顺序，确保 parent/detail 关系在 rebuild/read-back 前已经 finalize。
+            resolvedDrawing.Value.ClearSelection2(true);
+
+            if (detailView.Type != (int)swDrawingViewTypes_e.swDrawingDetailView)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS returned an object that is not typed as a native detail view.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the CreateDetailViewAt4 return value."));
+            }
+
+            // A successful COM return is not enough: verify that the detail view remains visible and carries the
+            // native DetailCircle definition after creation. 仅有 COM 非 null 返回值不是成功证据；还要确认 detail
+            // view 可见，并且创建后仍携带 native DetailCircle definition。
+            if (!detailView.GetVisible())
+            {
+                detailView.SetVisible(true, false);
+            }
+
+            detailDefinition = detailView.GetDetail() as DetailCircle;
+            drawing.ForceRebuild();
+            // SOLIDWORKS documents that the projected model geometry is exposed through polyline APIs, not through
+            // IView.GetLineCount (that method reports only sketch lines added directly to the drawing view). Force a
+            // complete display-data generation before reading both APIs. 官方文档明确：投影实体几何要通过 polyline
+            // API 读取，而 IView.GetLineCount 只统计直接画在 drawing view 上的 sketch line；这里先强制生成完整
+            // display data，再同时读取两类 API，避免把空的 sketch 统计误当成实体几何证据。
+            resolvedDrawing.Value.ViewZoomtofit2();
+            // Use an explicit HLR display mode on the derived view so PDF export cannot inherit a shaded/default mode
+            // that suppresses projected-edge output. 使用明确的 HLR display mode，避免 derived view 继承 shaded/default
+            // 模式后在 PDF export 中省略投影边；this is a native display setting, not synthetic drawing geometry。
+            bool displayModeApplied = detailView.SetDisplayMode4(
+                false,
+                (int)swDisplayMode_e.swHIDDEN,
+                false,
+                false,
+                true);
+            detailView.UpdateViewDisplayGeometry();
+            int detailLineCount = detailView.GetLineCount();
+            int detailArcCount = detailView.GetArcCount();
+            short crossHatchFilter = (short)swCrossHatchFilter_e.swCrossHatchExclude;
+            int detailPolylineCount = detailView.GetPolyLineCount5(
+                crossHatchFilter,
+                out int detailPolylinePointCount);
+            int detailCurveCount = detailView.GetPolyLinesAndCurvesCount(
+                crossHatchFilter,
+                out int detailCurvePointCount);
+            int detailDisplayMode = detailView.GetDisplayMode2();
+            detailDisplayData = detailView.GetDisplayData() as DisplayData;
+            int detailDisplayLineCount = detailDisplayData?.GetLineCount() ?? 0;
+            int detailDisplayArcCount = detailDisplayData?.GetArcCount() ?? 0;
+            detailParentFromDefinition = detailDefinition?.GetView();
+            detailViewFromDefinition = detailDefinition?.GetDetailView();
+            detailBaseView = detailView.GetBaseView() as View;
+            string detailParentName = detailParentFromDefinition?.GetName2()?.Trim() ?? string.Empty;
+            string detailDefinitionViewName = detailViewFromDefinition?.GetName2()?.Trim() ?? string.Empty;
+            string detailBaseName = detailBaseView?.GetName2()?.Trim() ?? string.Empty;
+            if (!detailView.GetVisible()
+                || detailDefinition is null
+                || detailDefinition.GetProfileItemsCount() < 1
+                || !detailParentName.Equals(resolvedParentName, StringComparison.Ordinal)
+                || !detailDefinitionViewName.Equals(nativeName, StringComparison.Ordinal)
+                || (!displayModeApplied && detailDisplayMode != (int)swDisplayMode_e.swHIDDEN)
+                || (detailPolylineCount <= 0 && detailCurveCount <= 0))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS returned a detail view without a visible native detail-circle parent/detail association.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the native parent/detail association and profile."));
+            }
+
+            double[] position = ReadNumbers(detailView.Position);
+            double[] outline = ReadNumbers(detailView.GetOutline());
+            if (outline.Length < 4 || outline[2] <= outline[0] || outline[3] <= outline[1])
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS created a detail view without a positive paper-space outline.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the detail view scale and sheet layout."));
+            }
+
+            // For a native detail view, IView.Position is not a stable paper-space center on SOLIDWORKS 2022; the
+            // read-back can be relative to the detail object and may be negative even when the view is on-sheet.
+            // GetOutline is the verified paper-space rectangle, so the abstraction snapshot uses its midpoint while
+            // retaining the raw Position values as evidence. 对 native detail view 而言，2022 的 IView.Position
+            // 不是稳定的纸空间中心；即使视图在图纸内，读回也可能是相对 detail object 的负值。GetOutline 才是
+            // 已核对的纸空间矩形，因此 snapshot 使用其中心，同时保留原始 Position 作为 evidence。
+            double outlineCenterX = (outline[0] + outline[2]) / 2d;
+            double outlineCenterY = (outline[1] + outline[3]) / 2d;
+            var snapshot = new DrawingViewSnapshot
+            {
+                ViewId = request.RequestedViewId ?? new ViewId($"{current.DocumentId.Value}:detail-view:{Guid.NewGuid():N}"),
+                Name = request.Name.Trim(),
+                Orientation = $"Detail {request.Label.Trim()}-{request.Label.Trim()}",
+                Position = new Coordinate2D(
+                    Length.FromMeters(outlineCenterX),
+                    Length.FromMeters(outlineCenterY)),
+                ScaleDenominator = request.ScaleDenominator,
+            };
+            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
+            var updated = current with
+            {
+                StateHash = stateHash,
+                IsDirty = resolvedDrawing.Value.GetSaveFlag(),
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeDrawingViewResult(snapshot, updated, current, nativeName),
+                new EvidenceObservation("view.id", snapshot.ViewId.Value),
+                new EvidenceObservation("view.kind", "detail"),
+                new EvidenceObservation("view.parent-id", request.ParentViewId.Value),
+                new EvidenceObservation("view.parent-native-name", resolvedParentName),
+                new EvidenceObservation("view.parent-outline.meters", string.Join(',', parentOutline.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("view.parent-position.meters", string.Join(',', parentPosition.Take(2).Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("view.parent-angle.radians", parentAngle.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-requested-center.meters", $"{requestedCenterX.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)},{requestedCenterY.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)}"),
+                new EvidenceObservation("view.detail-local-circle-center.meters", $"{localCenterX.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)},{localCenterY.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)}"),
+                new EvidenceObservation("view.detail-source-circle-params.meters", string.Join(',', sourceCircleParameters.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("view.label", request.Label.Trim()),
+                new EvidenceObservation("view.native-name", nativeName),
+                new EvidenceObservation("view.scale", $"{request.ScaleNumerator}:{request.ScaleDenominator}"),
+                new EvidenceObservation("view.detail-line-count", detailLineCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-arc-count", detailArcCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-display-line-count", detailDisplayLineCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-display-arc-count", detailDisplayArcCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-polyline-count", detailPolylineCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-polyline-point-count", detailPolylinePointCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-curve-count", detailCurveCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-curve-point-count", detailCurvePointCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-display-mode", detailDisplayMode.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.detail-display-mode-applied", displayModeApplied.ToString()),
+                new EvidenceObservation("view.detail-parent-native-name", detailParentName),
+                new EvidenceObservation("view.detail-definition-view-native-name", detailDefinitionViewName),
+                new EvidenceObservation("view.detail-base-view-native-name", detailBaseName),
+                new EvidenceObservation("view.detail-use-parent-display-mode", detailView.GetUseParentDisplayMode().ToString()),
+                new EvidenceObservation("view.detail-profile-count", detailDefinition.GetProfileItemsCount().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("view.position.source", "IView.GetOutline.midpoint"),
+                new EvidenceObservation("view.position.actual-meters", string.Join(',', position.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("view.outline.meters", string.Join(',', outline.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("state.hash", stateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<NativeDrawingViewResult>(
+                operation,
+                exception,
+                "SOLIDWORKS native detail-view creation failed before a complete view proof was returned.");
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(detailDisplayData);
+            SolidWorksDocumentRouting.Release(detailBaseView);
+            SolidWorksDocumentRouting.Release(detailViewFromDefinition);
+            SolidWorksDocumentRouting.Release(detailParentFromDefinition);
+            SolidWorksDocumentRouting.Release(detailDefinition);
+            SolidWorksDocumentRouting.Release(sourceDetailCurve);
+            SolidWorksDocumentRouting.Release(detailCircle);
+            SolidWorksDocumentRouting.Release(detailView);
+            SolidWorksDocumentRouting.Release(parentView);
+            if (detailView is null)
+            {
+                SolidWorksDocumentRouting.Release(rawDetailView);
+            }
+
+            SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
+        }
     }
 
     private OperationResult<NativeDrawingViewResult> AddSectionViewOnSta(

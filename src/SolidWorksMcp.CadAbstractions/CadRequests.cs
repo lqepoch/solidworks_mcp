@@ -327,6 +327,52 @@ public sealed record DrawingSectionViewRequest
 }
 
 /// <summary>
+/// Request to create one native circular detail view from a parent drawing-view region.
+/// 根据父 drawing view 局部区域创建一个 native 圆形 detail view 的请求。
+/// </summary>
+/// <remarks>
+/// All coordinates are paper-space millimetres. The parent region is intentionally explicit: the compiler must prove
+/// which small feature needs enlargement instead of asking SOLIDWORKS to detail an arbitrary active selection. 所有
+/// 坐标均为纸空间毫米；父视图区域必须明确，以便 compiler 证明具体哪个小特征需要放大，而不是依赖任意 active
+/// selection。
+/// </remarks>
+public sealed record DrawingDetailViewRequest
+{
+    /// <summary>Optional stable identity for the generated detail view.</summary>
+    public ViewId? RequestedViewId { get; init; }
+
+    /// <summary>Parent view whose exact native binding owns the detail circle.</summary>
+    public required ViewId ParentViewId { get; init; }
+
+    /// <summary>Semantic name such as Detail A.</summary>
+    public string Name { get; init; } = "Detail A";
+
+    /// <summary>Native detail label, for example A.</summary>
+    public string Label { get; init; } = "A";
+
+    /// <summary>Paper-space center of the source detail circle in millimetres.</summary>
+    public Coordinate2D DetailCenter { get; init; }
+
+    /// <summary>Positive paper-space radius of the source detail circle in millimetres.</summary>
+    public Length DetailRadius { get; init; }
+
+    /// <summary>Paper-space center of the enlarged detail view in millimetres.</summary>
+    public Coordinate2D Position { get; init; }
+
+    /// <summary>Detail scale numerator relative to model, for example 2 in 2:1.</summary>
+    public int ScaleNumerator { get; init; } = 2;
+
+    /// <summary>Detail scale denominator relative to model, for example 1 in 2:1.</summary>
+    public int ScaleDenominator { get; init; } = 1;
+
+    /// <summary>Whether SOLIDWORKS draws the complete circle outline.</summary>
+    public bool FullOutline { get; init; }
+
+    /// <summary>Whether SOLIDWORKS uses a jagged detail-circle outline.</summary>
+    public bool JaggedOutline { get; init; }
+}
+
+/// <summary>
 /// Request to apply one verified annotation-position repair.
 /// 应用一个经过验证的标注位置修复请求。
 /// </summary>

@@ -198,7 +198,7 @@ public sealed class CadMcpTools(
     /// 不按每个 COM primitive 暴露 tool；确定性序列由工程服务编排，SOLIDWORKS 调用和 read-back invariant 仍归 Provider。
     /// </remarks>
     [McpServerTool(Name = "cad.build-part-drawing")]
-    [Description("Build one part and its engineering drawing under the versioned GB RulePack. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group and emits one deterministic compact pattern callout. Side effects: creates a real part, RulePack-selected projection views, native model-dimension insertion, a semantic pattern note, and a PDF export.")]
+    [Description("Build one part and its engineering drawing under the versioned GB RulePack. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group and emits one deterministic compact pattern callout. Optional detailViewJson declares an exact parent view, source circle, paper-space destination and scale for one native circular detail view. Side effects: creates a real part, RulePack-selected projection views, native model-dimension insertion, optional native detail view, a semantic pattern note, and a PDF export.")]
     public async Task<CallToolResult> BuildPartDrawingAsync(
         [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
         [Description("Stable part document identity.")] string documentId,
@@ -211,6 +211,7 @@ public sealed class CadMcpTools(
         [Description("JSON closed line/arc profile in millimetres; same wire format as cad.create-part.")] string initialSketchProfileJson,
         [Description("Optional JSON semantic through-hole group: {name, diameterMillimeters, centers:[{xMillimeters,yMillimeters}]}.")] string? throughHolePatternJson = null,
         [Description("Drawing scale denominator for the deterministic seed views.")] int scaleDenominator = 1,
+        [Description("Optional JSON explicit detail view: {parentViewId,name,label,detailCenterXMillimeters,detailCenterYMillimeters,detailRadiusMillimeters,positionXMillimeters,positionYMillimeters,scaleNumerator,scaleDenominator,fullOutline,jaggedOutline}. Coordinates are paper-space millimetres; no screenshot or arbitrary selection is accepted.")] string? detailViewJson = null,
         [Description("Optional application operation correlation key.")] string? operationId = null,
         CancellationToken cancellationToken = default)
     {
@@ -227,9 +228,11 @@ public sealed class CadMcpTools(
                 initialSketchProfileJson,
                 throughHolePatternJson,
                 scaleDenominator,
+                detailViewJson,
                 out OperationError? validationError,
                 out SketchProfileRequest? sketchProfile,
-                out ThroughHolePatternRequest? holePattern))
+                out ThroughHolePatternRequest? holePattern,
+                out DrawingDetailViewRequest? detailView))
         {
             return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, validationError!));
         }
@@ -290,6 +293,7 @@ public sealed class CadMcpTools(
                 ScaleDenominator = scaleDenominator,
                 RulePack = rulePackResolution.Pack,
                 ThroughHolePattern = holePattern,
+                DetailView = detailView,
             },
             cancellationToken).ConfigureAwait(false);
         OperationResult<PartDrawingBuildResult> result = built.IsSuccess
@@ -959,13 +963,16 @@ public sealed class CadMcpTools(
         string? initialSketchProfileJson,
         string? throughHolePatternJson,
         int scaleDenominator,
+        string? detailViewJson,
         out OperationError? error,
         out SketchProfileRequest? sketchProfile,
-        out ThroughHolePatternRequest? holePattern)
+        out ThroughHolePatternRequest? holePattern,
+        out DrawingDetailViewRequest? detailView)
     {
         error = null;
         sketchProfile = null;
         holePattern = null;
+        detailView = null;
         if (!string.Equals(schemaVersion, ProtocolSchema.CurrentVersion, StringComparison.Ordinal))
         {
             error = InvalidInput("schemaVersion is unsupported");
@@ -996,6 +1003,10 @@ public sealed class CadMcpTools(
         else if (!ThroughHolePatternMcpCodec.TryParse(throughHolePatternJson, out holePattern, out string? holePatternError))
         {
             error = InvalidInput(holePatternError ?? "throughHolePatternJson-invalid");
+        }
+        else if (!DetailViewMcpCodec.TryParse(detailViewJson, out detailView, out string? detailViewError))
+        {
+            error = InvalidInput(detailViewError ?? "detailViewJson-invalid");
         }
 
         return error is null && sketchProfile is not null;

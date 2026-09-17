@@ -12,6 +12,44 @@ namespace SolidWorksMcp.FakeCadTests;
 public sealed class ManufacturingAnnotationMaterializerTests
 {
     [Fact]
+    public async Task DetailViewUsesExplicitParentRegionAndScale()
+    {
+        await using var provider = new FakeCadProvider();
+        await using ICadSession session = (await provider.StartSessionAsync(new CadSessionOptions())).RequireSuccess();
+        ICadDrawingDocument drawing = (await session.CreateDrawingAsync(new CreateDrawingRequest
+        {
+            RequestedDocumentId = new DocumentId("detail-drawing-001"),
+        })).RequireSuccess();
+        DrawingViewSnapshot parent = (await drawing.AddViewAsync(new DrawingViewRequest
+        {
+            RequestedViewId = new ViewId("Front"),
+            Name = "Front",
+            Orientation = "Front",
+            Position = new Coordinate2D(Length.FromMillimeters(90d), Length.FromMillimeters(125d)),
+        })).RequireSuccess();
+
+        OperationResult<DrawingViewSnapshot> detail = await drawing.AddDetailViewAsync(new DrawingDetailViewRequest
+        {
+            RequestedViewId = new ViewId("Detail-A"),
+            ParentViewId = parent.ViewId,
+            Name = "Detail A",
+            Label = "A",
+            DetailCenter = new Coordinate2D(Length.FromMillimeters(90d), Length.FromMillimeters(125d)),
+            DetailRadius = Length.FromMillimeters(8d),
+            Position = new Coordinate2D(Length.FromMillimeters(210d), Length.FromMillimeters(125d)),
+            ScaleNumerator = 2,
+            ScaleDenominator = 1,
+        });
+
+        Assert.True(detail.IsSuccess, detail.Error?.Message);
+        Assert.Equal("Detail A", detail.Value!.Name);
+        Assert.Equal("Detail A-A", detail.Value.Orientation);
+        Assert.Equal(1, detail.Value.ScaleDenominator);
+        CadInspectionSnapshot inspection = (await session.Inspection.InspectAsync(drawing.DocumentId)).RequireSuccess();
+        Assert.Equal(2, inspection.Views.Length);
+    }
+
+    [Fact]
     public async Task ApprovedPlannedModelDimensionBecomesReleaseEvidence()
     {
         await using var provider = new FakeCadProvider();

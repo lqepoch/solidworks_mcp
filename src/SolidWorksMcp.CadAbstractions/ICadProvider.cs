@@ -181,6 +181,14 @@ public interface ICadDrawingDocument : ICadDocument
         DrawingSectionViewRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Adds a native circular detail view from an explicit parent-view region.
+    /// 根据明确的父视图局部区域创建 native 圆形局部放大视图。
+    /// </summary>
+    Task<OperationResult<DrawingViewSnapshot>> AddDetailViewAsync(
+        DrawingDetailViewRequest request,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Adds an annotation associated with an existing drawing view.</summary>
     Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
         DrawingAnnotationRequest request,
