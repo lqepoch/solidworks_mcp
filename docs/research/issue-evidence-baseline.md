@@ -15,7 +15,8 @@ close the owned process, this section is the current state.
 本节记录窄版 native export 和进程生命周期切片的最新覆盖证据。下方旧条目保留历史时间线；其中关于 native export
 仍 unsupported、或 B03 不关闭 owned process 的描述，均以本节当前状态为准。
 
-- Commit under test: working tree change after `00092cf` (the curved-profile slice is pending its verified commit).
+- Curved-profile implementation commit: `8ccd7d2` (`feat: support native curved sketch profiles`), verified by the
+  Hosted-safe and fresh-process Live evidence recorded below.
 - The current reference-driven iteration sampled exactly two local, single-part drawing candidates through the private
   fixture skill. Only generic classes were retained: curved/rounded plate family, orthographic/isometric views, hole
   features, thickness, tolerance/title-block consideration. No private PDF content, values, names or rendered images
