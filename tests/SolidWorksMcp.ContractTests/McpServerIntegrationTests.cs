@@ -156,6 +156,7 @@ public sealed class McpServerIntegrationTests
         Assert.NotNull(result.StructuredContent);
         Assert.Contains("part.hole-pattern", result.StructuredContent!.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.pattern-callout", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.pattern-callout.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("2X", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("THRU", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("PITCH 16", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);

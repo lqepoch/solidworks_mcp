@@ -226,6 +226,24 @@ public static class PartDrawingBuildService
                 return Failure(drawingInspection);
             }
 
+            if (patternCallout is not null
+                && !drawingInspection.Value.Annotations.Any(annotation =>
+                    annotation.AnnotationId == patternCallout.AnnotationId
+                    && annotation.Kind.Equals("pattern-callout", StringComparison.Ordinal)
+                    && annotation.Text.Equals(patternCallout.Text, StringComparison.Ordinal)))
+            {
+                // Reopen evidence must prove the same persisted semantic note, not merely the in-memory request result.
+                // Reopen evidence 必须证明同一条已持久化语义 note，而不是只证明内存中的 request result。
+                return OperationResults.Failure<PartDrawingBuildResult>(
+                    drawingInspection.OperationId,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The persisted drawing did not contain the verified repeated-feature callout identity and text.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing artifact and inspect native annotation identity before retrying."),
+                    drawingInspection.Evidence);
+            }
+
             OperationResult<ExportReceipt> pdf = await session.Export.ExportAsync(
                 drawing.DocumentId,
                 new CadExportRequest
@@ -280,6 +298,7 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.pattern-callout", patternCallout?.Text ?? "none"),
                         new EvidenceObservation("drawing.pattern-callout.distribution", patternCalloutPlan?.Distribution ?? "none"),
                         new EvidenceObservation("drawing.pattern-callout.coverage-count", patternCalloutPlan?.CoverageKeys.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
+                        new EvidenceObservation("drawing.pattern-callout.reopened", patternCallout is null ? "not-requested" : "verified"),
                         new EvidenceObservation("export.format", pdf.Value.Format),
                     ],
                     [part.Path, drawing.Path, pdf.Value.TargetPath]));

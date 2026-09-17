@@ -73,6 +73,7 @@ public sealed class McpBuildPartDrawingLiveTests
             Assert.False(result.IsError, string.Join(Environment.NewLine, result.Content));
             Assert.Contains("part.hole-pattern", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("pattern-callout", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("drawing.pattern-callout.reopened", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("2X", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("THRU", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("PITCH 20", result.StructuredContent.ToString(), StringComparison.Ordinal);
