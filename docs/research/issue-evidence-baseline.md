@@ -1088,5 +1088,16 @@ Evidence:
     dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
     powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                              # exit 0; Unit 93 + Contract 14 + FakeCad 11 passed
 
-This is a C04 foundation. Native `IDimensionTolerance` mapping, enterprise RulePack resolution, multi-part assembly
-stack-ups and a public MCP explain endpoint remain follow-up work and are not represented as passed here.
+The pure public MCP `tolerance.explain` endpoint is now available. It accepts only bounded redacted JSON, performs
+schema/provenance/finite-value validation before any Provider session is requested, and returns the deterministic
+analysis result plus the ordered derivation evidence. The canonical contract case proves `100 - 1 - 1 = 98` and the
+malformed-input case proves `StartSessionCount=0`; the endpoint has no SOLIDWORKS or COM dependency.
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                              # exit 0; Unit 93 + Contract 16 + FakeCad 11 passed
+    git diff --check                                                                                  # exit 0
+
+This remains a C04 foundation. Native `IDimensionTolerance` mapping, enterprise RulePack resolution and multi-part
+assembly stack-ups remain follow-up work and are not represented as passed here. The current public endpoint is a pure
+engineering-intelligence explanation boundary; it does not infer tolerances from drawings or release a drawing by
+itself.
