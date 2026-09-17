@@ -28,7 +28,7 @@ public sealed class McpServerIntegrationTests
 
         IList<McpClientTool> tools = await host.Client.ListToolsAsync();
 
-        Assert.Equal(8, tools.Count);
+        Assert.Equal(9, tools.Count);
         McpClientTool createTool = Assert.Single(tools, tool => tool.Name == "cad.create-part");
         Assert.Contains("Preconditions", createTool.Description, StringComparison.Ordinal);
         Assert.Contains("Side effects", createTool.Description, StringComparison.Ordinal);
@@ -37,6 +37,58 @@ public sealed class McpServerIntegrationTests
         CallToolResult capabilityResult = await host.Client.CallToolAsync("cad.capabilities");
         Assert.False(capabilityResult.IsError);
         Assert.Contains("CAD operation completed", capabilityResult.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
+    }
+
+    /// <summary>tolerance.explain returns the 100-to-98 derivation without starting a CAD session.</summary>
+    /// <summary>tolerance.explain 在不启动 CAD Session 的情况下返回 100→98 推导链。</summary>
+    [Fact]
+    public async Task ToleranceExplainReturnsCanonicalWorstCaseEvidence()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "tolerance.explain",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["toleranceRequestJson"] = "{"
+                    + "\"dimensionId\":\"mounting-clearance\",\"designNominalMillimeters\":100,"
+                    + "\"functionalMinimumMillimeters\":0,\"functionalMaximumMillimeters\":98,"
+                    + "\"drawingNominalMillimeters\":98,\"drawingLowerDeviationMillimeters\":0,\"drawingUpperDeviationMillimeters\":0,"
+                    + "\"sourceKind\":\"assembly_stackup\",\"provenanceMethod\":\"contract-test\",\"observedAtUtc\":\"2026-09-18T00:00:00Z\",\"approvalState\":\"Approved\", " +
+                    "\"stackupId\":\"install-space\",\"constraintKind\":\"MaximumAllowedPartSize\",\"method\":\"WorstCase\",\"terms\":["
+                    + "{\"termId\":\"installation-space\",\"nominalMillimeters\":100,\"lowerDeviationMillimeters\":0,\"upperDeviationMillimeters\":0,\"direction\":\"Add\",\"sourceKind\":\"assembly_stackup\",\"provenanceMethod\":\"contract-test\",\"observedAtUtc\":\"2026-09-18T00:00:00Z\"},"
+                    + "{\"termId\":\"assembly-error\",\"nominalMillimeters\":1,\"lowerDeviationMillimeters\":0,\"upperDeviationMillimeters\":0,\"direction\":\"Subtract\",\"sourceKind\":\"assembly_stackup\",\"provenanceMethod\":\"contract-test\",\"observedAtUtc\":\"2026-09-18T00:00:00Z\"},"
+                    + "{\"termId\":\"required-clearance\",\"nominalMillimeters\":1,\"lowerDeviationMillimeters\":0,\"upperDeviationMillimeters\":0,\"direction\":\"Subtract\",\"sourceKind\":\"assembly_stackup\",\"provenanceMethod\":\"contract-test\",\"observedAtUtc\":\"2026-09-18T00:00:00Z\"}]}"
+            });
+
+        Assert.False(result.IsError);
+        Assert.NotNull(result.StructuredContent);
+        string structured = result.StructuredContent!.Value.ToString();
+        Assert.Contains("\"status\":\"Pass\"", structured, StringComparison.Ordinal);
+        Assert.Contains("\"millimeters\":98", structured, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
+    }
+
+    /// <summary>Malformed tolerance JSON is rejected before any provider session is requested.</summary>
+    [Fact]
+    public async Task ToleranceExplainMalformedInputFailsBeforeBusinessExecution()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "tolerance.explain",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["toleranceRequestJson"] = "{\"dimensionId\":\"missing-terms\"}",
+            });
+
+        Assert.True(result.IsError);
+        Assert.Contains(ErrorCodes.InvalidRequest, result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
         Assert.Equal(0, countingProvider.StartSessionCount);
     }
 

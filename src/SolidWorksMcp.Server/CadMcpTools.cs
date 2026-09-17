@@ -6,6 +6,7 @@ using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Core;
 using SolidWorksMcp.EngineeringModel;
 using SolidWorksMcp.Protocol;
+using SolidWorksMcp.Tolerancing;
 
 namespace SolidWorksMcp.Server;
 
@@ -72,6 +73,51 @@ public sealed class CadMcpTools(
             correlation.Resolve(null),
             new OperationEvidence("server", [new EvidenceObservation("tool-count", catalog.Tools.Length.ToString(System.Globalization.CultureInfo.InvariantCulture))]));
         return McpToolResultWriter.Write(result);
+    }
+
+    /// <summary>
+    /// Explains one tolerance stack-up without opening SOLIDWORKS or reading a source drawing.
+    /// </summary>
+    /// <remarks>
+    /// This is deliberately a pure engineering-intelligence operation. It exposes the same deterministic engine used
+    /// by release planning, while keeping AI proposals and private drawing observations review-gated.
+    /// 这是纯工程智能操作；它复用 release planner 使用的确定性引擎，并继续对 AI proposal 和秘密图纸观察执行 review gate。
+    /// </remarks>
+    [McpServerTool(Name = "tolerance.explain")]
+    [Description("Explain a bounded worst-case tolerance stack-up. Preconditions: schemaVersion=1.0 and redacted tolerance JSON. Side effects: none; no CAD session is started.")]
+    public CallToolResult ExplainTolerance(
+        [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
+        [Description("Bounded JSON containing functional limits, drawing tolerance, provenance and stack terms; never include PDF text or paths.")] string toleranceRequestJson,
+        [Description("Optional application operation correlation key.")] string? operationId = null)
+    {
+        string correlationId = correlation.Resolve(operationId);
+        if (!string.Equals(schemaVersion, ProtocolSchema.CurrentVersion, StringComparison.Ordinal))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<ToleranceAnalysisResult>(
+                    correlationId,
+                    InvalidInput($"schemaVersion must be '{ProtocolSchema.CurrentVersion}'")));
+        }
+
+        if (!ToleranceExplainJsonCodec.TryParse(toleranceRequestJson, out ToleranceExplainRequest? request, out string? parseError))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<ToleranceAnalysisResult>(
+                    correlationId,
+                    InvalidInput(parseError ?? "toleranceRequestJson-invalid")));
+        }
+
+        ToleranceAnalysisResult analysis = FunctionalToleranceEngine.Analyze(request!.Requirement, request.Stackup);
+        OperationEvidence evidence = new(
+            "tolerance-engine",
+            [
+                new EvidenceObservation("analysis.status", analysis.Status.ToString()),
+                new EvidenceObservation("analysis.method", request.Stackup.Method.ToString()),
+                new EvidenceObservation("analysis.stackup-id", request.Stackup.StackupId),
+                new EvidenceObservation("analysis.dimension-id", analysis.DimensionId),
+                new EvidenceObservation("analysis.can-release", analysis.CanRelease.ToString()),
+            ]);
+        return McpToolResultWriter.Write(OperationResults.Success(analysis, correlationId, evidence));
     }
 
     /// <summary>Creates one part after schema/version and identity validation.</summary>
