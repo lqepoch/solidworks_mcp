@@ -21,7 +21,7 @@ internal sealed record SolidWorksSessionInfo(
     bool Visible,
     string AttachmentGeneration);
 
-/// <summary>Owns the one COM interface returned by ROT until the STA host detaches it.</summary>
+/// <summary>Owns one COM interface returned by ROT until the STA host detaches it.</summary>
 /// <remarks>
 /// This type is internal on purpose.  No COM interface or RCW is allowed to cross the CadAbstractions boundary or
 /// be stored by MCP callers.  该类型故意保持 internal；任何 COM 接口和 RCW 都不得穿过 CadAbstractions 边界，
@@ -33,12 +33,19 @@ internal sealed class SolidWorksSessionAttachment(ISldWorks application, SolidWo
 
     public SolidWorksSessionInfo Info { get; } = info;
 
-    /// <summary>Releases this RCW on the same STA that owns it.</summary>
+    /// <summary>Releases one provider-owned RCW reference on the same STA that owns it.</summary>
     public void ReleaseOnSta()
     {
         if (Marshal.IsComObject(Application))
         {
-            Marshal.FinalReleaseComObject(Application);
+            // The ROT can return the process-wide cached ISldWorks RCW again on a later attachment.  FinalRelease
+            // would invalidate that shared RCW for the whole test host and make the next attach fail with
+            // InvalidComObjectException.  Release only this provider-owned reference; all COM calls still remain
+            // on this STA, and child RCWs are released by their individual operation scopes.
+            // ROT 可能在后续 attach 再次返回进程级缓存的 ISldWorks RCW。FinalRelease 会让整个测试宿主中的共享
+            // RCW 失效，导致下一次 attach 抛 InvalidComObjectException。这里只释放本 Provider 持有的一次引用；
+            // 所有 COM 调用仍固定在本 STA，子 RCW 由各自 operation scope 释放。
+            Marshal.ReleaseComObject(Application);
         }
     }
 }

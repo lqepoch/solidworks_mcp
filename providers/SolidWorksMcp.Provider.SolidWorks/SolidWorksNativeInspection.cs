@@ -249,7 +249,7 @@ internal static class SolidWorksNativeInspectionReader
                 string text = specific switch
                 {
                     Note note => note.GetText()?.Trim() ?? string.Empty,
-                    DisplayDimension dimension => dimension.GetText(0)?.Trim() ?? string.Empty,
+                    DisplayDimension dimension => SolidWorksNativeDimensionText.Read(dimension),
                     _ => string.Empty,
                 };
                 double[] position = ReadNumbers(annotation.GetPosition());

@@ -187,6 +187,87 @@ internal static class SolidWorksPartFactory
 
                         SolidWorksDocumentRouting.Release(segment);
                     }
+
+                    // Create one native, associative driving dimension while the sketch is still open.  The drawing
+                    // compiler later imports only dimensions that SOLIDWORKS itself returns from
+                    // InsertModelAnnotations3; keeping this dimension native is therefore essential evidence that a
+                    // drawing dimension is linked to model geometry rather than synthesized from request text.
+                    // 在草图仍处于打开状态时创建一个原生、具有关联性的驱动尺寸。后续工程图编译器只导入
+                    // SOLIDWORKS 通过 InsertModelAnnotations3 返回的尺寸；因此必须保留原生尺寸，才能证明二维
+                    // 尺寸确实关联到模型几何，而不是由请求文本伪造出来。
+                    Coordinate2D firstStart = polygonProfile.Vertices[0];
+                    Coordinate2D firstEnd = polygonProfile.Vertices[1];
+                    double segmentMidpointX = (firstStart.X.ToMeters() + firstEnd.X.ToMeters()) / 2d;
+                    double segmentMidpointY = (firstStart.Y.ToMeters() + firstEnd.Y.ToMeters()) / 2d;
+                    bool segmentSelected = model.Extension.SelectByID2(
+                        string.Empty,
+                        "SKETCHSEGMENT",
+                        segmentMidpointX,
+                        segmentMidpointY,
+                        0d,
+                        false,
+                        0,
+                        null,
+                        0);
+                    if (!segmentSelected)
+                    {
+                        return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                            "part.create",
+                            new OperationError(
+                                ErrorCodes.ProviderFailure,
+                                "SOLIDWORKS could not select the first native polygon edge for its driving dimension.",
+                                ErrorCategories.Provider,
+                                remediation: "Preserve the artifact and inspect the sketch segment location and unit conversion."));
+                    }
+
+                    // A single selected line unambiguously defines a linear length, so the verified API path is
+                    // ModelDoc2.AddDimension2.  AddDimension is reserved for selections that need explicit extension
+                    // direction (for example an angular dimension); using that overload here can leave SOLIDWORKS
+                    // waiting for additional selection context in an interactive sketch.
+                    // 单条直线已足以唯一确定线性长度，因此这里使用已核对的 ModelDoc2.AddDimension2。AddDimension
+                    // 适合需要明确延长线方向的选择（例如角度尺寸）；在交互草图中错误使用该重载可能让
+                    // SOLIDWORKS 等待更多选择上下文。
+                    // SOLIDWORKS 2022 can open a modal "Enter dimension value" prompt when this preference is on.
+                    // A modal prompt blocks the same STA that owns the COM call, so cancellation cannot recover it.
+                    // Temporarily disabling the documented preference is a safety preflight, not a blind dialog key.
+                    // SOLIDWORKS 2022 如果该偏好为 true，会弹出“输入尺寸值”模态框；模态框会阻塞拥有 COM 的
+                    // 同一个 STA，普通 cancellation 无法恢复。这里临时关闭官方偏好，是安全 preflight，不是盲目
+                    // 发送 Enter/Escape/OK。
+                    const int inputDimensionValuePreference = (int)swUserPreferenceToggle_e.swInputDimValOnCreate;
+                    bool previousInputDimensionValuePreference = application.GetUserPreferenceToggle(inputDimensionValuePreference);
+                    application.SetUserPreferenceToggle(inputDimensionValuePreference, false);
+                    try
+                    {
+                        // IAddDimension2 is the strongly typed installed-typelib path.  The object remains native and
+                        // associative; only its temporary RCW is released after the document owns the dimension.
+                        // IAddDimension2 是 installed typelib 中已核对的强类型路径。尺寸仍由 SOLIDWORKS 原生维护
+                        // 并关联到草图；文档接管尺寸后这里只释放临时 RCW。
+                        DisplayDimension? nativeProfileDimension = model.IAddDimension2(
+                            segmentMidpointX,
+                            segmentMidpointY - 0.01d,
+                            0d);
+                        if (nativeProfileDimension is null)
+                        {
+                            return SolidWorksProviderResults.Failure<SolidWorksCreatedPart>(
+                                "part.create",
+                                new OperationError(
+                                    ErrorCodes.InvariantViolation,
+                                    "SOLIDWORKS returned no native driving dimension for the polygon profile.",
+                                    ErrorCategories.Invariant,
+                                    remediation: "Preserve the artifact and inspect the sketch dimension API result before drawing generation."));
+                        }
+
+                        SolidWorksDocumentRouting.Release(nativeProfileDimension);
+                    }
+                    finally
+                    {
+                        // Always restore the user's preference before leaving the STA.  A failed restore is allowed to
+                        // surface as a provider failure instead of silently changing interactive SOLIDWORKS state.
+                        // 离开 STA 前必须恢复用户原值；恢复失败要作为 Provider failure 暴露，不能静默污染用户环境。
+                        application.SetUserPreferenceToggle(inputDimensionValuePreference, previousInputDimensionValuePreference);
+                    }
+
+                    model.ClearSelection2(true);
                 }
                 finally
                 {

@@ -111,33 +111,38 @@ internal sealed class SolidWorksNativeDrawingDocument(
     /// 创建真实 SOLIDWORKS 原生 note，并绑定到请求的 drawing view。
     /// </summary>
     /// <remarks>
-    /// This first annotation slice intentionally supports only explicit notes. It does not pretend a note is a model
-    /// dimension; associative model-item insertion remains a separate operation with its own provenance and coverage
-    /// checks. 首个 annotation slice 只支持显式 note，不把 note 冒充成模型尺寸；关联 Model Item 仍需独立的来源和
-    /// coverage 验证。
+    /// This annotation slice supports explicit notes and a separate native model-dimension insertion mode. It never
+    /// treats note text as a model dimension; model dimensions must be returned by SOLIDWORKS itself. 当前 slice 支持
+    /// 显式 note 和独立的 native model-dimension insertion；绝不把 note 文本冒充成模型尺寸，尺寸必须由 SOLIDWORKS
+    /// 原生返回。
     /// </remarks>
     public async Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
         DrawingAnnotationRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (!request.Kind.Trim().Equals("note", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrWhiteSpace(request.Text)
+        string kind = request.Kind.Trim();
+        bool isNote = kind.Equals("note", StringComparison.OrdinalIgnoreCase);
+        bool isModelDimensions = kind.Equals("model-dimensions", StringComparison.OrdinalIgnoreCase);
+        if ((!isNote && !isModelDimensions)
+            || (isNote && string.IsNullOrWhiteSpace(request.Text))
             || string.IsNullOrWhiteSpace(request.ViewId.Value))
         {
             return SolidWorksProviderResults.Failure<DrawingAnnotationSnapshot>(
                 "drawing.annotation.create",
                 new OperationError(
                     ErrorCodes.InvalidRequest,
-                    "The native drawing annotation slice requires a non-empty note and ViewId.",
+                    "The native drawing annotation slice supports Kind='note' or Kind='model-dimensions' with a ViewId.",
                     ErrorCategories.Validation,
-                    remediation: "Use Kind='note'; associative model dimensions require the future model-item operation."));
+                    remediation: "Use explicit note text for Kind='note'; model dimensions must come from native model-item insertion."));
         }
 
         OperationResult<NativeDrawingAnnotationResult> result = await host.InvokeOnStaAsync(
             sessionId,
             attachmentGeneration,
-            application => AddNoteOnSta(application, request),
+            application => isNote
+                ? AddNoteOnSta(application, request)
+                : InsertModelDimensionsOnSta(application, request),
             cancellationToken).ConfigureAwait(false);
         if (!result.IsSuccess || result.Value is null)
         {
@@ -541,6 +546,228 @@ internal sealed class SolidWorksNativeDrawingDocument(
         {
             SolidWorksDocumentRouting.Release(annotation);
             SolidWorksDocumentRouting.Release(note);
+            SolidWorksDocumentRouting.Release(view);
+            SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
+        }
+    }
+
+    /// <summary>
+    /// Imports only dimensions returned by SOLIDWORKS model-item insertion for one exact drawing view.
+    /// 只导入 SOLIDWORKS 对指定 drawing view 原生返回的模型尺寸。
+    /// </summary>
+    /// <remarks>
+    /// The request never supplies display text or a numeric value. If SOLIDWORKS returns no DisplayDimension, the
+    /// operation fails closed. This prevents a request label from masquerading as associative engineering evidence.
+    /// 请求不提供显示文字或数值；若 SOLIDWORKS 没有返回 DisplayDimension，操作 fail-closed，避免把请求 label 冒充
+    /// 成关联工程尺寸证据。
+    /// </remarks>
+    private OperationResult<NativeDrawingAnnotationResult> InsertModelDimensionsOnSta(
+        ISldWorks application,
+        DrawingAnnotationRequest request)
+    {
+        const string operation = "drawing.annotation.insert-model-dimensions";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native drawing identity is no longer registered.", ErrorCategories.State));
+        }
+
+        OperationResult<ModelDoc2> resolvedDrawing = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolvedDrawing.IsSuccess || resolvedDrawing.Value is null)
+        {
+            return OperationResults.Failure<NativeDrawingAnnotationResult>(
+                resolvedDrawing.OperationId,
+                resolvedDrawing.Error!,
+                resolvedDrawing.Evidence);
+        }
+
+        View? view = null;
+        try
+        {
+            var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            view = FindNativeView(
+                drawing,
+                current.DocumentId.Value,
+                request.ViewId.Value,
+                nativeViewNames.TryGetValue(request.ViewId.Value, out string? boundName) ? boundName : null,
+                out string? nativeViewName);
+            if (view is null || string.IsNullOrWhiteSpace(nativeViewName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The requested drawing view identity could not be resolved to a current native view.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and use the current declarative ViewId."));
+            }
+
+            resolvedDrawing.Value.ClearSelection2(true);
+            if (!resolvedDrawing.Value.Extension.SelectByID2(
+                    nativeViewName,
+                    "DRAWINGVIEW",
+                    0d,
+                    0d,
+                    0d,
+                    false,
+                    0,
+                    null,
+                    0)
+                || !drawing.ActivateView(nativeViewName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS did not select and activate the exact drawing view for model-item insertion.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the native view identity before retrying."));
+            }
+
+            object? rawAnnotations = drawing.InsertModelAnnotations3(
+                (int)swImportModelItemsSource_e.swImportModelItemsFromEntireModel,
+                (int)(swInsertAnnotation_e.swInsertDimensionsMarkedForDrawing
+                    | swInsertAnnotation_e.swInsertDimensionsNotMarkedForDrawing),
+                false,
+                false,
+                false,
+                true);
+            if (rawAnnotations is not Array nativeAnnotations || nativeAnnotations.Length == 0)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS returned no model annotations for the selected drawing view.",
+                        ErrorCategories.Invariant,
+                        remediation: "Add approved model dimensions/PMI first; do not synthesize a display dimension from request text."));
+            }
+
+            Annotation? firstAnnotation = null;
+            DisplayDimension? firstDimension = null;
+            int displayDimensionCount = 0;
+            try
+            {
+                for (int index = 0; index < nativeAnnotations.Length; index++)
+                {
+                    if (nativeAnnotations.GetValue(index) is not Annotation annotation)
+                    {
+                        continue;
+                    }
+
+                    object? specific = null;
+                    bool retained = false;
+                    try
+                    {
+                        if (annotation.GetType() != (int)swAnnotationType_e.swDisplayDimension)
+                        {
+                            continue;
+                        }
+
+                        displayDimensionCount++;
+                        specific = annotation.GetSpecificAnnotation();
+                        if (specific is not DisplayDimension dimension)
+                        {
+                            continue;
+                        }
+
+                        if (firstAnnotation is null)
+                        {
+                            firstAnnotation = annotation;
+                            firstDimension = dimension;
+                            retained = true;
+                        }
+                    }
+                    finally
+                    {
+                        if (!retained)
+                        {
+                            SolidWorksDocumentRouting.Release(specific);
+                            SolidWorksDocumentRouting.Release(annotation);
+                        }
+                    }
+                }
+
+                if (firstAnnotation is null || firstDimension is null || displayDimensionCount == 0)
+                {
+                    return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "SOLIDWORKS returned model annotations, but none was a verified DisplayDimension.",
+                            ErrorCategories.Invariant,
+                            remediation: "Do not promote notes or unsupported annotation types to dimensional evidence."));
+                }
+
+                string nativeIdentity = firstAnnotation.GetName()?.Trim() ?? string.Empty;
+                string annotationIdentity = string.IsNullOrWhiteSpace(nativeIdentity)
+                    ? $"{current.DocumentId.Value}:annotation:model-dimension:{Guid.NewGuid():N}"
+                    : nativeIdentity;
+                // GetText(0) is not a valid SOLIDWORKS API call: swDimensionTextAll is reserved for SetText. Read the
+                // legal text parts and the associated native Dimension.SystemValue instead.
+                // GetText(0) 不是合法的 SOLIDWORKS API 调用：swDimensionTextAll 只可用于 SetText；这里读取合法文本
+                // 片段以及关联原生 Dimension.SystemValue。
+                string text = SolidWorksNativeDimensionText.Read(firstDimension);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "SOLIDWORKS returned a DisplayDimension without readable native value evidence.",
+                            ErrorCategories.Invariant,
+                            remediation: "Preserve the drawing and inspect the associated native dimension before release."));
+                }
+                double[] position = ReadNumbers(firstAnnotation.GetPosition());
+                drawing.ForceRebuild();
+                string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
+                var snapshot = new DrawingAnnotationSnapshot
+                {
+                    AnnotationId = new AnnotationId(annotationIdentity),
+                    ViewId = request.ViewId,
+                    Kind = "model-dimension",
+                    Text = text,
+                    CoverageKeys = request.CoverageKeys,
+                    Position = new Coordinate2D(
+                        Length.FromMeters(position.Length > 0 ? position[0] : 0d),
+                        Length.FromMeters(position.Length > 1 ? position[1] : 0d)),
+                };
+                var updated = current with
+                {
+                    StateHash = stateHash,
+                    IsDirty = resolvedDrawing.Value.GetSaveFlag(),
+                };
+                return SolidWorksProviderResults.Success(
+                    operation,
+                    new NativeDrawingAnnotationResult(snapshot, updated, current),
+                    new EvidenceObservation("annotation.id", annotationIdentity),
+                    new EvidenceObservation("annotation.kind", "model-dimension"),
+                    new EvidenceObservation("annotation.native-type", ((int)swAnnotationType_e.swDisplayDimension).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("annotation.native-count", displayDimensionCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("annotation.view-id", request.ViewId.Value),
+                    new EvidenceObservation("annotation.native-view", nativeViewName),
+                    new EvidenceObservation("state.hash", stateHash));
+            }
+            finally
+            {
+                SolidWorksDocumentRouting.Release(firstDimension);
+                SolidWorksDocumentRouting.Release(firstAnnotation);
+            }
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<NativeDrawingAnnotationResult>(
+                operation,
+                exception,
+                "SOLIDWORKS model-item insertion failed before a complete DisplayDimension proof was returned.");
+        }
+        finally
+        {
             SolidWorksDocumentRouting.Release(view);
             SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
         }

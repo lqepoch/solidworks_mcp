@@ -159,6 +159,19 @@ public sealed class B04ReferenceDrivenPartLiveTests
             Assert.Equal("note", note.Value!.Kind);
             Assert.Equal("REFERENCE BRACKET", note.Value.Text);
 
+            OperationResult<DrawingAnnotationSnapshot> modelDimensions = await drawing.AddAnnotationAsync(
+                new DrawingAnnotationRequest
+                {
+                    RequestedAnnotationId = new AnnotationId("ReferenceBracket-model-dimension"),
+                    ViewId = frontView.ViewId,
+                    Kind = "model-dimensions",
+                    CoverageKeys = ["reference-bracket.native-model-dimension"],
+                    Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(225d)),
+                });
+            Assert.True(modelDimensions.IsSuccess, FormatError(modelDimensions.Error));
+            Assert.Equal("model-dimension", modelDimensions.Value!.Kind);
+            Assert.False(string.IsNullOrWhiteSpace(modelDimensions.Value.Text));
+
             OperationResult<RebuildReceipt> drawingRebuild = await drawing.RebuildAsync();
             Assert.True(drawingRebuild.IsSuccess, FormatError(drawingRebuild.Error));
             Assert.False(drawingRebuild.Value!.HasErrors);
@@ -174,6 +187,10 @@ public sealed class B04ReferenceDrivenPartLiveTests
                 annotation => annotation.AnnotationId == note.Value.AnnotationId
                     && annotation.Kind == "note"
                     && annotation.Text == "REFERENCE BRACKET");
+            Assert.Contains(
+                drawingInspection.Value.Annotations,
+                annotation => annotation.Kind == "model-dimension"
+                    && !string.IsNullOrWhiteSpace(annotation.Text));
 
             OperationResult<SaveReceipt> drawingSave = await drawing.SaveAsync();
             Assert.True(drawingSave.IsSuccess, FormatError(drawingSave.Error));
@@ -187,6 +204,10 @@ public sealed class B04ReferenceDrivenPartLiveTests
                 annotation => annotation.AnnotationId == note.Value.AnnotationId
                     && annotation.Kind == "note"
                     && annotation.Text == "REFERENCE BRACKET");
+            Assert.Contains(
+                reopenedDrawing.Value.Annotations,
+                annotation => annotation.Kind == "model-dimension"
+                    && !string.IsNullOrWhiteSpace(annotation.Text));
             Assert.Equal(drawingSave.Value!.StateHash, reopenedDrawing.Value.Document.StateHash);
 
             Assert.True((await drawing.CloseAsync()).IsSuccess);
