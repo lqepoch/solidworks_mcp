@@ -31,9 +31,11 @@ close the owned process, this section is the current state.
 - The latest one-process fresh SOLIDWORKS run used the exact harness below and completed `Live 9 passed, 1 skipped,
   0 failed`; the skipped test is the explicit placeholder. Unit/Contract/FakeCad completed `65/7/8 passed` with no
   failures, and the post-run process inventory was `SLDWORKS_COUNT=0`.
-- Retained local evidence (outside Git) includes non-empty B03 `.SLDPRT`, `.SLDDRW`, STEP and PDF plus B04 `.SLDPRT`
-  and `.SLDDRW` under the isolated user-local test workspace. These are real SOLIDWORKS 2022 artifacts and are not
-  public fixtures.
+- Retained local evidence (outside Git) includes non-empty B03 `.SLDPRT`, `.SLDDRW`, STEP and PDF plus B04 `.SLDPRT`,
+  `.SLDDRW` and PDF under the isolated user-local test workspace. The latest B04 PDF rendered as one non-blank page;
+  visual review showed the rounded plate, two holes, isometric view and native model dimension, and bundled `pypdf`
+  extraction confirmed the rendered dimension text exists. These are real SOLIDWORKS 2022 artifacts and are not public
+  fixtures.
 - Fresh-process command and result:
 
       `$env:SOLIDWORKS_MCP_LIVE_KEEP_ARTIFACT='1'; powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -RepositoryRoot D:\Program\solidworks_mcp -Workspace C:\Users\lqepo\AppData\Local\SolidWorksMcp\test-workspace -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -NoBuild`

@@ -37,6 +37,7 @@ public sealed class B04ReferenceDrivenPartLiveTests
         string suffix = Guid.NewGuid().ToString("N");
         string partPath = Path.Combine(workspace, $"B04-Reference-Part-{suffix}.sldprt");
         string drawingPath = Path.Combine(workspace, $"B04-Reference-Part-{suffix}.slddrw");
+        string pdfPath = Path.Combine(workspace, $"B04-Reference-Part-{suffix}.pdf");
         bool completed = false;
         try
         {
@@ -255,6 +256,22 @@ public sealed class B04ReferenceDrivenPartLiveTests
             Assert.True(drawingSave.IsSuccess, FormatError(drawingSave.Error));
             Assert.True(File.Exists(drawingPath));
 
+            // Export the verified native drawing as a real PDF so the 3D-to-2D artifact includes the associative
+            // model dimension and native note, not only an in-memory inspection receipt. 将已验证的 native drawing
+            // 导出为真实 PDF，使三维到二维 artifact 包含关联模型尺寸和原生 note，而不只是内存 inspection receipt。
+            OperationResult<ExportReceipt> pdfExport = await session.Export.ExportAsync(
+                drawing.DocumentId,
+                new CadExportRequest
+                {
+                    Format = "PDF",
+                    TargetPath = pdfPath,
+                });
+            Assert.True(pdfExport.IsSuccess, FormatError(pdfExport.Error));
+            Assert.Equal("PDF", pdfExport.Value!.Format);
+            Assert.Equal(drawing.StateHash, pdfExport.Value.SourceStateHash);
+            Assert.True(File.Exists(pdfPath));
+            Assert.True(new FileInfo(pdfPath).Length > 0);
+
             OperationResult<CadInspectionSnapshot> reopenedDrawing = await drawing.ReopenAndInspectAsync();
             Assert.True(reopenedDrawing.IsSuccess, FormatError(reopenedDrawing.Error));
             Assert.True(reopenedDrawing.Value!.Views.Length >= 3);
@@ -289,7 +306,7 @@ public sealed class B04ReferenceDrivenPartLiveTests
                 StringComparison.Ordinal);
             if (completed && !keepArtifact)
             {
-                foreach (string artifactPath in new[] { partPath, drawingPath })
+                foreach (string artifactPath in new[] { partPath, drawingPath, pdfPath })
                 {
                     try
                     {
