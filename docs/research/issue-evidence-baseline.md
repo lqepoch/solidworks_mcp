@@ -114,6 +114,10 @@ The private drawing sampler was rerun for this reference-driven iteration and se
 candidates. Both slots were rendered locally and retained only as `single-part-candidate review-required`; source
 filenames, PDF text, exact dimensions, title-block values and renders remain private and untracked.
 
+The subsequent complete fresh-process harness run exited 0 with Unit 65 passed, Contract 10 passed, FakeCad 10 passed,
+Live 10 passed, one explicit placeholder skipped and zero failed. It started one owned SOLIDWORKS process after stale
+process cleanup and finished with `SLDWORKS_COUNT=0`.
+
 ## Authoritative execution DAG
 
 The root Epic comment defines this critical path:
