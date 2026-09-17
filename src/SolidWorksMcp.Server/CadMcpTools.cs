@@ -148,7 +148,7 @@ public sealed class CadMcpTools(
     /// 不按每个 COM primitive 暴露 tool；确定性序列由工程服务编排，SOLIDWORKS 调用和 read-back invariant 仍归 Provider。
     /// </remarks>
     [McpServerTool(Name = "cad.build-part-drawing")]
-    [Description("Build one part and its engineering drawing. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group. Side effects: creates a real part, three views, native model-dimension insertion, and a PDF export.")]
+    [Description("Build one part and its engineering drawing. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group and emits one deterministic compact pattern callout. Side effects: creates a real part, three views, native model-dimension insertion, a semantic pattern note, and a PDF export.")]
     public async Task<CallToolResult> BuildPartDrawingAsync(
         [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
         [Description("Stable part document identity.")] string documentId,

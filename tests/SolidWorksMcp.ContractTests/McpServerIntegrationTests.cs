@@ -145,8 +145,8 @@ public sealed class McpServerIntegrationTests
                     + "{\"kind\":\"line\",\"startXMillimeters\":-20,\"startYMillimeters\":15,\"endXMillimeters\":-20,\"endYMillimeters\":-15}"
                     + "]}",
                 ["throughHolePatternJson"] = "{\"name\":\"Mounting-Hole-Group\",\"diameterMillimeters\":6,\"centers\":["
-                    + "{\"xMillimeters\":12,\"yMillimeters\":-8},"
-                    + "{\"xMillimeters\":12,\"yMillimeters\":8}"
+                    + "{\"xMillimeters\":0,\"yMillimeters\":-8},"
+                    + "{\"xMillimeters\":0,\"yMillimeters\":8}"
                     + "]}",
             });
 
@@ -155,6 +155,11 @@ public sealed class McpServerIntegrationTests
         Assert.Contains("CAD operation completed", result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
         Assert.NotNull(result.StructuredContent);
         Assert.Contains("part.hole-pattern", result.StructuredContent!.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.pattern-callout", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("2X", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("THRU", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("PITCH 16", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("SYMMETRIC", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>Invalid repeated-hole JSON fails before a provider session can mutate a document.</summary>

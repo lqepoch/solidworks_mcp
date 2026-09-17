@@ -155,3 +155,20 @@ B02, the B03 named-dimension slice, or the B06 export adapter.
 
 以上签名于 2026-09-16/17 对本机 `SolidWorks.Interop.sldworks.dll` 做反射取得，并与链接的 SOLIDWORKS API Help 交叉核对。
 B02、B03 命名尺寸切片和 B06 导出 adapter 均没有复用 upstream 源码。
+
+### D03 repeated-feature callout API boundary / D03 重复特征标注 API 边界
+
+`IDrawingDoc.CreateText2` is used for the deterministic semantic `Kind=pattern-callout` note. The provider reads back
+`INote.GetText()` and `IAnnotation.GetPosition()` and preserves the stable annotation identity; it does not label the
+note as a model dimension. The official `IDrawingDoc.AddHoleCallout2(Double X, Double Y, Double Z)` API was reviewed
+against the SOLIDWORKS 2022 help page on 2026-09-17. Its documented workflow requires a selected circular edge and
+user confirmation of the resulting dialog. The unattended compiler therefore does not invoke it yet; native associative
+Hole Callout remains behind the modal-dialog safety gate, with no blind OK/Enter recovery.
+
+`IDrawingDoc.CreateText2` 用于确定性的 `Kind=pattern-callout` 语义 note。Provider 会读取 `INote.GetText()`、
+`IAnnotation.GetPosition()` 并保留稳定 annotation identity；它不会把 note 冒充成模型尺寸。官方
+`IDrawingDoc.AddHoleCallout2(Double X, Double Y, Double Z)` API 已于 2026-09-17 对照 SOLIDWORKS 2022 help page
+核对：官方流程要求选中圆边并由用户确认随后出现的 dialog。因此 unattended compiler 当前不调用它；native
+关联 Hole Callout 仍受 modal-dialog safety gate 约束，禁止 blind OK/Enter recovery。
+
+Official source: [AddHoleCallout2 Method](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDrawingDoc~AddHoleCallout2.html).

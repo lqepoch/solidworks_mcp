@@ -727,3 +727,55 @@ the run; the final process inventory was zero `SLDWORKS.exe`.
 成功的保留产物运行在隔离的本机 test workspace 生成了一套真实 `.SLDPRT`、`.SLDDRW` 与 PDF；这些产物刻意不提交到仓库。
 渲染后的 PDF 可见非圆柱正视图、两个真实通孔、带孔开口的等轴测视图，以及 native 40.00 model dimension。Live harness
 启动前关闭旧 SOLIDWORKS，结束后关闭精确 owned PID；最终进程清单为零个 `SLDWORKS.exe`。
+
+## D03 repeated-feature semantic compression in the real drawing / D03 真实工程图中的重复特征语义压缩
+
+This D03 slice moves repeated-hole semantics from the 3D feature evidence into one deterministic drawing annotation. The
+vendor-neutral `RepeatedFeatureCalloutPlanner` proves the supplied center coordinates before emitting compact notation;
+it does not loop over hole instances and create duplicate diameter dimensions. For the symmetric two-hole fixture, the
+verified text is `2X Ø6 THRU; PITCH 20; SYMMETRIC`, with stable coverage keys for quantity, size, depth, pitch,
+equal-spacing and symmetry. Irregular center sets remain `EXPLICIT CENTERS` instead of receiving guessed pattern claims.
+
+该 D03 切片把重复孔的语义从三维 feature evidence 推进到一条确定性的二维图纸标注。vendor-neutral
+`RepeatedFeatureCalloutPlanner` 只有在中心坐标数值证明关系后才生成紧凑表达式；不会遍历每个孔实例生成重复直径尺寸。
+对称双孔 fixture 的 verified text 为 `2X Ø6 THRU; PITCH 20; SYMMETRIC`，并携带 quantity、size、depth、pitch、
+equal-spacing、symmetry 的稳定 coverage keys。不规则中心点集合保留为 `EXPLICIT CENTERS`，不会猜测 pattern 语义。
+
+The native provider persists the callout as a real `IDrawingDoc.CreateText2` / `INote` annotation with the stable identity
+`<drawing>:pattern-callout:<feature>`, checks the exact returned text and position, rebuilds, saves, reopens and classifies
+the persisted note by its identity. The note is placed in a deterministic lower reserved band so it does not overlap the
+Top view. This is an actual native drawing note, not a screenshot or a FakeCad-only assertion. It is intentionally not yet
+a native SOLIDWORKS Hole Callout: official `IDrawingDoc.AddHoleCallout2` has a selected-edge and dialog-confirmation
+workflow, so it remains blocked behind the modal-dialog safety design rather than being automated with blind OK/Enter.
+
+Native Provider 将 callout 作为真实的 `IDrawingDoc.CreateText2` / `INote` annotation 持久化，并使用稳定 identity
+`<drawing>:pattern-callout:<feature>`；读取 exact text/position，rebuild、save、reopen 后再按 identity 分类。注释固定放在
+下方 deterministic reserved band，避免与 Top view 碰撞。这是真实 native drawing note，不是截图，也不是仅 FakeCad 断言。
+当前仍未宣称这是 native SOLIDWORKS Hole Callout：官方 `IDrawingDoc.AddHoleCallout2` 需要选中圆边并确认 dialog，
+因此在 modal-dialog safety 完成前不会用 blind OK/Enter 自动化，native associative Hole Callout 仍是后续切片。
+
+The required reference-driven sampler was run once for this iteration and returned exactly two selected/rendered
+single-part candidate slots. Only generic redacted classes were used as design input; no confidential source filename,
+text, dimension, screenshot or path is recorded in this repository.
+
+本轮 reference-driven sampler 已运行一次并恰好返回两个 selected/rendered single-part candidate slot。设计输入只使用脱敏的
+通用类别；仓库不记录任何机密源文件名、文字、尺寸、截图或路径。
+
+Final evidence on the local SOLIDWORKS 2022 machine:
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 67 + Contract 11 + FakeCad 10 passed
+    dotnet build tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~McpBuildPartDrawingLiveTests -NoBuild # exit 0; 1 passed; 0 failed; before 0; after 0
+
+The preserved native evidence contains one `.SLDPRT`, one `.SLDDRW` and one PDF in the isolated user-local test
+workspace. The rendered PDF was visually inspected and shows the curved plate with two real through holes, Front/Top/
+Isometric native views, the native `40.00` model dimension and the compact pattern callout in the lower reserved band.
+The artifacts are not committed. Issue #31 is only partially satisfied: deterministic quantity/pitch/symmetry compression
+is now proven, while native Hole Callout association, position-dimension coverage and edit-driven regeneration remain open.
+
+隔离 user-local test workspace 中保留了一套 native `.SLDPRT`、`.SLDDRW` 与 PDF。渲染后的 PDF 已视觉检查，包含带曲线边界和两个
+真实通孔的零件、Front/Top/Isometric native views、native `40.00` model dimension，以及下方保留区内的紧凑 pattern callout。
+产物未提交。Issue #31 目前只完成部分：quantity/pitch/symmetry 的确定性压缩已通过真实验证，native Hole Callout 关联、位置尺寸覆盖和
+编辑后重新生成仍未完成。

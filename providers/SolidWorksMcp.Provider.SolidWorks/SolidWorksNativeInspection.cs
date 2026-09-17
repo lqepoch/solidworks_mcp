@@ -261,7 +261,7 @@ internal static class SolidWorksNativeInspectionReader
                     {
                         AnnotationId = new AnnotationId(identity),
                         ViewId = new ViewId($"{documentIdentity}:view:{viewOrdinal}"),
-                        Kind = ToAnnotationKind(nativeType),
+                        Kind = ToAnnotationKind(nativeType, identity),
                         Text = text,
                         Position = new Coordinate2D(
                             Length.FromMeters(position.Length > 0 ? position[0] : 0d),
@@ -276,8 +276,9 @@ internal static class SolidWorksNativeInspectionReader
         }
     }
 
-    private static string ToAnnotationKind(int nativeType) => nativeType switch
+    private static string ToAnnotationKind(int nativeType, string identity) => nativeType switch
     {
+        (int)swAnnotationType_e.swNote when identity.Contains(":pattern-callout:", StringComparison.Ordinal) => "pattern-callout",
         (int)swAnnotationType_e.swNote => "note",
         (int)swAnnotationType_e.swDisplayDimension => "model-dimension",
         (int)swAnnotationType_e.swGTol => "gdt",

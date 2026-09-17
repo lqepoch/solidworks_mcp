@@ -167,6 +167,37 @@ public static class PartDrawingBuildService
                 return Failure(modelDimensions);
             }
 
+            DrawingAnnotationSnapshot? patternCallout = null;
+            RepeatedFeatureCalloutPlan? patternCalloutPlan = null;
+            if (request.ThroughHolePattern is not null && holePattern is not null)
+            {
+                // The compiler emits one semantic callout for the verified group. It never loops over centers and
+                // creates one independent diameter annotation per hole. 编译器为已验证孔组生成一条语义标注，绝不
+                // 遍历每个中心点生成互不关联的直径标注。
+                patternCalloutPlan = RepeatedFeatureCalloutPlanner.Plan(request.ThroughHolePattern);
+                OperationResult<DrawingAnnotationSnapshot> callout = await drawing.AddAnnotationAsync(
+                    new DrawingAnnotationRequest
+                    {
+                        RequestedAnnotationId = new AnnotationId(
+                            $"{request.DrawingDocumentId.Value}:pattern-callout:{holePattern.FeatureId.Value}"),
+                        ViewId = views[0].ViewId,
+                        Kind = "pattern-callout",
+                        Text = patternCalloutPlan.Text,
+                        CoverageKeys = patternCalloutPlan.CoverageKeys,
+                        // Keep the deterministic group callout in the lower reserved note band, away from the Top view
+                        // at Y=210 mm and the provider-selected model dimension. 将重复组语义标注固定在下方保留
+                        // note band，避开 Y=210 mm 的 Top view 以及 Provider 自己布置的原生模型尺寸。
+                        Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(35d)),
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                if (!callout.IsSuccess || callout.Value is null)
+                {
+                    return Failure(callout);
+                }
+
+                patternCallout = callout.Value;
+            }
+
             OperationResult<RebuildReceipt> drawingRebuild = await drawing.RebuildAsync(cancellationToken).ConfigureAwait(false);
             if (!drawingRebuild.IsSuccess || drawingRebuild.Value is null || drawingRebuild.Value.HasErrors)
             {
@@ -224,6 +255,7 @@ public static class PartDrawingBuildService
                 HolePattern = holePattern,
                 Views = views.ToImmutable(),
                 ModelDimensions = modelDimensions.Value,
+                PatternCallout = patternCallout,
                 Pdf = pdf.Value,
             };
             return OperationResults.Success(
@@ -245,6 +277,9 @@ public static class PartDrawingBuildService
                         new EvidenceObservation(
                             "part.hole-pattern.diameter-millimeters",
                             request.ThroughHolePattern?.Diameter.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
+                        new EvidenceObservation("drawing.pattern-callout", patternCallout?.Text ?? "none"),
+                        new EvidenceObservation("drawing.pattern-callout.distribution", patternCalloutPlan?.Distribution ?? "none"),
+                        new EvidenceObservation("drawing.pattern-callout.coverage-count", patternCalloutPlan?.CoverageKeys.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "0"),
                         new EvidenceObservation("export.format", pdf.Value.Format),
                     ],
                     [part.Path, drawing.Path, pdf.Value.TargetPath]));
@@ -373,6 +408,9 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>Native model-dimension annotation result.</summary>
     public required DrawingAnnotationSnapshot ModelDimensions { get; init; }
+
+    /// <summary>One compressed semantic callout for the optional repeated feature group.</summary>
+    public DrawingAnnotationSnapshot? PatternCallout { get; init; }
 
     /// <summary>Verified PDF export receipt.</summary>
     public required ExportReceipt Pdf { get; init; }

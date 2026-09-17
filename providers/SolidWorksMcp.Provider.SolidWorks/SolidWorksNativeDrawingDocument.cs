@@ -122,7 +122,8 @@ internal sealed class SolidWorksNativeDrawingDocument(
     {
         ArgumentNullException.ThrowIfNull(request);
         string kind = request.Kind.Trim();
-        bool isNote = kind.Equals("note", StringComparison.OrdinalIgnoreCase);
+        bool isNote = kind.Equals("note", StringComparison.OrdinalIgnoreCase)
+            || kind.Equals("pattern-callout", StringComparison.OrdinalIgnoreCase);
         bool isModelDimensions = kind.Equals("model-dimensions", StringComparison.OrdinalIgnoreCase);
         if ((!isNote && !isModelDimensions)
             || (isNote && string.IsNullOrWhiteSpace(request.Text))
@@ -132,7 +133,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
                 "drawing.annotation.create",
                 new OperationError(
                     ErrorCodes.InvalidRequest,
-                    "The native drawing annotation slice supports Kind='note' or Kind='model-dimensions' with a ViewId.",
+                    "The native drawing annotation slice supports Kind='note', Kind='pattern-callout' or Kind='model-dimensions' with a ViewId.",
                     ErrorCategories.Validation,
                     remediation: "Use explicit note text for Kind='note'; model dimensions must come from native model-item insertion."));
         }
@@ -512,7 +513,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
             {
                 AnnotationId = new AnnotationId(annotationIdentity),
                 ViewId = request.ViewId,
-                Kind = "note",
+                Kind = request.Kind.Trim(),
                 Text = actualText,
                 CoverageKeys = request.CoverageKeys,
                 Position = new Coordinate2D(
@@ -529,7 +530,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
                 operation,
                 new NativeDrawingAnnotationResult(snapshot, updated, current),
                 new EvidenceObservation("annotation.id", annotationIdentity),
-                new EvidenceObservation("annotation.kind", "note"),
+                new EvidenceObservation("annotation.kind", request.Kind.Trim()),
                 new EvidenceObservation("annotation.native-type", ((int)swAnnotationType_e.swNote).ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 new EvidenceObservation("annotation.view-id", request.ViewId.Value),
                 new EvidenceObservation("annotation.native-view", nativeViewName),

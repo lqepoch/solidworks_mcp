@@ -72,6 +72,11 @@ public sealed class McpBuildPartDrawingLiveTests
 
             Assert.False(result.IsError, string.Join(Environment.NewLine, result.Content));
             Assert.Contains("part.hole-pattern", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("pattern-callout", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("2X", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("THRU", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("PITCH 20", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("SYMMETRIC", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.True(File.Exists(partPath), "The MCP workflow did not persist the native .sldprt artifact.");
             Assert.True(File.Exists(drawingPath), "The MCP workflow did not persist the native .slddrw artifact.");
             Assert.True(File.Exists(pdfPath), "The MCP workflow did not export the native PDF artifact.");
@@ -104,8 +109,8 @@ public sealed class McpBuildPartDrawingLiveTests
         + "]}";
 
     private const string ThroughHolePatternJson = "{\"name\":\"MCP-Mounting-Hole-Group\",\"diameterMillimeters\":6,\"centers\":["
-        + "{\"xMillimeters\":14,\"yMillimeters\":-10},"
-        + "{\"xMillimeters\":14,\"yMillimeters\":10}"
+        + "{\"xMillimeters\":0,\"yMillimeters\":-10},"
+        + "{\"xMillimeters\":0,\"yMillimeters\":10}"
         + "]}";
 
     private static void TryDeleteArtifact(string path)
