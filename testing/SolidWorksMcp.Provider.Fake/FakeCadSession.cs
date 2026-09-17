@@ -144,6 +144,41 @@ internal sealed class FakeCadSession : ICadSession
     }
 
     /// <inheritdoc />
+    public Task<OperationResult<ICadDrawingDocument>> GetDrawingAsync(
+        DocumentId documentId,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "drawing.get";
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<ICadDrawingDocument>(operation));
+        }
+
+        if (string.IsNullOrWhiteSpace(documentId.Value))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<ICadDrawingDocument>(operation, "A drawing document identity is required."));
+        }
+
+        if (IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Failure<ICadDrawingDocument>(operation, ClosedError()));
+        }
+
+        FakeCadDrawingDocument? drawing = GetDocument<FakeCadDrawingDocument>(documentId);
+        if (drawing is null || drawing.IsDocumentClosed)
+        {
+            return Task.FromResult(FakeCadResults.NotFound<ICadDrawingDocument>(operation, documentId.Value));
+        }
+
+        return Task.FromResult(
+            FakeCadResults.Success<ICadDrawingDocument>(
+                drawing,
+                operation,
+                new EvidenceObservation("document.id", documentId.Value),
+                new EvidenceObservation("document.type", CadDocumentType.Drawing.ToString())));
+    }
+
+    /// <inheritdoc />
     public Task<OperationResult<MutationReceipt>> CloseAsync(CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)

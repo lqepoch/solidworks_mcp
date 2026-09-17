@@ -1017,7 +1017,7 @@ Focused D08 unit evidence:
     dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
     dotnet build providers/SolidWorksMcp.Provider.SolidWorks/SolidWorksMcp.Provider.SolidWorks.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
-    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 89 + Contract 12 + FakeCad 11 passed
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 89 + Contract 13 + FakeCad 11 passed
     git diff --check # exit 0
 
 Native D08 repair evidence on the local SOLIDWORKS 2022 machine:
@@ -1033,12 +1033,14 @@ signature on its STA, resolves a persisted annotation name rather than an enumer
 position back and commits the descriptor only after that proof. The isolated native Live fixture now proves the same
 stale-precondition rejection and position persistence through save/reopen; it does not use private drawing PDFs.
 
-The public MCP mutation endpoint and transaction-engine orchestration remain the next D08 slice. It must bind this plan
-to the exact inspected drawing, materialize only precondition-matching repair actions, export SLDDrw plus configured
-PDF/DWG/DXF outputs, write the evidence manifest, then run the same native 3D-to-2D Live workflow. Any native run must
-continue through `scripts/Invoke-SolidWorksLiveTests.ps1`, which closes old SOLIDWORKS before launch and verifies
-`SLDWORKS_COUNT=0` after cleanup. The existing native baseline remains the actual curved-part, through-hole,
-multi-view, section-view and PDF proof.
+The public `drawing.repair` MCP mutation endpoint is now present. It rebinds an exact registered drawing identity,
+requires the expected state hash, accepts exactly one bounded `layout.apply-planned-position` action, invokes the
+provider-native precondition/read-back contract, saves, reopens and verifies the persisted annotation position. The
+endpoint deliberately does not yet claim multi-action checkpoint/rollback, PDF/DWG/DXF release export or durable
+manifest writing; those remain the next D08 transaction/release slice. Any native run must continue through
+`scripts/Invoke-SolidWorksLiveTests.ps1`, which closes old SOLIDWORKS before launch and verifies `SLDWORKS_COUNT=0`
+after cleanup. The existing native baseline remains the actual curved-part, through-hole, multi-view, section-view
+and PDF proof.
 
 本切片同时增加了窄范围的 `ICadDrawingDocument.RepositionAnnotationAsync` contract。FakeCad 已证明 mutation 前会校验精确
 annotation identity、expected document state 和 expected current position，并读回新位置。Native Provider 在 STA 上使用本机
@@ -1046,7 +1048,17 @@ annotation identity、expected document state 和 expected current position，�
 解析对象，执行 rebuild、读回 native position，只有证据成功才提交 descriptor。隔离 Native Live fixture 已进一步证明 stale
 precondition 会被拒绝，位置可以 save/reopen 后读回；测试不使用秘密图纸 PDF。
 
-Public MCP mutation endpoint 和 transaction-engine 编排仍是下一步 D08 slice：必须把 plan 绑定到精确 inspection drawing，只执行
-满足 precondition 的 repair action，导出 SLDDrw 与配置的 PDF/DWG/DXF，写 evidence manifest，再运行同一条真实 3D-to-2D Live
-workflow。任何 native run 仍必须通过 `scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭旧 SOLIDWORKS，清理后验证
-`SLDWORKS_COUNT=0`。现有 native baseline 仍是真实曲面零件、通孔、多视图、剖视和 PDF 证明。
+Public `drawing.repair` MCP mutation endpoint 已加入：它重新绑定精确 registered drawing identity，要求 expected state hash，
+只接受一个有界 `layout.apply-planned-position` action，调用 Provider 的 precondition/read-back contract，保存、重开并
+验证 annotation 位置持久化。本端点暂不宣称已完成多 action checkpoint/rollback、PDF/DWG/DXF release export 或持久化
+manifest writing；这些仍是下一步 D08 transaction/release slice。任何 native run 仍必须通过
+`scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭旧 SOLIDWORKS，清理后验证 `SLDWORKS_COUNT=0`。现有 native baseline
+仍是真实曲面零件、通孔、多视图、剖视和 PDF 证明。
+
+Public MCP D08 repair evidence:
+
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 89 + Contract 13 + FakeCad 11 passed
+    dotnet build tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~McpDrawingRepairLiveTests -NoBuild # exit 0; 1 passed; 0 failed; 0 skipped
+    SLDWORKS_COUNT_BEFORE=0
+    SLDWORKS_COUNT_AFTER=0

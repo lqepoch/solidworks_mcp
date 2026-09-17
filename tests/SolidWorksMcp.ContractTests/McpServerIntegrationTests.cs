@@ -28,7 +28,7 @@ public sealed class McpServerIntegrationTests
 
         IList<McpClientTool> tools = await host.Client.ListToolsAsync();
 
-        Assert.Equal(6, tools.Count);
+        Assert.Equal(7, tools.Count);
         McpClientTool createTool = Assert.Single(tools, tool => tool.Name == "cad.create-part");
         Assert.Contains("Preconditions", createTool.Description, StringComparison.Ordinal);
         Assert.Contains("Side effects", createTool.Description, StringComparison.Ordinal);
@@ -81,6 +81,75 @@ public sealed class McpServerIntegrationTests
         Assert.True(invalid.IsError);
         Assert.Contains(ErrorCodes.InvalidRequest, invalid.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
         Assert.Equal(0, countingProvider.StartSessionCount);
+    }
+
+    /// <summary>
+    /// Public drawing.repair must mutate only the exact annotation and prove the persisted reopen state.
+    /// 公开 drawing.repair 只能修改精确 annotation，并证明保存重开后的持久化状态。
+    /// </summary>
+    [Fact]
+    public async Task DrawingRepairMovesOneExactAnnotationAndVerifiesReopen()
+    {
+        var provider = new FakeCadProvider();
+        OperationResult<ICadSession> started = await provider.StartSessionAsync(new CadSessionOptions());
+        Assert.True(started.IsSuccess, started.Error?.Message);
+        ICadSession session = started.Value!;
+
+        OperationResult<ICadPartDocument> part = await session.CreatePartAsync(
+            new CreatePartRequest { RequestedDocumentId = new DocumentId("repair-source-part"), Configuration = "Default" });
+        Assert.True(part.IsSuccess, part.Error?.Message);
+
+        OperationResult<ICadDrawingDocument> drawing = await session.CreateDrawingAsync(
+            new CreateDrawingRequest
+            {
+                RequestedDocumentId = new DocumentId("repair-target-drawing"),
+                Configuration = "Default",
+                SourceDocumentId = part.Value!.DocumentId,
+            });
+        Assert.True(drawing.IsSuccess, drawing.Error?.Message);
+
+        OperationResult<DrawingViewSnapshot> view = await drawing.Value!.AddViewAsync(
+            new DrawingViewRequest
+            {
+                RequestedViewId = new ViewId("repair-view"),
+                Name = "Front",
+                Orientation = "Front",
+                Position = new Coordinate2D(Length.FromMillimeters(50d), Length.FromMillimeters(50d)),
+            });
+        Assert.True(view.IsSuccess, view.Error?.Message);
+
+        OperationResult<DrawingAnnotationSnapshot> annotation = await drawing.Value.AddAnnotationAsync(
+            new DrawingAnnotationRequest
+            {
+                RequestedAnnotationId = new AnnotationId("repair-annotation"),
+                ViewId = view.Value!.ViewId,
+                Kind = "note",
+                Text = "deterministic-repair",
+                Position = new Coordinate2D(Length.FromMillimeters(20d), Length.FromMillimeters(20d)),
+            });
+        Assert.True(annotation.IsSuccess, annotation.Error?.Message);
+        OperationResult<SaveReceipt> save = await drawing.Value.SaveAsync();
+        Assert.True(save.IsSuccess, save.Error?.Message);
+        OperationResult<CadInspectionSnapshot> inspection = await session.Inspection.InspectAsync(drawing.Value.DocumentId);
+        Assert.True(inspection.IsSuccess, inspection.Error?.Message);
+
+        await using var host = await InMemoryMcpHost.CreateAsync(provider);
+        CallToolResult result = await host.Client.CallToolAsync(
+            "drawing.repair",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = drawing.Value.DocumentId.Value,
+                ["expectedStateHash"] = inspection.Value!.Document.StateHash,
+                ["repairPlanJson"] = "{\"schemaVersion\":\"1.0\",\"fingerprint\":\"plan-repair-001\",\"actions\":["
+                    + "{\"actionCode\":\"layout.apply-planned-position\",\"targetId\":\"repair-annotation\","
+                    + "\"findingCode\":\"annotation-repositioned\",\"preconditionFingerprint\":\"finding-001\","
+                    + "\"newPositionXMillimeters\":80,\"newPositionYMillimeters\":60}]}",
+            });
+
+        Assert.False(result.IsError);
+        Assert.Contains("save-reopen-verified", result.StructuredContent!.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("repair-annotation", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>Valid tool input must cross the server boundary and create exactly one FakeCad document.</summary>

@@ -168,7 +168,9 @@ internal static class SolidWorksDrawingFactory
                 SolidWorksDocumentRouting.ReadConfiguration(drawing),
                 SolidWorksDocumentRouting.ComputeStateHash(drawing),
                 drawing.GetSaveFlag(),
-                ProfileFeatureName: null);
+                ProfileFeatureName: null,
+                SourceDocumentId: sourceDescriptor.DocumentId,
+                SourceDocumentPath: sourceDescriptor.Path);
             ownershipTransferred = true;
             return SolidWorksProviderResults.Success(
                 "drawing.create",

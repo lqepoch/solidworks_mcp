@@ -22,7 +22,9 @@ internal sealed record SolidWorksDocumentDescriptor(
     string Configuration,
     string StateHash,
     bool IsDirty,
-    string? ProfileFeatureName);
+    string? ProfileFeatureName,
+    DocumentId? SourceDocumentId = null,
+    string? SourceDocumentPath = null);
 
 /// <summary>Thread-safe document identity map scoped to one provider session lifetime.</summary>
 internal sealed class SolidWorksDocumentRegistry

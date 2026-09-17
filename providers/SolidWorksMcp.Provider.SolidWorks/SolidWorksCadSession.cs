@@ -185,6 +185,65 @@ internal sealed class SolidWorksCadSession : ICadSession
             created.Evidence ?? new OperationEvidence("solidworks-provider"));
     }
 
+    /// <inheritdoc />
+    public Task<OperationResult<ICadDrawingDocument>> GetDrawingAsync(
+        DocumentId documentId,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "drawing.get";
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(SolidWorksProviderResults.Cancelled<ICadDrawingDocument>(operation));
+        }
+
+        if (IsClosed)
+        {
+            return Task.FromResult(SolidWorksProviderResults.Closed<ICadDrawingDocument>(operation, SessionId));
+        }
+
+        if (!registry.TryGet(documentId, out SolidWorksDocumentDescriptor? descriptor) || descriptor is null)
+        {
+            return Task.FromResult(
+                SolidWorksProviderResults.Failure<ICadDrawingDocument>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.NotFound,
+                        "The requested drawing identity is not registered in this provider session.",
+                        ErrorCategories.State,
+                        remediation: "Create or register the exact drawing in this provider session before mutation.")));
+        }
+
+        if (descriptor.DocumentType is not CadDocumentType.Drawing
+            || descriptor.SourceDocumentId is not DocumentId sourceDocumentId
+            || string.IsNullOrWhiteSpace(descriptor.SourceDocumentPath))
+        {
+            return Task.FromResult(
+                SolidWorksProviderResults.Failure<ICadDrawingDocument>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The registered drawing does not carry a complete source-document binding.",
+                        ErrorCategories.State,
+                        remediation: "Recreate or re-register the drawing through the native provider.")));
+        }
+
+        ICadDrawingDocument drawing = new SolidWorksNativeDrawingDocument(
+            host,
+            registry,
+            SessionId,
+            attachmentGeneration,
+            descriptor,
+            sourceDocumentId,
+            descriptor.SourceDocumentPath);
+        return Task.FromResult(
+            SolidWorksProviderResults.Success<ICadDrawingDocument>(
+                operation,
+                drawing,
+                new EvidenceObservation("document.id", descriptor.DocumentId.Value),
+                new EvidenceObservation("document.type", descriptor.DocumentType.ToString()),
+                new EvidenceObservation("document.binding", "registered-source-document")));
+    }
+
     public async Task<OperationResult<MutationReceipt>> CloseAsync(CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)

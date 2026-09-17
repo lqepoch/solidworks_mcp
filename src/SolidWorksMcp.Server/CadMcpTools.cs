@@ -370,6 +370,228 @@ public sealed class CadMcpTools(
         return McpToolResultWriter.Write(result);
     }
 
+    /// <summary>
+    /// Applies one bounded, targeted drawing repair and proves it after save/reopen.
+    /// 应用一个有界的定向工程图修复，并在保存/重开后证明结果。
+    /// </summary>
+    /// <remarks>
+    /// The first public repair slice intentionally accepts exactly one supported layout action. This keeps the
+    /// mutation atomic at the MCP boundary while the provider-native transaction/checkpoint adapter is completed.
+    /// It never loops through arbitrary annotations, trusts ActiveDoc, or moves unrelated objects. 首个公开修复切片
+    /// 刻意一次只接受一个已证明的布局 action，在 Provider transaction/checkpoint adapter 完成前保持边界原子性；
+    /// 它不会遍历任意标注、信任 ActiveDoc 或移动无关对象。
+    /// </remarks>
+    [McpServerTool(Name = "drawing.repair")]
+    [Description("Apply one deterministic drawing repair. Preconditions: schemaVersion=1.0, exact drawing identity, expected state hash, and one bounded layout.apply-planned-position action. Side effects: moves only the exact annotation, saves the drawing, reopens it, and verifies persisted position.")]
+    public async Task<CallToolResult> RepairDrawingAsync(
+        [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
+        [Description("Stable registered drawing document identity.")] string documentId,
+        [Description("State hash captured immediately before planning the repair.")] string expectedStateHash,
+        [Description("JSON plan: {schemaVersion:'1.0',fingerprint,actions:[{actionCode:'layout.apply-planned-position',targetId,findingCode,preconditionFingerprint,newPositionXMillimeters,newPositionYMillimeters}]}. Exactly one action is accepted in this bounded slice.")] string repairPlanJson,
+        [Description("Optional application operation correlation key.")] string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        string correlationId = correlation.Resolve(operationId);
+        if (!string.Equals(schemaVersion, ProtocolSchema.CurrentVersion, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(documentId)
+            || string.IsNullOrWhiteSpace(expectedStateHash))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    InvalidInput("schemaVersion must be 1.0; documentId and expectedStateHash are required.")));
+        }
+
+        if (!DrawingRepairJsonCodec.TryParse(
+                repairPlanJson,
+                out DrawingRepairPlanInput? repairPlan,
+                out string? repairPlanError)
+            || repairPlan is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    InvalidInput(repairPlanError ?? "repairPlanJson-invalid")));
+        }
+
+        if (repairPlan.Actions.Length != 1)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    InvalidInput("The bounded public drawing.repair slice accepts exactly one action per invocation.")));
+        }
+
+        OperationError? capabilityError = capabilities.ValidateInvocation("drawing.repair");
+        if (capabilityError is not null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(correlationId, capabilityError));
+        }
+
+        OperationResult<ICadSession> sessionResult = await sessions.GetOrStartAsync(cancellationToken).ConfigureAwait(false);
+        if (!sessionResult.IsSuccess || sessionResult.Value is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    sessionResult.Error!,
+                    sessionResult.Evidence));
+        }
+
+        DocumentId targetDocumentId = new(documentId.Trim());
+        OperationResult<CadInspectionSnapshot> initialInspection = await sessionResult.Value.Inspection.InspectAsync(
+            targetDocumentId,
+            cancellationToken).ConfigureAwait(false);
+        if (!initialInspection.IsSuccess || initialInspection.Value is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    initialInspection.Error!,
+                    initialInspection.Evidence));
+        }
+
+        CadInspectionSnapshot initial = initialInspection.Value;
+        if (initial.Document.DocumentType is not CadDocumentType.Drawing)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    new OperationError(
+                        ErrorCodes.InvalidRequest,
+                        "The repair target must be a drawing document.",
+                        ErrorCategories.Validation)));
+        }
+
+        if (!initial.Document.StateHash.Equals(expectedStateHash.Trim(), StringComparison.Ordinal))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The drawing state changed after the repair plan was created.",
+                        ErrorCategories.State,
+                        remediation: "Inspect the exact drawing again and create a new repair plan.")));
+        }
+
+        DrawingRepairInputAction action = repairPlan.Actions[0];
+        DrawingAnnotationSnapshot? targetAnnotation = initial.Annotations
+            .SingleOrDefault(annotation => annotation.AnnotationId.Value.Equals(action.TargetId, StringComparison.Ordinal));
+        if (targetAnnotation is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    new OperationError(
+                        ErrorCodes.NotFound,
+                        "The targeted drawing annotation was not found in the exact inspected drawing.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and use the current stable annotation identity.")));
+        }
+
+        OperationResult<ICadDrawingDocument> drawingResult = await sessionResult.Value.GetDrawingAsync(
+            targetDocumentId,
+            cancellationToken).ConfigureAwait(false);
+        if (!drawingResult.IsSuccess || drawingResult.Value is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    drawingResult.Error!,
+                    drawingResult.Evidence));
+        }
+
+        OperationResult<DrawingRepairReceipt> repaired = await drawingResult.Value.RepositionAnnotationAsync(
+            new DrawingAnnotationPositionRepairRequest
+            {
+                AnnotationId = targetAnnotation.AnnotationId,
+                ExpectedDocumentStateHash = initial.Document.StateHash,
+                PreconditionFingerprint = action.PreconditionFingerprint,
+                ExpectedCurrentPosition = targetAnnotation.Position,
+                NewPosition = action.NewPosition,
+            },
+            cancellationToken).ConfigureAwait(false);
+        if (!repaired.IsSuccess || repaired.Value is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    repaired.Error!,
+                    repaired.Evidence));
+        }
+
+        OperationResult<SaveReceipt> saved = await drawingResult.Value.SaveAsync(cancellationToken).ConfigureAwait(false);
+        if (!saved.IsSuccess || saved.Value is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    saved.Error!,
+                    saved.Evidence));
+        }
+
+        OperationResult<CadInspectionSnapshot> reopened = await drawingResult.Value.ReopenAndInspectAsync(cancellationToken).ConfigureAwait(false);
+        if (!reopened.IsSuccess || reopened.Value is null)
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    reopened.Error!,
+                    reopened.Evidence));
+        }
+
+        DrawingAnnotationSnapshot? persistedTarget = reopened.Value.Annotations
+            .SingleOrDefault(annotation => annotation.AnnotationId == targetAnnotation.AnnotationId);
+        if (persistedTarget is null
+            || !NearlyEqual(persistedTarget.Position, action.NewPosition)
+            || !repaired.Value.Position.Equals(action.NewPosition))
+        {
+            return McpToolResultWriter.Write(
+                OperationResults.Failure<DrawingRepairExecutionResult>(
+                    correlationId,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The targeted annotation position was not proven after save/reopen.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the native annotation before retrying.")));
+        }
+
+        var output = new DrawingRepairExecutionResult
+        {
+            DocumentId = targetDocumentId,
+            InitialStateHash = initial.Document.StateHash,
+            FinalStateHash = reopened.Value.Document.StateHash,
+            RepairPlanFingerprint = repairPlan.Fingerprint,
+            Repairs = [repaired.Value],
+            Save = saved.Value,
+            ReopenedDrawing = reopened.Value,
+        };
+        OperationResult<DrawingRepairExecutionResult> result = OperationResults.Success(
+            output,
+            correlationId,
+            new OperationEvidence(
+                "drawing.repair",
+                [
+                    new EvidenceObservation("document.id", targetDocumentId.Value),
+                    new EvidenceObservation("repair.action", action.ActionCode),
+                    new EvidenceObservation("repair.target-id", action.TargetId),
+                    new EvidenceObservation("repair.finding-code", action.FindingCode),
+                    new EvidenceObservation("repair.plan-fingerprint", repairPlan.Fingerprint),
+                    new EvidenceObservation("repair.persistence", "save-reopen-verified"),
+                    new EvidenceObservation("document.state-hash.before", initial.Document.StateHash),
+                    new EvidenceObservation("document.state-hash.after", reopened.Value.Document.StateHash),
+                ],
+                [saved.Value.Path],
+                reopened.Value.Document.StateHash));
+        return McpToolResultWriter.Write(result);
+    }
+
+    private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
+        Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d
+        && Math.Abs(first.Y.Millimeters - second.Y.Millimeters) <= 0.000001d;
+
     private static CadDocumentSummary ToSummary(ICadDocument document) => new()
     {
         DocumentId = document.DocumentId,

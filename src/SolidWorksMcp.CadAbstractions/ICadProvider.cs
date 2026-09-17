@@ -51,6 +51,20 @@ public interface ICadSession : IAsyncDisposable
         CreateDrawingRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Rebinds an already registered drawing identity to a provider-neutral drawing facade.
+    /// 将已注册的 drawing identity 重新绑定到无厂商依赖的 drawing facade。
+    /// </summary>
+    /// <remarks>
+    /// High-level MCP operations must not depend on whichever document happens to be active. This lookup therefore
+    /// accepts an explicit identity and lets the provider revalidate path, type, configuration and session affinity
+    /// before a later mutation. 高层 MCP operation 不能依赖“恰好 active”的文档；此 lookup 必须接收显式 identity，
+    /// 由 Provider 在后续 mutation 前重新校验 path、类型、配置和 session affinity。
+    /// </remarks>
+    Task<OperationResult<ICadDrawingDocument>> GetDrawingAsync(
+        DocumentId documentId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Closes the session and all provider-owned document handles.</summary>
     Task<OperationResult<MutationReceipt>> CloseAsync(CancellationToken cancellationToken = default);
 }
