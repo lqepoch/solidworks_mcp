@@ -114,11 +114,29 @@ capture and drawing-annotation capture remain explicit follow-up capabilities; t
 document 并校验 expected state hash。Face/edge/vertex/sketch topology capture 和 drawing annotation capture 仍是后续能力，
 不会被误报为完成。
 
+## B06 verified native export slice / B06 已验证原生导出切片
+
+| Interface / method | Verified signature | Version evidence | Official source | Runtime note |
+| --- | --- | --- | --- | --- |
+| `IModelDocExtension.SaveAs` | `Boolean SaveAs(String Name, Int32 Version, Int32 Options, Object ExportData, ref Int32 Errors, ref Int32 Warnings)` | SOLIDWORKS 2022 Interop assembly `30.0.0.5041`; `swSaveAsCurrentVersion=0`, `swSaveAsOptions_Silent=1` | [IModelDocExtension.SaveAs Method](https://help.solidworks.com/2023/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.IModelDocExtension~SaveAs.html) | The native provider clears selection, activates and state-checks the exact registered document, calls this method on the owning STA, checks the Boolean plus native error code, verifies a non-empty file and re-hashes the source document. The verified Live slice exports a part to STEP and a drawing to PDF. |
+| `IModelDoc2.ClearSelection2` | `Boolean ClearSelection2(Boolean All)` | SOLIDWORKS 2022 Interop reflection | [IModelDoc2 Interface](https://help.solidworks.com/2022/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~Solidworks.Interop.sldworks.IModelDoc2.html) | Export clears all selections before `SaveAs`; the provider does not export an incidental global selection. |
+
+The provider allowlist currently supports `PDF` for drawings and `STEP`/`IGES`/`STL` for parts or assemblies. It does not
+claim native BOM, release export, sheet selection, or arbitrary extension/macro execution. A real SOLIDWORKS 2022
+fresh-process Live run passed the B03 part-to-STEP and drawing-to-PDF file evidence checks; the generated files were
+deleted by the isolated successful-test cleanup policy after verification. The current machine has no verified 2026
+installation, so this fact is not a 2026 runtime claim.
+
+Provider 当前 allowlist 仅支持 drawing 的 `PDF` 和 part/assembly 的 `STEP`/`IGES`/`STL`。它不宣称原生 BOM、release export、
+sheet 选择或任意扩展名/macro 执行。真实 SOLIDWORKS 2022 fresh-process Live 运行已通过零件→STEP 和工程图→PDF 的非空
+文件证据检查；成功测试结束后按隔离清理策略删除临时文件。本机没有可验证的 SOLIDWORKS 2026 安装，因此不能把该结果
+表述为 2026 runtime 证据。
+
 ## Provenance / 来源
 
 The signatures above were obtained by reflection against the locally installed `SolidWorks.Interop.sldworks.dll` and
-cross-checked against the linked SOLIDWORKS API Help pages on 2026-09-16. No upstream source code was adapted for B02
-or the B03 named-dimension slice.
+cross-checked against the linked SOLIDWORKS API Help pages on 2026-09-16/17. No upstream source code was adapted for
+B02, the B03 named-dimension slice, or the B06 export adapter.
 
-以上签名于 2026-09-16 对本机 `SolidWorks.Interop.sldworks.dll` 做反射取得，并与链接的 SOLIDWORKS API Help 交叉核对。
-B02 和 B03 命名尺寸切片均没有复用任何 upstream 源码。
+以上签名于 2026-09-16/17 对本机 `SolidWorks.Interop.sldworks.dll` 做反射取得，并与链接的 SOLIDWORKS API Help 交叉核对。
+B02、B03 命名尺寸切片和 B06 导出 adapter 均没有复用 upstream 源码。

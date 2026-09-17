@@ -37,6 +37,8 @@ public sealed class B03NativePartLiveTests
         Directory.CreateDirectory(workspace);
         string partPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.sldprt");
         string drawingPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.slddrw");
+        string stepPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.step");
+        string pdfPath = Path.Combine(workspace, $"B03-Circle-{Guid.NewGuid():N}.pdf");
         bool completed = false;
         try
         {
@@ -108,6 +110,23 @@ public sealed class B03NativePartLiveTests
             Assert.True(save.IsSuccess, FormatError(save.Error));
             Assert.True(File.Exists(partPath));
 
+            // B06 proof: the native export boundary emits a real neutral model file from the verified part. The
+            // target is inside the isolated allowlist, uses a format-specific extension, and is checked by file
+            // evidence rather than by SaveAs's Boolean alone. B06 证明：从已校验零件生成真实 STEP 文件；目标受
+            // 隔离 allowlist 和格式扩展名约束，并通过文件证据验证，而不是只相信 SaveAs 的 Boolean 返回值。
+            OperationResult<ExportReceipt> stepExport = await session.Export.ExportAsync(
+                part.DocumentId,
+                new CadExportRequest
+                {
+                    Format = "STEP",
+                    TargetPath = stepPath,
+                });
+            Assert.True(stepExport.IsSuccess, FormatError(stepExport.Error));
+            Assert.Equal("STEP", stepExport.Value!.Format);
+            Assert.Equal(part.StateHash, stepExport.Value.SourceStateHash);
+            Assert.True(File.Exists(stepPath));
+            Assert.True(new FileInfo(stepPath).Length > 0);
+
             // This is the first real 3D-to-2D proof: the drawing is created by SOLIDWORKS from its local template,
             // native views are inserted from the persisted part, and the saved .slddrw is reopened and inspected.
             // 这是首个真实三维到二维证明：由 SOLIDWORKS 使用本机 template 建图，从已持久化零件插入原生视图，
@@ -158,6 +177,22 @@ public sealed class B03NativePartLiveTests
             Assert.True(drawingSave.IsSuccess, FormatError(drawingSave.Error));
             Assert.True(File.Exists(drawingPath));
 
+            // The same provider boundary exports the generated native drawing to PDF. This is intentionally a
+            // single SaveAs operation for all sheets; sheet selection belongs to the future drawing release planner.
+            // 同一个 Provider boundary 将真实原生工程图导出为 PDF；当前明确导出全部 Sheet，Sheet 选择留给后续 release planner。
+            OperationResult<ExportReceipt> pdfExport = await session.Export.ExportAsync(
+                drawing.DocumentId,
+                new CadExportRequest
+                {
+                    Format = "PDF",
+                    TargetPath = pdfPath,
+                });
+            Assert.True(pdfExport.IsSuccess, FormatError(pdfExport.Error));
+            Assert.Equal("PDF", pdfExport.Value!.Format);
+            Assert.Equal(drawing.StateHash, pdfExport.Value.SourceStateHash);
+            Assert.True(File.Exists(pdfPath));
+            Assert.True(new FileInfo(pdfPath).Length > 0);
+
             OperationResult<CadInspectionSnapshot> reopenedDrawing = await drawing.ReopenAndInspectAsync();
             Assert.True(reopenedDrawing.IsSuccess, FormatError(reopenedDrawing.Error));
             Assert.True(reopenedDrawing.Value!.Views.Length >= 2);
@@ -203,7 +238,7 @@ public sealed class B03NativePartLiveTests
                 StringComparison.Ordinal);
             if (completed && !keepArtifact)
             {
-                foreach (string artifactPath in new[] { partPath, drawingPath })
+                foreach (string artifactPath in new[] { partPath, drawingPath, stepPath, pdfPath })
                 {
                     if (!File.Exists(artifactPath))
                     {

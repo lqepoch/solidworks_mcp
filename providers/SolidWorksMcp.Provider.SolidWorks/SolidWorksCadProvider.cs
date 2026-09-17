@@ -5,12 +5,13 @@ using SolidWorksMcp.Protocol;
 namespace SolidWorksMcp.Provider.SolidWorks;
 
 /// <summary>
-/// Native SOLIDWORKS provider: attach to one existing process and expose verified part plus single-part drawing slices.
+/// Native SOLIDWORKS provider: attach to one existing process and expose verified part, drawing, and neutral-export slices.
 /// </summary>
 /// <remarks>
-/// The native provider enables persisted part creation and the first real drawing loop. Assembly/export remain
-/// explicitly disabled until their own API and Live evidence gates are complete. 原生 Provider 已启用已持久化零件
-/// 和首个真实工程图闭环；装配/export 仍要等各自 API 与 Live evidence 门禁完成后开启。
+/// The native provider enables persisted part creation, the first real drawing loop, and an explicitly allowlisted
+/// neutral export loop. Assembly mutation remains disabled until its own API and Live evidence gate is complete.
+/// 原生 Provider 已启用持久化零件、首个真实工程图闭环和明确 allowlist 的中性导出闭环；装配 mutation 仍要等
+/// 自己的 API 与 Live evidence 门禁完成后开启。
 /// </remarks>
 public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
 {
@@ -20,7 +21,7 @@ public sealed class SolidWorksCadProvider : ICadProvider, IAsyncDisposable
         new CadCapability(CadCapabilityNames.AssemblyMutation, supported: false, "Native assembly mutation is planned after the B02 session foundation."),
         new CadCapability(CadCapabilityNames.DrawingMutation, supported: true),
         new CadCapability(CadCapabilityNames.Inspection, supported: true),
-        new CadCapability(CadCapabilityNames.Export, supported: false, "Native export is enabled by a later provider issue after COM identity guards are complete."),
+        new CadCapability(CadCapabilityNames.Export, supported: true),
         new CadCapability(CadCapabilityNames.Selection, supported: true),
         new CadCapability(CadCapabilityNames.PatternSemantics, supported: false, "Pattern semantics are owned by the engineering layer and are not implemented in B02."),
     ]);

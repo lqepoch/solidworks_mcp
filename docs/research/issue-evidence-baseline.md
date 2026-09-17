@@ -6,6 +6,34 @@ Retrieved from the public repository on 2026-09-16 (Asia/Shanghai) using the Git
 - Root Epic: https://github.com/lqepoch/solidworks_mcp/issues/1
 - Issue count at retrieval: 69 open issues
 
+## Current evidence override / 当前证据覆盖记录
+
+This section records the latest superseding evidence for the narrow native export and process-lifecycle slice. Older
+historical entries below are retained for chronology; when they say native export is unsupported or that B03 did not
+close the owned process, this section is the current state.
+
+本节记录窄版 native export 和进程生命周期切片的最新覆盖证据。下方旧条目保留历史时间线；其中关于 native export
+仍 unsupported、或 B03 不关闭 owned process 的描述，均以本节当前状态为准。
+
+- Commit under test: working tree change after `c6efc96` (commit only after the hosted and Live evidence below is recorded).
+- Native provider now exposes a bounded `ICadExportService`: `PDF` for drawings and `STEP`/`IGES`/`STL` for parts/assemblies.
+- `SolidWorksNativeExportService` performs path allowlist validation, document identity/state verification, selection
+  clearing, `IModelDocExtension.SaveAs`, Boolean/error-code checks, non-empty output proof and source state-hash recheck.
+- Official API evidence: `IModelDocExtension.SaveAs` signature and conversion behavior are recorded in
+  `docs/research/solidworks-api-knowledge.md`, cross-checked against the [official API page](https://help.solidworks.com/2023/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.IModelDocExtension~SaveAs.html).
+- Fresh-process local Live command:
+
+      powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -RepositoryRoot D:\Program\solidworks_mcp -Workspace C:\Users\lqepo\AppData\Local\SolidWorksMcp\test-workspace -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -NoBuild -Filter FullyQualifiedName~B03NativePartLiveTests
+
+      # exit 0; Live 1 passed; 0 failed; 0 skipped; elapsed about 136 seconds
+
+- The run started one fresh `SLDWORKS.exe` after graceful old-process handling, created native `.SLDPRT` and `.SLDDRW`,
+  exported non-empty STEP and PDF files, reopened and inspected the drawing, then closed the exact owned process.
+  Post-run inventory: `SLDWORKS_COUNT=0`. Successful-test cleanup removed only this run's four generated files from the
+  isolated user-local workspace after verification. This is real SOLIDWORKS 2022 evidence, not FakeCad evidence.
+- Hosted-safe build/test remains required after this evidence update. No complete B06, AutoDrawing compiler, drawing
+  release, assembly or full Epic completion claim is made.
+
 ## Authoritative execution DAG
 
 The root Epic comment defines this critical path:

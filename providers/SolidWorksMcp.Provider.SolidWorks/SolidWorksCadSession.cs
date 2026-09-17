@@ -38,10 +38,13 @@ internal sealed class SolidWorksCadSession : ICadSession
             SessionId,
             attachmentGeneration,
             () => Volatile.Read(ref lifecycleState) == 2);
-        Export = new UnsupportedSolidWorksExportService(
-            Capabilities,
-            () => Volatile.Read(ref lifecycleState) == 2,
-            SessionId);
+        Export = new SolidWorksNativeExportService(
+            host,
+            registry,
+            SessionId,
+            attachmentGeneration,
+            pathAllowlist,
+            () => Volatile.Read(ref lifecycleState) == 2);
         Selection = new SolidWorksNativeSelectionService(
             host,
             registry,
@@ -255,31 +258,5 @@ internal sealed class UnsupportedSolidWorksInspectionService(
         CadCapability capability = capabilities.Find(CadCapabilityNames.Inspection)
             ?? new CadCapability(CadCapabilityNames.Inspection, supported: false, "The native capability was not declared.");
         return Task.FromResult(SolidWorksProviderResults.Unsupported<CadInspectionSnapshot>("inspect", capability));
-    }
-}
-/// <summary>Export facade that returns an explicit capability error instead of touching the native session.</summary>
-internal sealed class UnsupportedSolidWorksExportService(
-    CadCapabilitySet capabilities,
-    Func<bool> isClosed,
-    SessionId sessionId) : ICadExportService
-{
-    public Task<OperationResult<ExportReceipt>> ExportAsync(
-        DocumentId documentId,
-        CadExportRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return Task.FromResult(SolidWorksProviderResults.Cancelled<ExportReceipt>("export"));
-        }
-
-        if (isClosed())
-        {
-            return Task.FromResult(SolidWorksProviderResults.Closed<ExportReceipt>("export", sessionId));
-        }
-
-        CadCapability capability = capabilities.Find(CadCapabilityNames.Export)
-            ?? new CadCapability(CadCapabilityNames.Export, supported: false, "The native capability was not declared.");
-        return Task.FromResult(SolidWorksProviderResults.Unsupported<ExportReceipt>("export", capability));
     }
 }

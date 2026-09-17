@@ -2,7 +2,7 @@
 param(
     [string]$RepositoryRoot,
     [string]$SolidWorksPath,
-    [string]$Workspace = (Join-Path $env:LOCALAPPDATA 'SolidWorksMcp\test-workspace'),
+    [string]$Workspace,
     [string]$Solution = 'SolidWorksMcp.slnx',
     [string]$Configuration = 'Release',
     [string]$Filter,
@@ -75,15 +75,16 @@ function Resolve-SolidWorksExecutable {
     param([string]$Candidate)
 
     if ($Candidate) {
-        $resolved = Resolve-Path -LiteralPath $Candidate -ErrorAction Stop
-        if ((Get-Item -LiteralPath $resolved.Path).PSIsContainer) {
-            $resolved = Get-ChildItem -LiteralPath $resolved.Path -Filter 'SLDWORKS.exe' -File -Recurse -ErrorAction Stop |
+        $resolvedPath = Resolve-Path -LiteralPath $Candidate -ErrorAction Stop
+        $resolvedItem = Get-Item -LiteralPath $resolvedPath.Path -ErrorAction Stop
+        if ($resolvedItem.PSIsContainer) {
+            $resolvedItem = Get-ChildItem -LiteralPath $resolvedItem.FullName -Filter 'SLDWORKS.exe' -File -Recurse -ErrorAction Stop |
                 Select-Object -First 1
         }
-        if ($null -eq $resolved -or -not (Test-Path -LiteralPath $resolved.FullName -PathType Leaf)) {
+        if ($null -eq $resolvedItem -or -not (Test-Path -LiteralPath $resolvedItem.FullName -PathType Leaf)) {
             throw "SolidWorksPath did not resolve to SLDWORKS.exe."
         }
-        return $resolved.FullName
+        return $resolvedItem.FullName
     }
 
     $doctor = Join-Path $RepositoryRoot 'scripts\Invoke-SolidWorksMcpDoctor.ps1'
@@ -99,6 +100,15 @@ function Resolve-SolidWorksExecutable {
 }
 
 $RepositoryRoot = (Resolve-Path -LiteralPath $RepositoryRoot -ErrorAction Stop).Path
+$defaultLocalApplicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+if ([string]::IsNullOrWhiteSpace($Workspace)) {
+    if ([string]::IsNullOrWhiteSpace($defaultLocalApplicationData)) {
+        throw 'No local application-data directory was discovered. Supply -Workspace explicitly.'
+    }
+
+    $Workspace = Join-Path $defaultLocalApplicationData 'SolidWorksMcp\test-workspace'
+}
+
 $solutionPath = if ([IO.Path]::IsPathRooted($Solution)) {
     (Resolve-Path -LiteralPath $Solution -ErrorAction Stop).Path
 }
