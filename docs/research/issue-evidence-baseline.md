@@ -975,3 +975,59 @@ cleanup. Private drawing-PDF content is not stored in this repository.
 本轮纯 planner/provider compile slice 没有启动 native SOLIDWORKS；机器进程清单保持 `SLDWORKS_COUNT=0`。后续任何
 Hole Wizard/Model Items native 运行都必须通过 `scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭现有会话，只拥有一个
 新进程，清理后验证进程数为零。秘密图纸 PDF 内容不会存入本仓库。
+
+## D08 drawing QA, targeted repair and release evidence / D08 工程图 QA、定向修复与 Release evidence
+
+Issue #36 requires `drawing.validate`, targeted deterministic repair and `drawing.release` to fail closed when rebuild
+health, requirement coverage, annotation association/provenance, layout, tolerance evidence or export verification is
+missing. The new vendor-neutral `DrawingQaReleasePlanner` is the first D08 foundation slice. It consumes the existing
+inspection, feature-level coverage, layout and manufacturing-annotation plans and produces one unified finding stream
+with `PASS`, `WARNING`, `REVIEW_REQUIRED` and `BLOCKING` states. It never uses screenshot similarity, OCR or private
+drawing-PDF content as proof.
+
+Issue #36 要求 `drawing.validate`、确定性的 targeted repair 和 `drawing.release` 在 rebuild 健康度、需求 coverage、标注关联/
+provenance、布局、公差 evidence 或导出验证缺失时 fail closed。本轮新增 vendor-neutral `DrawingQaReleasePlanner` 作为
+D08 foundation slice：它汇总现有 inspection、逐特征 coverage、layout 和制造标注 plan，输出统一的 `PASS`、`WARNING`、
+`REVIEW_REQUIRED`、`BLOCKING` findings。它不使用截图相似度、OCR 或秘密图纸 PDF 内容作为证明。
+
+The planner treats unavailable checks as blocking: no layout proof, no manufacturing annotation provenance plan, no
+configured artifact format, missing artifact, unverified SHA-256, artifact/source-state mismatch, rebuild error, state
+conflict, unresolved requirement or unsupported annotation cannot be released. Supported repair actions are deliberately
+narrow: redundant dimension suppression and applying an already-planned annotation position. Each action carries a
+stable target identity and precondition fingerprint, so a future Provider must re-inspect the exact drawing immediately
+before mutation and cannot move unrelated annotations.
+
+Planner 对 unavailable check 采取 blocking：没有 layout proof、没有制造标注 provenance plan、没有配置 artifact format、artifact
+缺失、SHA-256 未验证、artifact 与 source state 不一致、rebuild error、state conflict、未解决 requirement 或不支持的标注均不能
+release。当前支持的 repair action 刻意保持很窄：抑制重复尺寸、应用已经规划好的标注位置。每个 action 都携带 stable target
+identity 和 precondition fingerprint，未来 Provider 必须在 mutation 前重新 inspection 精确 drawing，不能移动无关标注。
+
+`DrawingQaReleasePlanner.VerifyArtifact` computes a lowercase SHA-256 without modifying the file. `CreateManifest` emits
+the exact drawing identity, state hash, QA fingerprint, all findings, artifact paths/checksums and the release decision;
+the creation timestamp is intentionally excluded from the stable manifest fingerprint. A blocked manifest is evidence of
+refusal, not a released drawing.
+
+`DrawingQaReleasePlanner.VerifyArtifact` 在不修改文件的情况下计算 lowercase SHA-256。`CreateManifest` 输出精确 drawing identity、
+state hash、QA fingerprint、全部 findings、artifact path/checksum 和 release decision；创建时间刻意不参与稳定 manifest fingerprint。
+Blocked manifest 只是拒绝证据，不能冒充已 release 的工程图。
+
+Focused D08 unit evidence:
+
+    dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~DrawingQaReleasePlannerTests --logger "console;verbosity=minimal" # exit 0; 4 passed; 0 failed; 0 skipped
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 88 + Contract 12 + FakeCad 10 passed
+    git diff --check # exit 0
+
+This slice intentionally stops before exposing a new public MCP mutation endpoint. The next D08 slice must bind this plan
+to the exact inspected drawing, materialize only precondition-matching repair actions through the transaction engine,
+export SLDDrw plus configured PDF/DWG/DXF outputs, write the evidence manifest, then run the same native 3D-to-2D Live
+workflow. Any native run must continue through `scripts/Invoke-SolidWorksLiveTests.ps1`, which closes old SOLIDWORKS before
+launch and verifies `SLDWORKS_COUNT=0` after cleanup. The existing native baseline remains the actual curved-part,
+through-hole, multi-view, section-view and PDF proof; this pure D08 slice does not claim a new native process run.
+
+本切片有意还没有暴露新的 public MCP mutation endpoint。下一步 D08 必须把该 plan 绑定到精确 inspection drawing，只通过
+transaction engine 执行满足 precondition 的 repair action，导出 SLDDrw 与配置的 PDF/DWG/DXF，写 evidence manifest，然后运行
+同一条真实 3D-to-2D Live workflow。任何 native run 仍必须通过 `scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭旧
+SOLIDWORKS，清理后验证 `SLDWORKS_COUNT=0`。现有 native baseline 仍是真实曲面零件、通孔、多视图、剖视和 PDF 证明；本次
+纯 D08 slice 没有宣称启动新的 native process。
