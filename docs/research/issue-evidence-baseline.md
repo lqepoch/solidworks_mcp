@@ -1062,3 +1062,31 @@ Public MCP D08 repair evidence:
     powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~McpDrawingRepairLiveTests -NoBuild # exit 0; 1 passed; 0 failed; 0 skipped
     SLDWORKS_COUNT_BEFORE=0
     SLDWORKS_COUNT_AFTER=0
+## C04 functional tolerance engine foundation / C04 功能公差引擎基础
+
+Issue #26/C04 has a vendor-neutral foundation in commit `a12e735`. It is intentionally a domain-layer slice, not a
+claim that native SOLIDWORKS tolerance annotations or every enterprise RulePack standard are complete.
+
+- `src/SolidWorksMcp.Tolerancing/FunctionalToleranceEngine.cs` keeps design nominal, functional limits, drawing
+  nominal/deviations, fit class, general tolerance, manufacturing capability, inspection method, criticality,
+  provenance and approval state as separate fields.
+- `ToleranceStackupRequest` retains signed terms and provenance. The default `WorstCase` evaluator computes adverse
+  limits and returns an ordered derivation chain suitable for audit and `tolerance.explain` integration.
+- The canonical installation case is represented as `installation-space - assembly-error - required-clearance`,
+  yielding a maximum allowed part size of `98` from an installation space of `100`; the drawing representation is
+  checked independently and cannot widen the functional maximum.
+- Unapproved `private_drawing_review`/AI-origin requirements remain `REVIEW_REQUIRED`; drawing limits outside the
+  functional envelope are `BLOCKING`. RSS and Monte-Carlo are explicit enum values but remain review-gated rather
+  than silently treated as Worst-Case.
+- `tests/SolidWorksMcp.UnitTests/FunctionalToleranceEngineTests.cs` covers the 100-to-98 derivation, approval gate,
+  drawing-limit violation and explicit statistical-method review state. The implementation contains no SOLIDWORKS
+  COM reference and requires no Live test.
+
+Evidence:
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                              # exit 0; Unit 93 + Contract 14 + FakeCad 11 passed
+
+This is a C04 foundation. Native `IDimensionTolerance` mapping, enterprise RulePack resolution, multi-part assembly
+stack-ups and a public MCP explain endpoint remain follow-up work and are not represented as passed here.
