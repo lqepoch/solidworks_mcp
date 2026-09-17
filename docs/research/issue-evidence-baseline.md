@@ -1128,6 +1128,44 @@ Focused evidence:
     dotnet format tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
     dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-restore --filter FullyQualifiedName~EngineeringGraphTests --logger "console;verbosity=minimal" # exit 0; 8 passed; 0 failed; 0 skipped
 
+## C03 versioned RulePack foundation and provenance evidence / C03 版本化 RulePack 基础与 provenance 证据
+
+Issue #25 requires versioned GB/enterprise/customer drawing rules, source metadata, deterministic precedence, conflict
+diagnostics and rule-level explain output. The new 'SolidWorksMcp.RuleEngine' slice provides immutable typed data for
+projection, sheet sizes, scale denominators, text/view spacing, section/detail labels, repeated-feature notation,
+reserved zones and general tolerance. 'DrawingRulePackResolver' applies Standard → Enterprise → Customer in fixed order,
+rejects duplicate identifiers and same-layer conflicts, preserves field-level provenance, and fails closed when the base
+pack or an overlay is malformed.
+
+Issue #25 要求版本化 GB/enterprise/customer 制图规则、来源 metadata、确定性覆盖优先级、冲突诊断以及规则级 explain。
+新的 'SolidWorksMcp.RuleEngine' slice 为投影、图幅、比例分母、字高/视图间距、剖视/局部放大标签、重复特征表达、
+保留区和一般公差提供 immutable typed data。'DrawingRulePackResolver' 按 Standard → Enterprise → Customer 固定
+顺序合并，拒绝重复标识和同层冲突，保留字段级 provenance，并在 base/overlay malformed 时 fail closed。
+
+'StandardRulePackCatalog' records official catalogue metadata for 'GB/T 1800.1-2020', 'GB/T 1804-2000' and
+'GB/T 1182-2018' using the National Standards Public Service Platform. It stores URLs, status, retrieval time and
+licensing notes only; standard full text, scanned pages and copyrighted tables are not committed. The catalog values are
+explicit compiler defaults and are not presented as a complete transcription of those standards. Enterprise/customer
+packs remain the governed place for project-specific clauses and detailed tolerance tables.
+
+本切片只建立 RulePack 数据和 provenance 基础，还没有声称 AutoDrawing 已按两个 RulePack 完成 native SOLIDWORKS
+图纸再生成；下一步必须把 'ResolvedDrawingRulePack' 接到 view planner、dimension planner、layout/QA 和真实 Provider
+出图，并以同一个私有单零件测试工作区抽取两个测试验证。秘密 '图纸/' PDF 不进入仓库、日志、截图或 artifact。
+
+Focused and Hosted evidence:
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
+    dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~RulePackTests --logger "console;verbosity=minimal" # exit 0; 7 passed; 0 failed; 0 skipped
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                               # exit 0; Unit 105 + Contract 16 + FakeCad 11 passed
+    git diff --check                                                                                  # exit 0
+
+The official metadata pages used for this catalog are [GB/T 1800.1-2020](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B2EA3A6454B903DCF466A0CE16F2ED26),
+[GB/T 1804-2000](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=1BF8CFBC644315488F68433EEC2F9D58) and
+[GB/T 1182-2018](https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=C87A687A21B36E2F2D3A09BDF03DCA01). The pages identify
+the standards and their current catalogue status; the implementation intentionally uses metadata rather than copying
+the standard text.
+
 The focused tests cover round-trip fingerprint stability, insertion-order independence, duplicate node identity,
 dangling edges, orphan requirements, directed cycles, added/removed/changed node and edge diff entries, and empty diffs.
 The full hosted gate remains required before treating C01 as complete.

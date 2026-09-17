@@ -43,6 +43,35 @@ public readonly record struct Length
     public override string ToString() => $"{Millimeters.ToString("G17", CultureInfo.InvariantCulture)} mm";
 }
 
+/// <summary>
+/// Represents the positive denominator in a drawing scale written as 1:n.
+/// 表示 1:n 工程图比例中的正分母，避免工程规则边界暴露无语义裸 double。
+/// </summary>
+public readonly record struct ScaleDenominator
+{
+    /// <summary>Creates a finite positive drawing-scale denominator.</summary>
+    [JsonConstructor]
+    public ScaleDenominator(double value)
+    {
+        QuantityValidation.RequireFinite(value, nameof(value));
+        if (value <= 0d)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "A scale denominator must be positive.");
+        }
+
+        Value = value;
+    }
+
+    /// <summary>Gets the numeric denominator for provider/layout calculations.</summary>
+    public double Value { get; }
+
+    /// <summary>Creates a denominator from a positive finite value.</summary>
+    public static ScaleDenominator FromValue(double value) => new(value);
+
+    /// <summary>Returns the stable invariant representation used in audit output.</summary>
+    public override string ToString() => Value.ToString("G17", CultureInfo.InvariantCulture);
+}
+
 /// <summary>Represents a plane or rotational angle in degrees.</summary>
 /// <remarks>工程/MCP 层使用度；SOLIDWORKS API 的弧度转换只能发生在 Provider 边界。</remarks>
 public readonly record struct Angle
