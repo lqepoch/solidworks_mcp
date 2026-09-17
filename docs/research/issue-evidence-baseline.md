@@ -949,6 +949,22 @@ drawing view 上调用 `IDrawingDoc.InsertModelAnnotations3`。只接受与请�
 type/count、feature identity、provenance 和 approval evidence；若 SOLIDWORKS 没有返回请求类别则 fail-closed。Inspection
 也能把 native datum、datum-target、cosmetic-thread 分类为稳定 vendor-neutral kind，而不是泄漏厂商数字 type。
 
+This slice now has an explicit `ManufacturingAnnotationMaterializer`. High-level part drawing generation creates a
+`ModelDimension` requirement, plans it through `ManufacturingAnnotationPlanner`, calls the provider-neutral
+`ICadDrawingDocument.AddAnnotationAsync` contract, and promotes the item from Warning to Pass only after a native
+annotation identity is returned. The materializer validates all import requests before the first mutation, rejects two
+requirements sharing one provider view/category scope, and preserves the updated plan fingerprint. The native Provider
+also fails closed when `InsertModelAnnotations3` returns more than one matching annotation instead of silently keeping
+the first item. This is the first end-to-end D02 materialization slice; feature-level selectors for Hole Wizard/PMI and
+controlled AutoDimension fallback remain subsequent work.
+
+本切片现在具备明确的 `ManufacturingAnnotationMaterializer`。高层零件出图先创建 `ModelDimension` requirement，经过
+`ManufacturingAnnotationPlanner`，调用 vendor-neutral `ICadDrawingDocument.AddAnnotationAsync` contract；只有 Provider
+返回 native annotation identity 后，item 才从 Warning 提升为 Pass。materializer 在第一个 mutation 前完成所有 import
+请求校验，拒绝两个 requirement 共用同一 provider view/category scope，并保存更新后的 plan fingerprint。native
+Provider 在 `InsertModelAnnotations3` 返回多个匹配标注时也会 fail-closed，不再静默保留第一项。这是 D02 首个端到端
+materialization slice；Hole Wizard/PMI 的 feature-level selector 与受控 AutoDimension fallback 仍属于后续工作。
+
 Center marks and centerlines deliberately remain `annotation-provider-contract-required` in this slice. Their official
 SOLIDWORKS APIs (`IDrawingDoc.InsertCenterMark3` / `InsertCenterLine2`) require a safe declarative geometry selector and
 post-write association proof; the generic Model Items bitmask is not sufficient. The planner therefore blocks them for
@@ -1160,7 +1176,7 @@ Focused and Hosted evidence:
     dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -v:minimal                         # exit 0; 0 warnings; 0 errors
     dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~RulePackTests --logger "console;verbosity=minimal" # exit 0; 7 passed; 0 failed; 0 skipped
     dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~PartDrawingPlannerTests --logger "console;verbosity=minimal" # exit 0; 5 passed; 0 failed; 0 skipped
-    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                               # exit 0; Unit 106 + Contract 16 + FakeCad 11 passed
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                               # exit 0; Unit 106 + Contract 16 + FakeCad 13 passed
     dotnet build tests/SolidWorksMcp.LiveSolidWorksTests/SolidWorksMcp.LiveSolidWorksTests.csproj -c Release --no-restore -p:SolidWorksInstallRoot=D:\Solidworks2022\SOLIDWORKS -v:minimal # exit 0; 0 warnings; 0 errors
     powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~McpReferenceDrivenSinglePartClassesCreateVerifiedThreeDAndTwoDArtifacts -NoBuild # exit 0; Live 1 passed; 0 failed; 0 skipped
     SLDWORKS_COUNT_BEFORE=0
@@ -1190,7 +1206,8 @@ semantic classes observed during private drawing review: a rounded plate and a f
 generic test inputs; they do not contain private PDF filenames, title-block content or source drawing text. Each case
 creates a real SOLIDWORKS part from a connected line/arc sketch, persists an `SLDPRT`, creates a native drawing with
 orthographic and isometric views, persists an `SLDDRW`, exports a PDF, and verifies non-empty artifacts through the MCP
-result contract. The strengthened result assertions also require one solid body, a native feature and topology entity,
+result contract. The high-level path now materializes the native Model Item through the manufacturing-annotation plan
+and asserts its read-back identity after reopen. The strengthened result assertions also require one solid body, a native feature and topology entity,
 positive measured volume, a non-degenerate three-axis body bounding box, the requested extrusion depth, at least three
 persisted drawing views and at least one read-back annotation. The rendered PDF evidence was inspected locally; only the
 generic semantic conclusion is recorded here.
@@ -1209,3 +1226,8 @@ and the provider was corrected after checking the official `IBody2.GetBodyBox` c
 not claim that private drawing dimensions, annotations, tolerance provenance or full manufacturing coverage have been
 reconstructed. Those remain gated by the Engineering Requirement Graph, provider inspection and the later Drawing Compiler
 issues.
+
+留存的 artifact 只存在于用户本地 evidence workspace。这证明了两个通用单零件类别当前从 MCP 到 native 三维/二维的链路，
+并捕获了错误的 COM 几何解释：前一次失败暴露了退化 Z 包围盒，随后依据官方 `IBody2.GetBodyBox` contract
+`[X1,Y1,Z1,X2,Y2,Z2]` 修正 Provider。它不声称已经重建秘密图纸的尺寸、全部标注、公差 provenance 或完整制造 coverage；
+这些仍由 Engineering Requirement Graph、Provider inspection 和后续 Drawing Compiler issues 约束。

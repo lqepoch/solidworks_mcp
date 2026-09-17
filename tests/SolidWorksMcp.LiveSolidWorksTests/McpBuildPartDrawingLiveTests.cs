@@ -186,6 +186,8 @@ public sealed class McpBuildPartDrawingLiveTests
                 Assert.Contains("workflow", result.StructuredContent.ToString(), StringComparison.Ordinal);
                 Assert.Contains("drawing.view.count", result.StructuredContent.ToString(), StringComparison.Ordinal);
                 Assert.Contains("export.format", result.StructuredContent.ToString(), StringComparison.Ordinal);
+                Assert.Contains("drawing.manufacturing.native-import.count", result.StructuredContent.ToString(), StringComparison.Ordinal);
+                Assert.Contains("annotation-native-materialized", result.StructuredContent.ToString(), StringComparison.Ordinal);
                 AssertNativeGeometryAndDrawingEvidence(result, referenceCase);
                 Assert.True(File.Exists(partPath), $"The {referenceCase.Id} part was not persisted.");
                 Assert.True(File.Exists(drawingPath), $"The {referenceCase.Id} drawing was not persisted.");

@@ -10,6 +10,9 @@ namespace SolidWorksMcp.AutoDrawing;
 /// </summary>
 public enum ManufacturingAnnotationKind
 {
+    /// <summary>Associative model dimension imported from the native model/PMI store.</summary>
+    ModelDimension,
+
     /// <summary>Hole Wizard or approved native hole callout.</summary>
     HoleCallout,
 
@@ -228,7 +231,7 @@ public static class ManufacturingAnnotationPlanner
         }
 
         ImmutableArray<DrawingManufacturingAnnotationPlanItem> planItems = items.ToImmutable();
-        string fingerprint = Fingerprint(planItems);
+        string fingerprint = ComputeFingerprint(planItems);
         return new DrawingManufacturingAnnotationPlan
         {
             Items = planItems,
@@ -355,6 +358,7 @@ public static class ManufacturingAnnotationPlanner
     {
         modelItemKinds = kind switch
         {
+            ManufacturingAnnotationKind.ModelDimension => DrawingModelAnnotationImportKinds.Dimensions,
             ManufacturingAnnotationKind.HoleCallout => DrawingModelAnnotationImportKinds.HoleCallouts,
             ManufacturingAnnotationKind.Datum => DrawingModelAnnotationImportKinds.Datums,
             ManufacturingAnnotationKind.DatumTarget => DrawingModelAnnotationImportKinds.DatumTargets,
@@ -396,7 +400,11 @@ public static class ManufacturingAnnotationPlanner
         }
     }
 
-    private static string Fingerprint(IEnumerable<DrawingManufacturingAnnotationPlanItem> items)
+    /// <summary>
+    /// Recomputes the deterministic plan fingerprint after a provider has materialized an import.
+    /// Provider 物化 import 后重新计算确定性 plan fingerprint。
+    /// </summary>
+    internal static string ComputeFingerprint(IEnumerable<DrawingManufacturingAnnotationPlanItem> items)
     {
         string canonical = string.Join(
             "\n",

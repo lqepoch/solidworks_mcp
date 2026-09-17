@@ -1165,7 +1165,25 @@ internal sealed class SolidWorksNativeDrawingDocument(
                             ErrorCodes.InvariantViolation,
                             "SOLIDWORKS returned model annotations, but none matched the requested native annotation categories.",
                             ErrorCategories.Invariant,
-                            remediation: "Inspect native annotation types and RulePack support before retrying."));
+                        remediation: "Inspect native annotation types and RulePack support before retrying."));
+                }
+
+                // The provider-neutral contract returns one stable annotation identity. Keeping the first item when
+                // SOLIDWORKS returned several would silently discard evidence and could create a duplicate on retry.
+                // vendor-neutral contract 只返回一个稳定 annotation identity；SOLIDWORKS 返回多个时若仍保留第一个，
+                // 就会静默丢失 evidence，并可能在 retry 时制造重复标注，因此必须 fail closed。
+                if (acceptedAnnotationCount != 1)
+                {
+                    return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "SOLIDWORKS returned multiple native annotations for one scoped Model Item request.",
+                            ErrorCategories.Invariant,
+                            remediation: "Split the request by an exact provider selector or submit one grouped engineering requirement."),
+                        new EvidenceObservation(
+                            "annotation.native-count",
+                            acceptedAnnotationCount.ToString(System.Globalization.CultureInfo.InvariantCulture)));
                 }
 
                 string nativeIdentity = firstAnnotation.GetName()?.Trim() ?? string.Empty;

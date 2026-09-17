@@ -148,10 +148,6 @@ public static class PartDrawingBuildService
                 views.Add(view.Value);
             }
 
-            // Model-dimensions intentionally uses a non-empty semantic request label only for FakeCad validation.
-            // Native SOLIDWORKS ignores that label and returns the associative dimension text it actually inserted.
-            // model-dimensions 只为 FakeCad validation 携带非空语义 label；native SOLIDWORKS 会忽略它并返回真正
-            // 插入的 associative dimension text，绝不把请求文字伪装成原生尺寸。
             DrawingViewSnapshot? sectionView = null;
             if (request.ThroughHolePattern is not null && views.Count > 0)
             {
@@ -188,21 +184,36 @@ public static class PartDrawingBuildService
                 views.Add(section.Value);
             }
 
-            OperationResult<DrawingAnnotationSnapshot> modelDimensions = await drawing.AddAnnotationAsync(
-                new DrawingAnnotationRequest
-                {
-                    RequestedAnnotationId = new AnnotationId($"{request.DrawingDocumentId.Value}:model-dimensions"),
-                    ViewId = views[0].ViewId,
-                    Kind = "model-dimensions",
-                    Text = "native-model-dimensions",
-                    CoverageKeys = ["part.profile.native-model-dimension"],
-                    Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(225d)),
-                },
-                cancellationToken).ConfigureAwait(false);
-            if (!modelDimensions.IsSuccess || modelDimensions.Value is null)
+            // Route the model dimension through the same requirement -> plan -> native materializer path used by the
+            // future PMI/Hole Wizard compiler. The old direct primitive call made a drawing, but bypassed the
+            // manufacturing graph and could not prove that the imported annotation was release evidence. 这里把模型
+            // 尺寸走与未来 PMI/Hole Wizard compiler 相同的 requirement -> plan -> native materializer 链路；旧的
+            // 直接 primitive 虽然能画图，却绕过了制造图，也不能证明导入标注已经成为 release evidence。
+            DrawingManufacturingAnnotationRequirement modelDimensionRequirement = new()
             {
-                return Failure(modelDimensions);
+                RequirementId = $"{request.DrawingDocumentId.Value}:profile-depth",
+                FeatureIdentity = extrusion.Value.FeatureId.Value,
+                Kind = ManufacturingAnnotationKind.ModelDimension,
+                ViewId = views[0].ViewId,
+                CoverageKeys = ["part.profile.native-model-dimension"],
+            };
+            DrawingManufacturingAnnotationPlan modelDimensionPlan = ManufacturingAnnotationPlanner.Plan(
+                [modelDimensionRequirement],
+                []);
+            OperationResult<DrawingManufacturingAnnotationMaterialization> modelDimensionMaterialization =
+                await ManufacturingAnnotationMaterializer.MaterializeAsync(
+                    drawing,
+                    modelDimensionPlan,
+                    cancellationToken).ConfigureAwait(false);
+            if (!modelDimensionMaterialization.IsSuccess
+                || modelDimensionMaterialization.Value is null
+                || modelDimensionMaterialization.Value.MaterializedAnnotations.Length != 1)
+            {
+                return Failure(modelDimensionMaterialization);
             }
+
+            DrawingAnnotationSnapshot modelDimensions = modelDimensionMaterialization.Value.MaterializedAnnotations[0];
+            DrawingManufacturingAnnotationPlan manufacturingAnnotations = modelDimensionMaterialization.Value.Plan;
 
             DrawingAnnotationSnapshot? patternCallout = null;
             RepeatedFeatureCalloutPlan? patternCalloutPlan = null;
@@ -281,6 +292,18 @@ public static class PartDrawingBuildService
                     drawingInspection.Evidence);
             }
 
+            if (!drawingInspection.Value.Annotations.Any(annotation => annotation.AnnotationId == modelDimensions.AnnotationId))
+            {
+                return OperationResults.Failure<PartDrawingBuildResult>(
+                    drawingInspection.OperationId,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The persisted drawing did not contain the verified native Model Item identity.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing artifact and inspect native Model Items before retrying."),
+                    drawingInspection.Evidence);
+            }
+
             OperationResult<ExportReceipt> pdf = await session.Export.ExportAsync(
                 drawing.DocumentId,
                 new CadExportRequest
@@ -310,7 +333,8 @@ public static class PartDrawingBuildService
                 HolePattern = holePattern,
                 Views = views.ToImmutable(),
                 SectionView = sectionView,
-                ModelDimensions = modelDimensions.Value,
+                ModelDimensions = modelDimensions,
+                ManufacturingAnnotations = manufacturingAnnotations,
                 PatternCallout = patternCallout,
                 Pdf = pdf.Value,
                 RulePackId = request.RulePack?.PackId,
@@ -331,6 +355,8 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.section-view", sectionView?.Name ?? "none"),
                         new EvidenceObservation("drawing.section-view.trigger", sectionView is null ? "not-requested" : "verified-internal-hole-group"),
                         new EvidenceObservation("drawing.annotation.count", drawingInspection.Value.Annotations.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("drawing.manufacturing.native-import.count", manufacturingAnnotations.Items.Count(item => item.Code == "annotation-native-materialized").ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("drawing.manufacturing.plan-fingerprint", manufacturingAnnotations.Fingerprint),
                         new EvidenceObservation("part.hole-pattern", holePattern?.Name ?? "none"),
                         new EvidenceObservation("part.hole-pattern.kind", holePattern?.Kind ?? "none"),
                         new EvidenceObservation(
@@ -528,6 +554,9 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>Native model-dimension annotation result.</summary>
     public required DrawingAnnotationSnapshot ModelDimensions { get; init; }
+
+    /// <summary>Verified manufacturing-annotation plan after native Model Item materialization.</summary>
+    public DrawingManufacturingAnnotationPlan? ManufacturingAnnotations { get; init; }
 
     /// <summary>One compressed semantic callout for the optional repeated feature group.</summary>
     public DrawingAnnotationSnapshot? PatternCallout { get; init; }
