@@ -807,6 +807,57 @@ to be restored. Any other export mutation remains `STATE_CONFLICT`.
 title、update stamp、feature count 均未变化。Export adapter 现在只允许这一种精确的 clean-to-dirty 转换，调用 silent
 `IModelDoc2.Save3`，并要求原始 fingerprint 恢复；任何其他 export mutation 仍返回 `STATE_CONFLICT`。
 
+## D06 deterministic paper-space layout slice / D06 确定性纸空间布局切片
+
+Issue #34 now has a vendor-neutral `PartDrawingLayoutPlanner`. It consumes explicit paper-space rectangles supplied by a
+Provider/RulePack boundary: fixed drawing views, projected geometry, dimensions, callouts, labels, center marks, leaders,
+and reserved zones such as title blocks or BOM areas. Rectangles and spacing use the protocol `Length` type, so the
+engineering boundary does not expose unitless dimensional `double` values. The planner never reads private drawing PDFs,
+never infers size from visible annotation text, and never calls SOLIDWORKS COM.
+
+Issue #34 目前已经有 vendor-neutral `PartDrawingLayoutPlanner`。它从 Provider/RulePack boundary 接收显式纸空间矩形，覆盖
+固定 drawing view、投影几何、尺寸、callout、label、center mark、leader，以及 title block/BOM 等 reserved zone。矩形与间距
+使用 Protocol `Length`，工程边界不会暴露无单位 dimensional `double`。规划器不读取秘密图纸 PDF，不从可见文字猜尺寸，也不调用
+SOLIDWORKS COM。
+
+The pass is deterministic and identity-based. It sorts by semantic kind, view/anchor identity and stable item identity;
+it attempts the requested position first, then a bounded deterministic reflow ring. Dimension items receive explicit tiers.
+Moved callouts/labels/leaders retain their stable association and receive an orthogonal leader route. The QA output records
+`view-view-collision`, `annotation-annotation-collision`, `annotation-geometry-collision`, `reserved-zone-collision`,
+`off-sheet-*` and `layout-infeasible` findings. When the current sheet cannot satisfy the constraints, the plan records a
+stable escalation rationale for dimension-tier spacing, scale reduction, sheet upgrade, detail view or additional sheet.
+
+该 pass 按 identity 确定性执行：按语义类别、view/anchor identity、stable item identity 排序；先尝试请求位置，再执行有界且固定顺序
+的 reflow ring。Dimension 会得到明确 tier。被移动的 callout/label/leader 保留 stable association，并生成正交 leader route。QA
+输出明确记录 `view-view-collision`、`annotation-annotation-collision`、`annotation-geometry-collision`、
+`reserved-zone-collision`、`off-sheet-*` 和 `layout-infeasible`。当前图幅无法满足约束时，plan 记录 dimension-tier spacing、缩小
+比例、升级图幅、增加 detail view 或新增 sheet 的稳定升级理由。
+
+`PartDrawingCoverageAnalyzer` accepts the optional layout proof and includes it in `CanRelease`; a blocking/review layout
+finding therefore cannot be hidden by otherwise complete semantic dimension coverage. The planner's SHA-256 fingerprint is
+stable across input enumeration order and is suitable for regeneration/audit comparison.
+
+`PartDrawingCoverageAnalyzer` 现在可以接收可选 layout proof 并纳入 `CanRelease`；因此即使语义尺寸 coverage 完整，blocking/review
+layout finding 也不能被掩盖。规划器输出的 SHA-256 fingerprint 不受输入 enumeration order 影响，可用于再生与 audit 对比。
+
+Hosted evidence for this slice:
+
+    dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0
+    dotnet build SolidWorksMcp.hosted.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true -v:minimal # exit 0; 0 warnings; 0 errors
+    dotnet test SolidWorksMcp.hosted.slnx -c Release --no-build --no-restore --logger "console;verbosity=minimal" # exit 0; Unit 79 + Contract 12 + FakeCad 10 passed
+    git diff --check # exit 0
+
+Focused Unit cases cover stable regeneration, dimension-tier reflow, view-view collision, reserved-zone collision,
+off-sheet geometry, annotation-geometry reflow with leader routing, infeasible-sheet escalation, and the coverage release
+gate. Native Live was intentionally not started for this pure planner slice. Whenever the next native outline/materialization
+slice runs, it must continue to use `scripts/Invoke-SolidWorksLiveTests.ps1`, which closes old SOLIDWORKS sessions before
+launch, owns exactly one fresh PID, and verifies `SLDWORKS_COUNT=0` after cleanup.
+
+本切片 focused Unit 覆盖稳定再生、dimension-tier reflow、view-view collision、reserved-zone collision、off-sheet geometry、带 leader
+routing 的 annotation-geometry reflow、不可行图幅 escalation，以及 coverage release gate。本次纯 planner slice 有意不启动 native Live。
+下一步 native outline/materialization 接入仍必须使用 `scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭旧 SOLIDWORKS，只拥有一个新 PID，
+清理后验证 `SLDWORKS_COUNT=0`。
+
 Final evidence on the local SOLIDWORKS 2022 machine:
 
     dotnet format SolidWorksMcp.hosted.slnx --no-restore --verify-no-changes --severity info --verbosity quiet # exit 0

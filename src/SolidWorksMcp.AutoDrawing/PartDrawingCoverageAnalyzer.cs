@@ -60,10 +60,17 @@ public sealed record PartDrawingCoverageReport
     /// </summary>
     public ImmutableArray<PartDrawingDimensionCoverageFinding> DimensionFindings { get; init; } = [];
 
+    /// <summary>
+    /// Optional D06 paper-space layout proof. Null means layout has not yet been supplied to this coverage pass.
+    /// 可选的 D06 纸空间布局 proof；为 null 表示本次 coverage pass 尚未接收 layout plan。
+    /// </summary>
+    public DrawingLayoutPlan? LayoutPlan { get; init; }
+
     /// <summary>True only when no blocking or unresolved review finding remains.</summary>
     public bool CanRelease =>
         Findings.All(finding => finding.Status is PartDrawingCoverageStatus.Pass or PartDrawingCoverageStatus.Warning)
-        && DimensionFindings.All(finding => finding.Status is PartDrawingDimensionFindingStatus.Pass or PartDrawingDimensionFindingStatus.Warning);
+        && DimensionFindings.All(finding => finding.Status is PartDrawingDimensionFindingStatus.Pass or PartDrawingDimensionFindingStatus.Warning)
+        && (LayoutPlan is null || LayoutPlan.CanRelease);
 }
 
 /// <summary>
@@ -80,7 +87,8 @@ public static class PartDrawingCoverageAnalyzer
         PartDrawingRequirementSet requirements,
         PartDrawingPlan plan,
         CadInspectionSnapshot drawingInspection,
-        PartDrawingDimensionPlan? dimensionPlan = null)
+        PartDrawingDimensionPlan? dimensionPlan = null,
+        DrawingLayoutPlan? layoutPlan = null)
     {
         ArgumentNullException.ThrowIfNull(requirements);
         ArgumentNullException.ThrowIfNull(plan);
@@ -147,6 +155,7 @@ public static class PartDrawingCoverageAnalyzer
                 .OrderBy(finding => finding.Status)
                 .ThenBy(finding => finding.CoverageKey, StringComparer.Ordinal)],
             DimensionFindings = dimensionPlan?.Findings ?? [],
+            LayoutPlan = layoutPlan,
         };
     }
 
