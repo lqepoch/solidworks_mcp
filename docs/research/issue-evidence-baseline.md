@@ -1361,3 +1361,29 @@ Evidence:
 
 This proves the MCP boundary and FakeCad orchestration only; it does not claim a new native Live run while the existing
 SOLIDWORKS process safety blocker remains.
+
+## Native view reflow contract / native view 重排 contract
+
+The drawing compiler now has a provider-neutral `DrawingViewReflowPlanner` and a narrow
+`ICadDrawingDocument.RepositionViewAsync` mutation contract. The planner consumes only reopened native view outlines,
+RulePack margins and reserved zones; it produces a stable fingerprint and exact `ViewId`/current-position/target-position
+preconditions. FakeCad proves stale state and stale position rejection. The native provider uses the locally verified
+`IView.SetXform(Object)` contract, preserves native scale, rebuilds, and requires position plus positive outline
+read-back before returning success. No arbitrary COM, screenshot geometry or private drawing content is used.
+
+Evidence:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info # exit 0
+    dotnet build SolidWorksMcp.slnx -c Release --no-restore                         # exit 0; 0 warnings; 0 errors
+    dotnet test tests/SolidWorksMcp.UnitTests/SolidWorksMcp.UnitTests.csproj -c Release --no-build --no-restore # exit 0; 108 passed; 0 failed; 0 skipped
+    dotnet test tests/SolidWorksMcp.FakeCadTests/SolidWorksMcp.FakeCadTests.csproj -c Release --no-build --no-restore # exit 0; 16 passed; 0 failed; 0 skipped
+    dotnet test tests/SolidWorksMcp.ContractTests/SolidWorksMcp.ContractTests.csproj -c Release --no-build --no-restore # exit 0; 20 passed; 0 failed; 0 skipped
+
+Fresh native Live evidence is intentionally not claimed in this increment because the previous `SLDWORKS.exe` process
+did not close through the bounded graceful path. The next Live run must use the repository harness, close the old process
+before launch, start exactly one owned process, and leave the artifact/user session untouched on failure.
+
+The required native attempt was made and stopped before process launch:
+
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~D09ViewReflowLiveTests -NoBuild
+    # exit 1; SLDWORKS_COUNT_BEFORE=1; BLOCKED_HUMAN_ACTION_REQUIRED; PID 21396 had no closable main window; no blind termination

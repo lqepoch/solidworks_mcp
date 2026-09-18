@@ -568,6 +568,81 @@ public static class PartDrawingBuildService
                 drawingInspection.Value,
                 request.RulePack);
 
+            DrawingViewReflowPlan? nativeReflowPlan = null;
+            ImmutableArray<DrawingViewRepairReceipt> reflowReceipts = [];
+            if (NeedsViewReflow(nativeLayoutPlan))
+            {
+                // Reflow is a bounded second compiler pass. It consumes only persisted native outlines and sends
+                // exact view-position repairs through the provider contract; it never edits COM from this layer.
+                // 重排是一个有界的第二次 compiler pass，只消费 persisted native outline，并通过 Provider contract
+                // 发送精确 view-position repair；本层绝不直接操作 COM。
+                nativeReflowPlan = BuildNativeViewReflowPlan(drawingInspection.Value, request.RulePack);
+                if (nativeReflowPlan is not null && nativeReflowPlan.CanApply)
+                {
+                    var receipts = ImmutableArray.CreateBuilder<DrawingViewRepairReceipt>();
+                    string expectedStateHash = drawingInspection.Value.Document.StateHash;
+                    foreach (DrawingViewReflowPlacement placement in nativeReflowPlan.Placements.Where(value => value.WasRepositioned))
+                    {
+                        OperationResult<DrawingViewRepairReceipt> repaired = await drawing.RepositionViewAsync(
+                            new DrawingViewPositionRepairRequest
+                            {
+                                ViewId = placement.ViewId,
+                                ExpectedDocumentStateHash = expectedStateHash,
+                                PreconditionFingerprint = nativeReflowPlan.Fingerprint,
+                                ExpectedCurrentPosition = placement.ExpectedCurrentPosition,
+                                NewPosition = placement.NewPosition,
+                            },
+                            cancellationToken).ConfigureAwait(false);
+                        if (!repaired.IsSuccess || repaired.Value is null)
+                        {
+                            // A native view may be alignment-constrained or may have changed after inspection. Do not
+                            // claim a clean drawing; preserve the provider error and its current-state evidence.
+                            // native view 可能受 alignment constraint 限制，也可能在 inspection 后被外部修改；不能宣称
+                            // 图纸干净，直接保留 Provider error 与当前 state evidence。
+                            return Failure(repaired);
+                        }
+
+                        receipts.Add(repaired.Value);
+                        expectedStateHash = repaired.Value.StateHash;
+                    }
+
+                    reflowReceipts = receipts.ToImmutable();
+                    if (!reflowReceipts.IsDefaultOrEmpty)
+                    {
+                        OperationResult<SaveReceipt> reflowSave = await drawing.SaveAsync(cancellationToken).ConfigureAwait(false);
+                        if (!reflowSave.IsSuccess)
+                        {
+                            return Failure(reflowSave);
+                        }
+
+                        OperationResult<CadInspectionSnapshot> reflowInspection = await drawing.ReopenAndInspectAsync(cancellationToken).ConfigureAwait(false);
+                        if (!reflowInspection.IsSuccess || reflowInspection.Value is null)
+                        {
+                            return Failure(reflowInspection);
+                        }
+
+                        foreach (DrawingViewRepairReceipt receipt in reflowReceipts)
+                        {
+                            DrawingViewSnapshot? persistedView = reflowInspection.Value.Views.FirstOrDefault(view => view.ViewId == receipt.ViewId);
+                            if (persistedView is null || !NearlyEqual(persistedView.Position, receipt.Position) || persistedView.Outline is null)
+                            {
+                                return OperationResults.Failure<PartDrawingBuildResult>(
+                                    reflowInspection.OperationId,
+                                    new OperationError(
+                                        ErrorCodes.InvariantViolation,
+                                        "The persisted drawing did not contain the verified reflowed view position and outline.",
+                                        ErrorCategories.Invariant,
+                                        remediation: "Preserve the drawing artifact and inspect the exact native view binding."),
+                                    reflowInspection.Evidence);
+                            }
+                        }
+
+                        drawingInspection = reflowInspection;
+                        nativeLayoutPlan = BuildNativeLayoutPlan(drawingInspection.Value, request.RulePack);
+                    }
+                }
+            }
+
             OperationResult<ExportReceipt> pdf = await session.Export.ExportAsync(
                 drawing.DocumentId,
                 new CadExportRequest
@@ -682,6 +757,19 @@ public static class PartDrawingBuildService
                             nativeLayoutPlan is null
                                 ? "missing-native-outline"
                                 : string.Join(",", nativeLayoutPlan.Findings.Select(finding => finding.Code).Distinct(StringComparer.Ordinal))),
+                        new EvidenceObservation(
+                            "drawing.layout.reflow.plan",
+                            nativeReflowPlan?.Fingerprint ?? "not-required"),
+                        new EvidenceObservation(
+                            "drawing.layout.reflow.mutations",
+                            reflowReceipts.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation(
+                            "drawing.layout.reflow.status",
+                            nativeReflowPlan is null
+                                ? "not-required"
+                                : nativeReflowPlan.CanApply
+                                    ? reflowReceipts.IsDefaultOrEmpty ? "planned-no-mutation" : "applied-and-reopened"
+                                    : "blocked-review-required"),
                         new EvidenceObservation("drawing.sheet.plan.name", layoutPlan.SheetName),
                         new EvidenceObservation(
                             "drawing.sheet.plan.size-millimeters",
@@ -911,6 +999,53 @@ public static class PartDrawingBuildService
 
         return PartDrawingLayoutPlanner.Plan(request);
     }
+
+    /// <summary>
+    /// Creates a view-only reflow plan only when native layout evidence reports a geometry blocker.
+    /// 只有 native layout evidence 报告几何 blocker 时，才创建 view-only reflow plan。
+    /// </summary>
+    private static DrawingViewReflowPlan? BuildNativeViewReflowPlan(
+        CadInspectionSnapshot inspection,
+        ResolvedDrawingRulePack? rulePack)
+    {
+        DrawingSheetSnapshot? sheet = inspection.Sheet;
+        if (sheet is null || inspection.Views.IsDefaultOrEmpty || inspection.Views.Any(view => view.Outline is null))
+        {
+            return null;
+        }
+
+        Length margin = rulePack?.Values.SheetMargin ?? Length.FromMillimeters(0d);
+        Length spacing = rulePack?.Values.DimensionSpacing ?? Length.FromMillimeters(2d);
+        ReservedZoneRule[] reservedZones = rulePack?.Values.ReservedZones.ToArray() ?? [];
+        return DrawingViewReflowPlanner.Plan(
+            new DrawingViewReflowRequest
+            {
+                SheetId = sheet.Name,
+                SheetBounds = new DrawingLayoutRect(Length.FromMillimeters(0d), Length.FromMillimeters(0d), sheet.Width, sheet.Height),
+                Margins = new DrawingLayoutMargins(margin, margin, margin, margin),
+                Views = inspection.Views,
+                ReservedZones =
+                [
+                    .. reservedZones.Select(zone => new DrawingLayoutReservedZone
+                    {
+                        ZoneId = zone.ZoneId,
+                        ZoneKind = "rule-pack-reserved-zone",
+                        Bounds = new DrawingLayoutRect(zone.Left, zone.Bottom, zone.Width, zone.Height),
+                    }),
+                ],
+                MinimumViewSpacing = spacing,
+                MaxReflowRings = 8,
+            });
+    }
+
+    private static bool NeedsViewReflow(DrawingLayoutPlan? plan) =>
+        plan is not null
+        && plan.Findings.Any(finding => finding.Status is DrawingLayoutFindingStatus.Blocking
+            && (finding.Code is "view-view-collision" or "off-sheet-view" or "reserved-zone-collision"));
+
+    private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
+        Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d
+        && Math.Abs(first.Y.Millimeters - second.Y.Millimeters) <= 0.000001d;
 
     private static DrawingLayoutRect ToLayoutRect(DrawingViewOutlineSnapshot outline)
     {

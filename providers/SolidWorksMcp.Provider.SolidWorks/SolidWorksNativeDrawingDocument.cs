@@ -227,6 +227,64 @@ internal sealed class SolidWorksNativeDrawingDocument(
     }
 
     /// <summary>
+    /// Repositions one exact native view through the verified IView.SetXform contract and reads its position/outline
+    /// back after rebuild. 通过已核对的 IView.SetXform contract 移动一个精确 native view，并在 rebuild 后读回位置/轮廓。
+    /// </summary>
+    /// <remarks>
+    /// The request carries no COM object and no enumeration index. The provider resolves the view by the short-lived
+    /// native name binding or the persisted inspection ordinal, compares the state/current position, preserves the
+    /// current native scale, and fails closed if SOLIDWORKS does not return the requested position and a positive
+    /// outline. 请求不携带 COM object 或 enumeration index；Provider 通过短期 native name binding 或 persisted
+    /// inspection ordinal 解析 view，校验 state/current position，保留当前 native scale；若 SOLIDWORKS 不返回
+    /// 请求坐标或正面积 outline，则 fail closed。
+    /// </remarks>
+    public async Task<OperationResult<DrawingViewRepairReceipt>> RepositionViewAsync(
+        DrawingViewPositionRepairRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.ViewId.Value)
+            || string.IsNullOrWhiteSpace(request.ExpectedDocumentStateHash)
+            || string.IsNullOrWhiteSpace(request.PreconditionFingerprint))
+        {
+            return SolidWorksProviderResults.Failure<DrawingViewRepairReceipt>(
+                "drawing.view.reposition",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "View identity, expected state hash and repair precondition fingerprint are required.",
+                    ErrorCategories.Validation));
+        }
+
+        OperationResult<NativeDrawingViewRepairResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => RepositionViewOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<DrawingViewRepairReceipt>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<DrawingViewRepairReceipt>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.Value.NativeName))
+        {
+            nativeViewNames[result.Value.Receipt.ViewId.Value] = result.Value.NativeName;
+        }
+
+        return OperationResults.Success(
+            result.Value.Receipt,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-drawing"));
+    }
+
+    /// <summary>
     /// Creates a native SOLIDWORKS note in the requested drawing view.
     /// 创建真实 SOLIDWORKS 原生 note，并绑定到请求的 drawing view。
     /// </summary>
@@ -2049,6 +2107,173 @@ internal sealed class SolidWorksNativeDrawingDocument(
         }
     }
 
+    private OperationResult<NativeDrawingViewRepairResult> RepositionViewOnSta(
+        ISldWorks application,
+        DrawingViewPositionRepairRequest request)
+    {
+        const string operation = "drawing.view.reposition";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingViewRepairResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native drawing identity is no longer registered.", ErrorCategories.State));
+        }
+
+        if (!current.StateHash.Equals(request.ExpectedDocumentStateHash.Trim(), StringComparison.Ordinal))
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingViewRepairResult>(
+                operation,
+                new OperationError(
+                    ErrorCodes.StateConflict,
+                    "The registered native drawing state differs from the view-reflow precondition.",
+                    ErrorCategories.State,
+                    remediation: "Inspect the drawing again and create a new targeted view reflow plan."));
+        }
+
+        OperationResult<ModelDoc2> resolvedDrawing = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolvedDrawing.IsSuccess || resolvedDrawing.Value is null)
+        {
+            return OperationResults.Failure<NativeDrawingViewRepairResult>(
+                resolvedDrawing.OperationId,
+                resolvedDrawing.Error!,
+                resolvedDrawing.Evidence);
+        }
+
+        View? view = null;
+        try
+        {
+            var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            nativeViewNames.TryGetValue(request.ViewId.Value, out string? boundNativeName);
+            view = FindNativeView(
+                drawing,
+                current.DocumentId.Value,
+                request.ViewId.Value,
+                boundNativeName,
+                out string? nativeName);
+            if (view is null)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The requested stable drawing-view identity could not be resolved in the current drawing.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and regenerate the targeted view reflow plan."));
+            }
+
+            double[] currentPosition = ReadNumbers(view.Position);
+            Coordinate2D observedPosition = PositionSnapshot(currentPosition);
+            if (!NearlyEqual(observedPosition, request.ExpectedCurrentPosition))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The native view position no longer matches the reflow precondition.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the exact view and regenerate a targeted reflow plan."));
+            }
+
+            double scale = view.ScaleDecimal;
+            if (!double.IsFinite(scale) || scale <= 0d)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The native drawing view did not expose a positive scale before reflow.",
+                        ErrorCategories.Invariant));
+            }
+
+            view.PositionLocked = false;
+            // The verified SOLIDWORKS IView.SetXform payload is [paper X metres, paper Y metres, native scale].
+            // 已核对的 SOLIDWORKS IView.SetXform payload 为 [纸空间 X 米, 纸空间 Y 米, native scale]。
+            bool positioned = view.SetXform(
+                new[]
+                {
+                    request.NewPosition.X.ToMeters(),
+                    request.NewPosition.Y.ToMeters(),
+                    scale,
+                });
+            if (!positioned)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS rejected the native drawing-view position repair.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect native view alignment/lock state before retrying."));
+            }
+
+            drawing.ForceRebuild();
+            double[] actualPositionRaw = ReadNumbers(view.Position);
+            double[] outlineRaw = ReadNumbers(view.GetOutline());
+            Coordinate2D actualPosition = PositionSnapshot(actualPositionRaw);
+            if (!NearlyEqual(actualPosition, request.NewPosition))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS did not read back the requested drawing-view position after rebuild.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect view alignment before retrying."));
+            }
+
+            if (outlineRaw.Length < 4 || outlineRaw[2] <= outlineRaw[0] || outlineRaw[3] <= outlineRaw[1])
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingViewRepairResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS returned no positive paper-space outline after the view repair.",
+                        ErrorCategories.Invariant));
+            }
+
+            DrawingViewOutlineSnapshot outline = ToOutlineSnapshot(outlineRaw);
+            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
+            var updatedDescriptor = current with
+            {
+                StateHash = stateHash,
+                IsDirty = resolvedDrawing.Value.GetSaveFlag(),
+            };
+            DrawingViewRepairReceipt receipt = new()
+            {
+                ActionCode = "layout.apply-planned-view-position",
+                ViewId = request.ViewId,
+                Position = actualPosition,
+                Outline = outline,
+                StateHash = stateHash,
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeDrawingViewRepairResult(receipt, updatedDescriptor, current, nativeName ?? string.Empty),
+                new EvidenceObservation("repair.action", receipt.ActionCode),
+                new EvidenceObservation("repair.view-id", receipt.ViewId.Value),
+                new EvidenceObservation("repair.native-name", nativeName ?? "unknown"),
+                new EvidenceObservation("repair.precondition-fingerprint", request.PreconditionFingerprint.Trim()),
+                new EvidenceObservation("repair.outline.meters", string.Join(',', outlineRaw.Select(value => value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)))),
+                new EvidenceObservation("state.hash", stateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<NativeDrawingViewRepairResult>(
+                operation,
+                exception,
+                "SOLIDWORKS drawing-view reflow failed before a complete position and outline read-back proof was returned.");
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(view);
+            SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
+        }
+    }
+
     /// <summary>
     /// Imports only allowlisted annotations returned by SOLIDWORKS model-item insertion for one exact drawing view.
     /// 只导入 SOLIDWORKS 对指定 drawing view 原生返回且属于 allowlist 的模型标注。
@@ -3181,3 +3406,10 @@ internal sealed record NativeDrawingRepairResult(
     DrawingRepairReceipt Receipt,
     SolidWorksDocumentDescriptor Descriptor,
     SolidWorksDocumentDescriptor ExpectedDescriptor);
+
+/// <summary>Internal result carrying a verified native drawing-view repair and descriptor update.</summary>
+internal sealed record NativeDrawingViewRepairResult(
+    DrawingViewRepairReceipt Receipt,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor,
+    string NativeName);

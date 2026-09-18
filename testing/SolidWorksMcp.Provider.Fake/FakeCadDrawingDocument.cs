@@ -80,6 +80,10 @@ internal sealed class FakeCadDrawingDocument(
             Orientation = request.Orientation.Trim(),
             Position = request.Position,
             ScaleDenominator = request.ScaleDenominator,
+            // FakeCad uses a deterministic synthetic outline only to exercise compiler reflow contracts. It is not
+            // native geometry evidence and must never be presented as SOLIDWORKS release proof. FakeCad 只用确定性
+            // synthetic outline 验证 compiler 重排 contract；它不是 native geometry evidence，不能冒充 release 证明。
+            Outline = FakeOutline(request.Position, request.Orientation),
         };
         views.Add(snapshot);
         MarkMutated();
@@ -145,6 +149,7 @@ internal sealed class FakeCadDrawingDocument(
             Orientation = $"Section {request.Label.Trim()}-{request.Label.Trim()}",
             Position = request.Position,
             ScaleDenominator = request.ScaleDenominator,
+            Outline = FakeOutline(request.Position, "Section"),
         };
         views.Add(snapshot);
         MarkMutated();
@@ -199,6 +204,7 @@ internal sealed class FakeCadDrawingDocument(
             Orientation = $"Detail {request.Label.Trim()}-{request.Label.Trim()}",
             Position = request.Position,
             ScaleDenominator = request.ScaleDenominator,
+            Outline = FakeOutline(request.Position, "Detail"),
         };
         views.Add(snapshot);
         MarkMutated();
@@ -465,6 +471,97 @@ internal sealed class FakeCadDrawingDocument(
     }
 
     /// <inheritdoc />
+    public Task<OperationResult<DrawingViewRepairReceipt>> RepositionViewAsync(
+        DrawingViewPositionRepairRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "reposition-view";
+        if (request is null
+            || string.IsNullOrWhiteSpace(request.ViewId.Value)
+            || string.IsNullOrWhiteSpace(request.ExpectedDocumentStateHash)
+            || string.IsNullOrWhiteSpace(request.PreconditionFingerprint))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingViewRepairReceipt>(
+                operation,
+                "View identity, expected state hash and repair precondition fingerprint are required."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<DrawingViewRepairReceipt>(operation));
+        }
+
+        if (!Session.Supports(CadCapabilityNames.DrawingMutation, out CadCapability capability))
+        {
+            return Task.FromResult(FakeCadResults.Unsupported<DrawingViewRepairReceipt>(operation, capability));
+        }
+
+        if (Session.IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Closed<DrawingViewRepairReceipt>(operation));
+        }
+
+        if (!StateHash.Equals(request.ExpectedDocumentStateHash.Trim(), StringComparison.Ordinal))
+        {
+            return Task.FromResult(
+                FakeCadResults.Failure<DrawingViewRepairReceipt>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The drawing state changed after the view reflow plan was created.",
+                        ErrorCategories.State,
+                        remediation: "Inspect the drawing again and create a new targeted view reflow plan.")));
+        }
+
+        int index = views.FindIndex(view => view.ViewId == request.ViewId);
+        if (index < 0)
+        {
+            return Task.FromResult(FakeCadResults.NotFound<DrawingViewRepairReceipt>(operation, request.ViewId.Value));
+        }
+
+        DrawingViewSnapshot current = views[index];
+        if (!NearlyEqual(current.Position, request.ExpectedCurrentPosition))
+        {
+            return Task.FromResult(
+                FakeCadResults.Failure<DrawingViewRepairReceipt>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.StateConflict,
+                        "The view position no longer matches the reflow precondition.",
+                        ErrorCategories.State,
+                        remediation: "Inspect the exact view and regenerate a targeted reflow plan.")));
+        }
+
+        DrawingViewOutlineSnapshot outline = ShiftOutline(
+            current.Outline ?? FakeOutline(current.Position, current.Orientation),
+            current.Position,
+            request.NewPosition);
+        DrawingViewSnapshot updated = current with
+        {
+            Position = request.NewPosition,
+            Outline = outline,
+        };
+        views[index] = updated;
+        MarkMutated();
+        DrawingViewRepairReceipt receipt = new()
+        {
+            ActionCode = "layout.apply-planned-view-position",
+            ViewId = updated.ViewId,
+            Position = updated.Position,
+            Outline = outline,
+            StateHash = StateHash,
+        };
+        return Task.FromResult(
+            FakeCadResults.Success(
+                receipt,
+                operation,
+                new EvidenceObservation("repair.action", receipt.ActionCode),
+                new EvidenceObservation("repair.view-id", receipt.ViewId.Value),
+                new EvidenceObservation("repair.precondition-fingerprint", request.PreconditionFingerprint.Trim()),
+                new EvidenceObservation("state.hash", receipt.StateHash)));
+    }
+
+    /// <inheritdoc />
     public Task<OperationResult<DrawingRepairReceipt>> RepositionAnnotationAsync(
         DrawingAnnotationPositionRepairRequest request,
         CancellationToken cancellationToken = default)
@@ -549,6 +646,34 @@ internal sealed class FakeCadDrawingDocument(
     private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
         Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d
         && Math.Abs(first.Y.Millimeters - second.Y.Millimeters) <= 0.000001d;
+
+    private static DrawingViewOutlineSnapshot FakeOutline(Coordinate2D center, string orientation)
+    {
+        double width = orientation.Contains("Detail", StringComparison.OrdinalIgnoreCase) ? 24d
+            : orientation.Contains("Isometric", StringComparison.OrdinalIgnoreCase) ? 42d
+            : 60d;
+        double height = orientation.Contains("Detail", StringComparison.OrdinalIgnoreCase) ? 24d
+            : orientation.Contains("Isometric", StringComparison.OrdinalIgnoreCase) ? 42d
+            : 40d;
+        return new DrawingViewOutlineSnapshot
+        {
+            Left = Length.FromMillimeters(center.X.Millimeters - width / 2d),
+            Bottom = Length.FromMillimeters(center.Y.Millimeters - height / 2d),
+            Right = Length.FromMillimeters(center.X.Millimeters + width / 2d),
+            Top = Length.FromMillimeters(center.Y.Millimeters + height / 2d),
+        };
+    }
+
+    private static DrawingViewOutlineSnapshot ShiftOutline(
+        DrawingViewOutlineSnapshot outline,
+        Coordinate2D oldCenter,
+        Coordinate2D newCenter) => new()
+        {
+            Left = Length.FromMillimeters(outline.Left.Millimeters + newCenter.X.Millimeters - oldCenter.X.Millimeters),
+            Bottom = Length.FromMillimeters(outline.Bottom.Millimeters + newCenter.Y.Millimeters - oldCenter.Y.Millimeters),
+            Right = Length.FromMillimeters(outline.Right.Millimeters + newCenter.X.Millimeters - oldCenter.X.Millimeters),
+            Top = Length.FromMillimeters(outline.Top.Millimeters + newCenter.Y.Millimeters - oldCenter.Y.Millimeters),
+        };
 
     /// <inheritdoc />
     internal override CadInspectionSnapshot BuildInspection() => new()

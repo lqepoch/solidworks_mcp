@@ -231,6 +231,54 @@ public sealed class FakeCadProviderTests
         Assert.Equal(ErrorCodes.StateConflict, stale.Error!.Code);
     }
 
+    /// <summary>
+    /// A view reflow uses the same stable state/position preconditions as annotation repair and returns outline proof.
+    /// view reflow 与 annotation repair 使用相同的 stable state/position precondition，并返回 outline 证明。
+    /// </summary>
+    [Fact]
+    public async Task DrawingViewPositionRepairIsTargetedAndStateBound()
+    {
+        await using var provider = new FakeCadProvider();
+        await using ICadSession session = (await provider.StartSessionAsync(new CadSessionOptions())).RequireSuccess();
+        ICadDrawingDocument drawing = (await session.CreateDrawingAsync(new CreateDrawingRequest
+        {
+            RequestedDocumentId = new DocumentId("view-repair-drawing-001"),
+        })).RequireSuccess();
+        DrawingViewSnapshot view = (await drawing.AddViewAsync(new DrawingViewRequest
+        {
+            RequestedViewId = new ViewId("view-repair-001"),
+            Name = "Front",
+            Orientation = "Front",
+            Position = new Coordinate2D(Length.FromMillimeters(100d), Length.FromMillimeters(80d)),
+        })).RequireSuccess();
+
+        string plannedStateHash = drawing.StateHash;
+        Coordinate2D newPosition = new(Length.FromMillimeters(120d), Length.FromMillimeters(90d));
+        DrawingViewRepairReceipt receipt = (await drawing.RepositionViewAsync(new DrawingViewPositionRepairRequest
+        {
+            ViewId = view.ViewId,
+            ExpectedDocumentStateHash = plannedStateHash,
+            PreconditionFingerprint = "view-reflow-precondition-001",
+            ExpectedCurrentPosition = view.Position,
+            NewPosition = newPosition,
+        })).RequireSuccess();
+
+        Assert.Equal("layout.apply-planned-view-position", receipt.ActionCode);
+        Assert.Equal(newPosition, receipt.Position);
+        Assert.True(receipt.Outline.Width.Millimeters > 0d);
+
+        OperationResult<DrawingViewRepairReceipt> stale = await drawing.RepositionViewAsync(new DrawingViewPositionRepairRequest
+        {
+            ViewId = view.ViewId,
+            ExpectedDocumentStateHash = plannedStateHash,
+            PreconditionFingerprint = "view-reflow-precondition-001",
+            ExpectedCurrentPosition = view.Position,
+            NewPosition = new Coordinate2D(Length.FromMillimeters(130d), Length.FromMillimeters(95d)),
+        });
+        Assert.False(stale.IsSuccess);
+        Assert.Equal(ErrorCodes.StateConflict, stale.Error!.Code);
+    }
+
     /// <summary>FakeCad exposes the same save/close/reopen contract while keeping private file I/O out of hosted tests.</summary>
     /// <remarks>FakeCad 在不接触私有文件 I/O 的 Hosted-safe 测试中，仍暴露与 native provider 相同的生命周期契约。</remarks>
     [Fact]

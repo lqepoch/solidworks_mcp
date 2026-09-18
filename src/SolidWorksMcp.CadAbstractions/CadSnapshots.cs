@@ -347,6 +347,25 @@ public sealed record DrawingRepairReceipt
     public required string StateHash { get; init; }
 }
 
+/// <summary>Evidence returned after a native drawing-view position repair.</summary>
+public sealed record DrawingViewRepairReceipt
+{
+    /// <summary>Stable action code materialized by the provider.</summary>
+    public required string ActionCode { get; init; }
+
+    /// <summary>Exact drawing-view identity changed by the provider.</summary>
+    public required ViewId ViewId { get; init; }
+
+    /// <summary>Position read back from the native drawing after rebuild.</summary>
+    public required Coordinate2D Position { get; init; }
+
+    /// <summary>Positive native paper-space outline read back after the repair.</summary>
+    public required DrawingViewOutlineSnapshot Outline { get; init; }
+
+    /// <summary>Resulting document state hash after the verified mutation.</summary>
+    public required string StateHash { get; init; }
+}
+
 /// <summary>Evidence-bearing completion receipt for a successful mutation.</summary>
 public sealed record MutationReceipt
 {

@@ -325,6 +325,34 @@ The rounded-plate PDF was rendered and visually checked after the first placemen
 is visible inside the sheet boundary, separate from the pattern callout and title area. The formed U-bracket remains the
 second generic non-cylindrical case and does not request a surface-finish symbol. Private source PDFs, names and source
 values are not copied into this corpus.
+
+### D09 native drawing-view reflow API boundary / D09 原生工程图视图重排 API 边界
+
+The locally installed SOLIDWORKS 2022 interop assembly and the official public help entry were used before adding the
+view-reflow mutation. The provider-neutral compiler never receives a COM object; it sends an exact ViewId, an expected
+state hash/current position, and a deterministic target position. The native adapter resolves the current `IView`,
+preserves its `ScaleDecimal`, calls `IView.SetXform`, forces a rebuild, and reads `Position` plus `GetOutline()` back.
+
+| Interface / method | Verified signature | Version evidence | Official source | Runtime rule |
+| --- | --- | --- | --- | --- |
+| `IView.SetXform` | `Boolean SetXform(Object Transform)` | SOLIDWORKS 2022 Interop reflection; public help entry cross-checked | [SetXform Method](https://help.solidworks.com/2015/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IView~SetXform.html) | Payload is the provider-owned three-value transform `[paper X metres, paper Y metres, native scale]`; a true return is not sufficient evidence. |
+| `IView.Position` | `Object Position { get; }` | SOLIDWORKS 2022 Interop reflection; already used by native inspection | [IView Interface](https://help.solidworks.com/2022/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SolidWorks.Interop.sldworks.IView.html) | Compare the read-back paper-space position with the requested target after rebuild. |
+| `IView.GetOutline` | `Object GetOutline()` | SOLIDWORKS 2022 Interop reflection; already used by D06 outline proof | [GetOutline Method](https://help.solidworks.com/2022/English/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SolidWorks.Interop.sldworks.IView~GetOutline.html) | Require four finite coordinates and positive width/height after the repair. |
+
+The first implementation is deliberately view-only and bounded. It uses persisted native outlines, RulePack margins and
+reserved zones, chooses stable clockwise search candidates, and applies only moved placements. Missing outlines,
+alignment-constrained moves, stale state, rejected `SetXform`, and failed read-back remain explicit review/provider
+failures. The provider does not remove alignment automatically because that could silently destroy an intentional
+orthographic relationship; an alignment failure must be diagnosed as a provider-specific repair decision.
+
+本实现刻意只处理 view-only 且有界的重排：消费 persisted native outline、RulePack margin/reserved zone，按稳定顺序
+搜索顺时针候选，仅提交真正移动的 placement。缺少 outline、alignment constraint、过期 state、SetXform 拒绝或读回
+失败都显式进入 review/provider failure。Provider 不会自动 RemoveAlignment，因为这可能静默破坏刻意建立的正投影
+关系；alignment 失败必须进入 provider-specific repair decision。
+
+Hosted evidence exists for the planner and FakeCad state-bound contract. A fresh native Live proof is still pending the
+safe graceful cleanup of the pre-existing SOLIDWORKS process; no forced process termination or blind modal action is
+permitted.
 ## Drawing sheet properties / 工程图图纸属性
 
 | interface | method | signature / return | versions | official source | runtime notes |

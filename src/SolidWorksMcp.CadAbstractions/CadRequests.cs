@@ -701,6 +701,34 @@ public sealed record DrawingAnnotationPositionRepairRequest
 }
 
 /// <summary>
+/// Request to apply one verified paper-space position repair to a drawing view.
+/// 应用一个经过验证的 drawing view 纸空间位置修复请求。
+/// </summary>
+/// <remarks>
+/// A view move is never addressed by enumeration index alone. The provider must resolve the stable ViewId, compare
+/// the expected document hash and current position, preserve the native view scale, rebuild, and read back a positive
+/// outline. 视图移动绝不能只使用 enumeration index；Provider 必须解析稳定 ViewId、校验 document hash 与当前坐标、
+/// 保留 native view scale、rebuild，并读回正面积 outline。
+/// </remarks>
+public sealed record DrawingViewPositionRepairRequest
+{
+    /// <summary>Exact stable drawing-view identity returned by inspection.</summary>
+    public required ViewId ViewId { get; init; }
+
+    /// <summary>State hash captured when the deterministic reflow plan was created.</summary>
+    public required string ExpectedDocumentStateHash { get; init; }
+
+    /// <summary>Planner fingerprint retained for audit correlation.</summary>
+    public required string PreconditionFingerprint { get; init; }
+
+    /// <summary>Paper-space position observed before planning the repair.</summary>
+    public required Coordinate2D ExpectedCurrentPosition { get; init; }
+
+    /// <summary>Deterministic paper-space target selected by the drawing compiler.</summary>
+    public required Coordinate2D NewPosition { get; init; }
+}
+
+/// <summary>
 /// Allowlisted model-item annotation categories that SOLIDWORKS can insert through IDrawingDoc.InsertModelAnnotations3.
 /// 允许通过 IDrawingDoc.InsertModelAnnotations3 导入的模型标注类别；枚举值属于 vendor-neutral contract。
 /// </summary>

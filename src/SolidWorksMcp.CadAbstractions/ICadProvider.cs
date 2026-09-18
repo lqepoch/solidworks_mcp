@@ -197,6 +197,19 @@ public interface ICadDrawingDocument : ICadDocument
         DrawingDetailViewRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Repositions one exact native drawing view after state and current-position preflight.
+    /// 在 state 与当前坐标 preflight 通过后，移动一个精确的 native drawing view。
+    /// </summary>
+    /// <remarks>
+    /// This is deliberately a view-scoped repair contract. The compiler decides the paper-space target; a provider
+    /// owns the CAD API call, rebuild, and outline read-back. 这是刻意限定在单个 view 的 repair contract；compiler
+    /// 决定纸空间目标，Provider 负责 CAD API 调用、rebuild 以及 outline 读回。
+    /// </remarks>
+    Task<OperationResult<DrawingViewRepairReceipt>> RepositionViewAsync(
+        DrawingViewPositionRepairRequest request,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Adds an annotation associated with an existing drawing view.</summary>
     Task<OperationResult<DrawingAnnotationSnapshot>> AddAnnotationAsync(
         DrawingAnnotationRequest request,
