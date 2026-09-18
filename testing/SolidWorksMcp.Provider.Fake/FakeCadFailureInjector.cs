@@ -36,6 +36,9 @@ public static class FakeCadFailurePoints
     /// <summary>Failure while adding a native surface-finish symbol.</summary>
     public const string AddSurfaceFinishSymbol = "drawing.add-surface-finish-symbol";
 
+    /// <summary>Failure while adding native center marks.</summary>
+    public const string AddCenterMarks = "drawing.add-center-marks";
+
     /// <summary>Failure while rebuilding a document.</summary>
     public const string Rebuild = "document.rebuild";
 

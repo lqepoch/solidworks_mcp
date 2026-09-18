@@ -211,6 +211,14 @@ public interface ICadDrawingDocument : ICadDocument
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Adds and verifies native center marks in one exact drawing view.
+    /// 在一个精确 drawing view 中添加并验证 native center mark。
+    /// </summary>
+    Task<OperationResult<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>> AddCenterMarksAsync(
+        DrawingCenterMarkRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Applies one exact annotation-position repair after state and current-position preflight.
     /// 在 state 与当前坐标 preflight 通过后，应用一个精确的 annotation-position repair。
     /// </summary>

@@ -350,6 +350,64 @@ internal sealed class SolidWorksNativeDrawingDocument(
     }
 
     /// <summary>
+    /// Inserts native center marks through the exact active view and proves the native count delta.
+    /// 通过精确 active view 插入 native center marks，并证明 native 数量增量。
+    /// </summary>
+    public async Task<OperationResult<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>> AddCenterMarksAsync(
+        DrawingCenterMarkRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.RequestedAnnotationId.Value)
+            || string.IsNullOrWhiteSpace(request.ViewId.Value)
+            || string.IsNullOrWhiteSpace(request.ProvenanceKind)
+            || string.IsNullOrWhiteSpace(request.ProvenanceMethod)
+            || request.ApprovalState is not (DrawingAnnotationApprovalState.Approved or DrawingAnnotationApprovalState.Released)
+            || request.Target is DrawingCenterMarkTarget.None
+            || (request.Target & ~(DrawingCenterMarkTarget.Holes | DrawingCenterMarkTarget.Fillets | DrawingCenterMarkTarget.Slots)) != 0
+            || (request.ConnectionLines & ~(DrawingCenterMarkConnectionLines.Linear | DrawingCenterMarkConnectionLines.Circular | DrawingCenterMarkConnectionLines.Radial | DrawingCenterMarkConnectionLines.Base)) != 0
+            || request.MinimumNewMarks is < 1 or > 64
+            || !double.IsFinite(request.Size.Millimeters)
+            || !double.IsFinite(request.Gap.Millimeters)
+            || request.Size.Millimeters < 0d
+            || request.Gap.Millimeters < 0d)
+        {
+            return SolidWorksProviderResults.Failure<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(
+                "drawing.center-marks.create",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "Center marks require stable identities, approved provenance, an allowlisted target and bounded display values.",
+                    ErrorCategories.Validation));
+        }
+
+        OperationResult<NativeDrawingCenterMarksResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => AddCenterMarksOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(
+                result.OperationId,
+                result.Error!,
+                result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        return OperationResults.Success(
+            result.Value.Annotations,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-drawing"));
+    }
+
+    /// <summary>
     /// Applies the narrow D08 layout-position repair to one exact named native annotation.
     /// 对一个精确命名的 native annotation 应用 D08 窄范围布局位置修复。
     /// </summary>
@@ -844,6 +902,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
                     Length.FromMeters(outlineCenterX),
                     Length.FromMeters(outlineCenterY)),
                 ScaleDenominator = request.ScaleDenominator,
+                Outline = ToOutlineSnapshot(outline),
             };
             string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
             var updated = current with
@@ -1123,6 +1182,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
                     Length.FromMeters(position.Length > 0 ? position[0] : request.Position.X.ToMeters()),
                     Length.FromMeters(position.Length > 1 ? position[1] : request.Position.Y.ToMeters())),
                 ScaleDenominator = request.ScaleDenominator,
+                Outline = ToOutlineSnapshot(outline),
             };
             string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
             var updated = current with
@@ -1266,6 +1326,7 @@ internal sealed class SolidWorksNativeDrawingDocument(
                     Length.FromMeters(position.Length > 0 ? position[0] : request.Position.X.ToMeters()),
                     Length.FromMeters(position.Length > 1 ? position[1] : request.Position.Y.ToMeters())),
                 ScaleDenominator = request.ScaleDenominator,
+                Outline = ToOutlineSnapshot(outline),
             };
             string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
             var updated = current with
@@ -1494,6 +1555,207 @@ internal sealed class SolidWorksNativeDrawingDocument(
         finally
         {
             ReleaseSurfaceFinishCandidates(afterSymbols);
+            SolidWorksDocumentRouting.Release(view);
+            SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
+        }
+    }
+
+    /// <summary>
+    /// Uses IView.AutoInsertCenterMarks2 on one explicitly bound view and names every newly observed native mark.
+    /// 在一个明确绑定的 view 上调用 IView.AutoInsertCenterMarks2，并为每个新读回的 native mark 命名。
+    /// </summary>
+    /// <remarks>
+    /// AutoInsertCenterMarks2 is a view-scoped native operation. It does not require the client to send a global
+    /// selection mark, and a successful Boolean is not accepted as proof: the provider compares native annotation and
+    /// center-mark counts before/after and reads every new IAnnotation back. AutoInsertCenterMarks2 是 view-scoped
+    /// native operation，不要求 client 发送全局 selection mark；Boolean 成功本身不是证据，Provider 必须比较前后
+    /// native annotation/center-mark 数量并逐个读回新 IAnnotation。
+    /// </remarks>
+    private OperationResult<NativeDrawingCenterMarksResult> AddCenterMarksOnSta(
+        ISldWorks application,
+        DrawingCenterMarkRequest request)
+    {
+        const string operation = "drawing.center-marks.create";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingCenterMarksResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native drawing identity is no longer registered.", ErrorCategories.State));
+        }
+
+        OperationResult<ModelDoc2> resolvedDrawing = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolvedDrawing.IsSuccess || resolvedDrawing.Value is null)
+        {
+            return OperationResults.Failure<NativeDrawingCenterMarksResult>(
+                resolvedDrawing.OperationId,
+                resolvedDrawing.Error!,
+                resolvedDrawing.Evidence);
+        }
+
+        View? view = null;
+        List<NativeCenterMarkCandidate>? afterMarks = null;
+        try
+        {
+            var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            view = FindNativeView(
+                drawing,
+                current.DocumentId.Value,
+                request.ViewId.Value,
+                nativeViewNames.TryGetValue(request.ViewId.Value, out string? boundName) ? boundName : null,
+                out string? nativeViewName);
+            if (view is null || string.IsNullOrWhiteSpace(nativeViewName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingCenterMarksResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The requested drawing view identity could not be resolved for center-mark insertion.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and use the current declarative ViewId."));
+            }
+
+            if (!drawing.ActivateView(nativeViewName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingCenterMarksResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS did not activate the exact drawing view before center-mark insertion.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the native view identity before retrying."));
+            }
+
+            List<NativeCenterMarkCandidate> beforeMarks = ReadCenterMarkAnnotations(view);
+            HashSet<string> beforeNames = [.. beforeMarks
+                .Select(mark => mark.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))];
+            int beforeFeatureCount = view.GetCenterMarkCount();
+            try
+            {
+                resolvedDrawing.Value.ClearSelection2(true);
+                // SOLIDWORKS documents size and gap in metres; the contract stays in millimetres and converts exactly at
+                // this COM boundary. The angle follows the public API's radians convention. SOLIDWORKS 的 size/gap
+                // 使用米；contract 使用毫米，只有在这个 COM 边界转换一次；angle 按 public API 的弧度约定传递。
+                bool inserted = view.AutoInsertCenterMarks2(
+                    (int)request.Target,
+                    (int)request.ConnectionLines,
+                    request.LinearSlotCenter,
+                    request.ArcSlotCenter,
+                    request.UseDocumentDefaults,
+                    request.Size.ToMeters(),
+                    request.Gap.ToMeters(),
+                    request.ExtendedLines,
+                    request.CenterLineFont,
+                    0d);
+                if (!inserted)
+                {
+                    return SolidWorksProviderResults.Failure<NativeDrawingCenterMarksResult>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.ProviderFailure,
+                            "SOLIDWORKS rejected the native center-mark request.",
+                            ErrorCategories.Provider,
+                            remediation: "Preserve the drawing and inspect the exact view geometry and center-mark defaults."));
+                }
+
+                drawing.ForceRebuild();
+            }
+            finally
+            {
+                foreach (NativeCenterMarkCandidate mark in beforeMarks)
+                {
+                    SolidWorksDocumentRouting.Release(mark.Annotation);
+                }
+            }
+
+            afterMarks = ReadCenterMarkAnnotations(view);
+            int afterFeatureCount = view.GetCenterMarkCount();
+            NativeCenterMarkCandidate[] newMarks = [.. afterMarks.Where(mark =>
+                !string.IsNullOrWhiteSpace(mark.Name) && !beforeNames.Contains(mark.Name))];
+            int observedAnnotationDelta = afterMarks.Count - beforeMarks.Count;
+            int observedFeatureDelta = afterFeatureCount - beforeFeatureCount;
+            int observedDelta = Math.Max(observedAnnotationDelta, observedFeatureDelta);
+            if (observedDelta < request.MinimumNewMarks || newMarks.Length < request.MinimumNewMarks)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingCenterMarksResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS accepted center-mark insertion, but the required native center-mark delta could not be identified.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and re-inspect native center-mark annotations; do not fall back to a text note."),
+                    new EvidenceObservation("center-mark.before-native-count", beforeFeatureCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("center-mark.after-native-count", afterFeatureCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("center-mark.new-native-count", newMarks.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            var snapshots = ImmutableArray.CreateBuilder<DrawingAnnotationSnapshot>(newMarks.Length);
+            for (int index = 0; index < newMarks.Length; index++)
+            {
+                NativeCenterMarkCandidate mark = newMarks[index];
+                string identity = $"{request.RequestedAnnotationId.Value}:instance:{index + 1:000}";
+                if (!mark.Annotation.SetName(identity)
+                    || !string.Equals(mark.Annotation.GetName()?.Trim(), identity, StringComparison.Ordinal))
+                {
+                    return SolidWorksProviderResults.Failure<NativeDrawingCenterMarksResult>(
+                        operation,
+                        new OperationError(
+                            ErrorCodes.ProviderFailure,
+                            "SOLIDWORKS did not persist the requested center-mark annotation identity.",
+                            ErrorCategories.Provider,
+                            remediation: "Preserve the drawing and inspect native center-mark names before retrying."));
+                }
+
+                double[] position = ReadNumbers(mark.Annotation.GetPosition());
+                snapshots.Add(
+                    new DrawingAnnotationSnapshot
+                    {
+                        AnnotationId = new AnnotationId(identity),
+                        ViewId = request.ViewId,
+                        Kind = "center-mark",
+                        Text = string.Empty,
+                        CoverageKeys = request.CoverageKeys,
+                        Position = new Coordinate2D(
+                            Length.FromMeters(position.Length > 0 ? position[0] : 0d),
+                            Length.FromMeters(position.Length > 1 ? position[1] : 0d)),
+                    });
+            }
+
+            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
+            var updated = current with
+            {
+                StateHash = stateHash,
+                IsDirty = resolvedDrawing.Value.GetSaveFlag(),
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeDrawingCenterMarksResult(snapshots.ToImmutable(), updated, current),
+                new EvidenceObservation("annotation.kind", "center-mark"),
+                new EvidenceObservation("annotation.native-type", ((int)swAnnotationType_e.swCenterMarkSym).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("annotation.view-id", request.ViewId.Value),
+                new EvidenceObservation("annotation.native-view", nativeViewName),
+                new EvidenceObservation("annotation.provenance.kind", request.ProvenanceKind.Trim()),
+                new EvidenceObservation("annotation.provenance.method", request.ProvenanceMethod.Trim()),
+                new EvidenceObservation("annotation.approval-state", request.ApprovalState.ToString()),
+                new EvidenceObservation("center-mark.target", request.Target.ToString()),
+                new EvidenceObservation("center-mark.native-count", snapshots.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("center-mark.association", "view-scoped-native"),
+                new EvidenceObservation("state.hash", stateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<NativeDrawingCenterMarksResult>(
+                operation,
+                exception,
+                "SOLIDWORKS native center-mark insertion failed before a complete read-back proof was returned.");
+        }
+        finally
+        {
+            ReleaseCenterMarkCandidates(afterMarks);
             SolidWorksDocumentRouting.Release(view);
             SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
         }
@@ -2752,6 +3014,64 @@ internal sealed class SolidWorksNativeDrawingDocument(
         }
     }
 
+    /// <summary>Reads only native center-mark annotations from one drawing view.</summary>
+    /// <summary>只从一个 drawing view 读取 native center-mark annotation。</summary>
+    private static List<NativeCenterMarkCandidate> ReadCenterMarkAnnotations(View view)
+    {
+        var result = new List<NativeCenterMarkCandidate>();
+        object? raw = view.GetAnnotations();
+        if (raw is not Array annotations)
+        {
+            return result;
+        }
+
+        for (int index = 0; index < annotations.Length; index++)
+        {
+            if (annotations.GetValue(index) is not Annotation annotation)
+            {
+                continue;
+            }
+
+            bool retained = false;
+            try
+            {
+                if (annotation.GetType() != (int)swAnnotationType_e.swCenterMarkSym)
+                {
+                    continue;
+                }
+
+                result.Add(new NativeCenterMarkCandidate(
+                    annotation,
+                    annotation.GetName()?.Trim() ?? string.Empty));
+                retained = true;
+            }
+            finally
+            {
+                if (!retained)
+                {
+                    SolidWorksDocumentRouting.Release(annotation);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Releases center-mark annotation RCWs retained by one read-back proof.</summary>
+    /// <summary>释放一次读回证明中暂存的 center-mark annotation RCW。</summary>
+    private static void ReleaseCenterMarkCandidates(List<NativeCenterMarkCandidate>? candidates)
+    {
+        if (candidates is null)
+        {
+            return;
+        }
+
+        foreach (NativeCenterMarkCandidate candidate in candidates)
+        {
+            SolidWorksDocumentRouting.Release(candidate.Annotation);
+        }
+    }
+
     private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
         Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d
         && Math.Abs(first.Y.Millimeters - second.Y.Millimeters) <= 0.000001d;
@@ -2790,6 +3110,24 @@ internal sealed class SolidWorksNativeDrawingDocument(
 
         return values;
     }
+
+    /// <summary>Converts a verified native outline into the vendor-neutral millimetre snapshot.</summary>
+    /// <summary>把已验证 native outline 转成厂商无关的毫米 snapshot。</summary>
+    private static DrawingViewOutlineSnapshot ToOutlineSnapshot(double[] outline)
+    {
+        if (outline.Length < 4)
+        {
+            throw new ArgumentException("A native drawing outline must contain four coordinates.", nameof(outline));
+        }
+
+        return new DrawingViewOutlineSnapshot
+        {
+            Left = Length.FromMeters(outline[0]),
+            Bottom = Length.FromMeters(outline[1]),
+            Right = Length.FromMeters(outline[2]),
+            Top = Length.FromMeters(outline[3]),
+        };
+    }
 }
 
 /// <summary>Temporary native symbol/annotation pair retained only during one STA read-back.</summary>
@@ -2797,6 +3135,9 @@ internal sealed record NativeSurfaceFinishCandidate(
     SFSymbol Symbol,
     Annotation Annotation,
     string Name);
+
+/// <summary>Temporary native center-mark annotation retained for one STA read-back.</summary>
+internal sealed record NativeCenterMarkCandidate(Annotation Annotation, string Name);
 
 /// <summary>Internal result carrying a verified native drawing view and descriptor update.</summary>
 internal sealed record NativeDrawingViewResult(
@@ -2826,6 +3167,12 @@ internal sealed record NativeDrawingReopenResult(
 /// <summary>Internal result carrying a verified native note annotation and descriptor update.</summary>
 internal sealed record NativeDrawingAnnotationResult(
     DrawingAnnotationSnapshot Annotation,
+    SolidWorksDocumentDescriptor Descriptor,
+    SolidWorksDocumentDescriptor ExpectedDescriptor);
+
+/// <summary>Internal result carrying a verified native center-mark set and descriptor update.</summary>
+internal sealed record NativeDrawingCenterMarksResult(
+    System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot> Annotations,
     SolidWorksDocumentDescriptor Descriptor,
     SolidWorksDocumentDescriptor ExpectedDescriptor);
 

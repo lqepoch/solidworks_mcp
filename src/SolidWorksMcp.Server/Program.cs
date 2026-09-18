@@ -40,10 +40,15 @@ builder.Services
             Name = "solidworks-mcp",
             Version = ProtocolSchema.CurrentVersion,
         };
-        options.Capabilities = new ServerCapabilities { Tools = new ToolsCapability() };
+        options.Capabilities = new ServerCapabilities
+        {
+            Tools = new ToolsCapability(),
+            Resources = new ResourcesCapability(),
+        };
     })
     .WithStdioServerTransport()
-    .WithTools<CadMcpTools>();
+    .WithTools<CadMcpTools>()
+    .WithResources<SolidWorksAiResources>();
 
 builder.Logging.AddConsole(options =>
 {

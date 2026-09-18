@@ -10,9 +10,22 @@ internal sealed class FakeCadDrawingDocument(
     DocumentId documentId,
     string path,
     string configuration,
-    DocumentId? sourceDocumentId) : FakeCadDocument(session, documentId, path, configuration, CadDocumentType.Drawing), ICadDrawingDocument
+    DocumentId? sourceDocumentId,
+    DrawingSheetRequest? sheetRequest) : FakeCadDocument(session, documentId, path, configuration, CadDocumentType.Drawing), ICadDrawingDocument
 {
     private readonly DocumentId? sourceDocumentId = sourceDocumentId;
+    private readonly DrawingSheetSnapshot? sheet = sheetRequest is null
+        ? null
+        : new DrawingSheetSnapshot
+        {
+            Name = string.IsNullOrWhiteSpace(sheetRequest.Name) ? "Sheet1" : sheetRequest.Name.Trim(),
+            PaperSize = sheetRequest.PaperSize,
+            Width = sheetRequest.Width,
+            Height = sheetRequest.Height,
+            IsLandscape = sheetRequest.Width.Millimeters >= sheetRequest.Height.Millimeters,
+            ProjectionMethod = sheetRequest.ProjectionMethod,
+            TemplateName = "fake://rulepack-template",
+        };
     private readonly List<DrawingViewSnapshot> views = [];
     private readonly List<DrawingAnnotationSnapshot> annotations = [];
     private int viewSequence;
@@ -356,6 +369,101 @@ internal sealed class FakeCadDrawingDocument(
                 new EvidenceObservation("state.hash", StateHash)));
     }
 
+    /// <summary>
+    /// Simulates the bounded native center-mark set operation without exposing vendor selection state.
+    /// 在不暴露厂商 selection 状态的前提下模拟 bounded native center-mark set operation。
+    /// </summary>
+    public Task<OperationResult<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>> AddCenterMarksAsync(
+        DrawingCenterMarkRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "add-center-marks";
+        if (request is null
+            || string.IsNullOrWhiteSpace(request.RequestedAnnotationId.Value)
+            || string.IsNullOrWhiteSpace(request.ViewId.Value)
+            || string.IsNullOrWhiteSpace(request.ProvenanceKind)
+            || string.IsNullOrWhiteSpace(request.ProvenanceMethod)
+            || request.ApprovalState is not (DrawingAnnotationApprovalState.Approved or DrawingAnnotationApprovalState.Released)
+            || request.Target is DrawingCenterMarkTarget.None
+            || request.MinimumNewMarks is < 1 or > 64
+            || !double.IsFinite(request.Size.Millimeters)
+            || !double.IsFinite(request.Gap.Millimeters)
+            || request.Size.Millimeters < 0d
+            || request.Gap.Millimeters < 0d)
+        {
+            return Task.FromResult(FakeCadResults.Invalid<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(
+                operation,
+                "Center marks require exact identities, approved provenance, a target and bounded display values."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(operation));
+        }
+
+        if (!Session.Supports(CadCapabilityNames.DrawingMutation, out CadCapability capability))
+        {
+            return Task.FromResult(FakeCadResults.Unsupported<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(operation, capability));
+        }
+
+        if (Session.IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Closed<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(operation));
+        }
+
+        if (Session.Failures.TryTake(FakeCadFailurePoints.AddCenterMarks, out OperationError? injectedError))
+        {
+            return Task.FromResult(FakeCadResults.Failure<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(operation, injectedError!));
+        }
+
+        if (!views.Any(view => view.ViewId == request.ViewId))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(operation, request.ViewId.Value));
+        }
+
+        string identityPrefix = request.RequestedAnnotationId.Value.Trim();
+        if (annotations.Any(annotation => annotation.AnnotationId.Value.StartsWith(identityPrefix, StringComparison.Ordinal)))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<System.Collections.Immutable.ImmutableArray<DrawingAnnotationSnapshot>>(
+                operation,
+                $"Center-mark identity prefix '{identityPrefix}' already exists."));
+        }
+
+        // A two-hole group is deliberately represented as two native center marks in FakeCad. This catches a
+        // consumer that accidentally collapses a repeated geometry group into a single visual marker. FakeCad 中故意
+        // 将双孔组表示为两个 native center mark，防止调用方把重复几何错误压缩成一个视觉标记。
+        int count = request.Target.HasFlag(DrawingCenterMarkTarget.Holes) ? 2 : 1;
+        var created = new List<DrawingAnnotationSnapshot>(count);
+        for (int index = 0; index < count; index++)
+        {
+            var snapshot = new DrawingAnnotationSnapshot
+            {
+                AnnotationId = new AnnotationId($"{identityPrefix}:instance:{index + 1:000}"),
+                ViewId = request.ViewId,
+                Kind = "center-mark",
+                Text = string.Empty,
+                CoverageKeys = request.CoverageKeys,
+                Position = new Coordinate2D(Length.FromMillimeters(index * 10d), Length.FromMillimeters(0d)),
+            };
+            annotations.Add(snapshot);
+            created.Add(snapshot);
+        }
+
+        MarkMutated();
+        return Task.FromResult(
+            FakeCadResults.Success(
+                System.Collections.Immutable.ImmutableArray.CreateRange(created),
+                operation,
+                new EvidenceObservation("annotation.kind", "center-mark"),
+                new EvidenceObservation("annotation.view-id", request.ViewId.Value),
+                new EvidenceObservation("annotation.provenance.kind", request.ProvenanceKind.Trim()),
+                new EvidenceObservation("annotation.provenance.method", request.ProvenanceMethod.Trim()),
+                new EvidenceObservation("annotation.approval-state", request.ApprovalState.ToString()),
+                new EvidenceObservation("center-mark.association", "view-scoped-native"),
+                new EvidenceObservation("center-mark.native-count", created.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("state.hash", StateHash)));
+    }
+
     /// <inheritdoc />
     public Task<OperationResult<DrawingRepairReceipt>> RepositionAnnotationAsync(
         DrawingAnnotationPositionRepairRequest request,
@@ -447,6 +555,7 @@ internal sealed class FakeCadDrawingDocument(
     {
         Document = CreateSummary(),
         Views = [.. views.OrderBy(view => view.ViewId.Value, StringComparer.Ordinal)],
+        Sheet = sheet,
         Annotations = [.. annotations.OrderBy(annotation => annotation.AnnotationId.Value, StringComparer.Ordinal)],
     };
 

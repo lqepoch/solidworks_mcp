@@ -116,6 +116,7 @@ internal static class SolidWorksNativeInspectionReader
             var annotations = ImmutableArray.CreateBuilder<DrawingAnnotationSnapshot>();
             var annotationIdentities = new HashSet<string>(StringComparer.Ordinal);
             var outlines = ImmutableArray.CreateBuilder<string>();
+            DrawingSheetSnapshot? sheetSnapshot = ReadSheetSnapshot(drawing);
             int ordinal = 0;
             foreach (View view in EnumerateDrawingViews(drawing))
             {
@@ -153,6 +154,15 @@ internal static class SolidWorksNativeInspectionReader
                             Orientation = orientation,
                             Position = new Coordinate2D(Length.FromMeters(x), Length.FromMeters(y)),
                             ScaleDenominator = denominator,
+                            Outline = outline.Length >= 4
+                                ? new DrawingViewOutlineSnapshot
+                                {
+                                    Left = Length.FromMeters(outline[0]),
+                                    Bottom = Length.FromMeters(outline[1]),
+                                    Right = Length.FromMeters(outline[2]),
+                                    Top = Length.FromMeters(outline[3]),
+                                }
+                                : null,
                         });
                     ReadDrawingAnnotations(
                         view,
@@ -180,6 +190,7 @@ internal static class SolidWorksNativeInspectionReader
                     IsDirty = model.GetSaveFlag(),
                 },
                 Views = views.ToImmutable(),
+                Sheet = sheetSnapshot,
                 Annotations = annotations.ToImmutable(),
             };
             return OperationResults.Success(
@@ -190,6 +201,13 @@ internal static class SolidWorksNativeInspectionReader
                     [
                         new EvidenceObservation("document.id", descriptor.DocumentId.Value),
                         new EvidenceObservation("sheet.count", drawing.GetSheetCount().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        new EvidenceObservation("sheet.name", sheetSnapshot?.Name ?? "missing"),
+                        new EvidenceObservation("sheet.paper-size", sheetSnapshot?.PaperSize ?? "missing"),
+                        new EvidenceObservation("sheet.size-millimeters", sheetSnapshot is null
+                            ? "missing"
+                            : $"{sheetSnapshot.Width.Millimeters:G17}x{sheetSnapshot.Height.Millimeters:G17}"),
+                        new EvidenceObservation("sheet.projection", sheetSnapshot?.ProjectionMethod ?? "missing"),
+                        new EvidenceObservation("sheet.template", sheetSnapshot?.TemplateName ?? "missing"),
                         new EvidenceObservation("view.count", views.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("annotation.count", annotations.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         new EvidenceObservation("view.outlines", string.Join('|', outlines)),
@@ -289,6 +307,8 @@ internal static class SolidWorksNativeInspectionReader
         (int)swAnnotationType_e.swSFSymbol => "surface-finish",
         (int)swAnnotationType_e.swWeldSymbol => "weld",
         (int)swAnnotationType_e.swCThread => "cosmetic-thread",
+        (int)swAnnotationType_e.swCenterMarkSym => "center-mark",
+        (int)swAnnotationType_e.swCenterLine => "center-line",
         _ => $"native:{nativeType.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
     };
 
@@ -476,6 +496,74 @@ internal static class SolidWorksNativeInspectionReader
 
         return values;
     }
+
+    /// <summary>
+    /// Reads ISheet::GetProperties2 plus GetSize and template name. The native sheet is the source of truth for layout;
+    /// a template filename or a planner estimate is never substituted for this read-back.
+    /// 读取 ISheet::GetProperties2、GetSize 和 template name；native sheet 才是布局事实来源，不能用模板文件名或
+    /// planner 估算替代。
+    /// </summary>
+    private static DrawingSheetSnapshot? ReadSheetSnapshot(IDrawingDoc drawing)
+    {
+        object? raw = drawing.IGetCurrentSheet();
+        if (raw is not ISheet sheet)
+        {
+            return null;
+        }
+
+        try
+        {
+            double[] properties = ReadNumbers(sheet.GetProperties2());
+            if (properties.Length < 7)
+            {
+                return null;
+            }
+
+            double width = properties[5];
+            double height = properties[6];
+            if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0d || height <= 0d)
+            {
+                return null;
+            }
+
+            double sheetWidth = 0d;
+            double sheetHeight = 0d;
+            sheet.GetSize(ref sheetWidth, ref sheetHeight);
+            if (sheetWidth > 0d && sheetHeight > 0d)
+            {
+                width = sheetWidth;
+                height = sheetHeight;
+            }
+
+            int paperSize = Convert.ToInt32(properties[0], System.Globalization.CultureInfo.InvariantCulture);
+            bool firstAngle = Math.Abs(properties[4]) > 0.5d;
+            return new DrawingSheetSnapshot
+            {
+                Name = sheet.GetName()?.Trim() ?? "Sheet1",
+                PaperSize = PaperSizeName(paperSize, width, height),
+                Width = Length.FromMeters(width),
+                Height = Length.FromMeters(height),
+                IsLandscape = width >= height,
+                ProjectionMethod = firstAngle ? "FirstAngle" : "ThirdAngle",
+                TemplateName = Path.GetFileName(sheet.GetTemplateName()?.Trim() ?? string.Empty),
+            };
+        }
+        finally
+        {
+            SolidWorksDocumentRouting.Release(sheet);
+        }
+    }
+
+    private static string PaperSizeName(int paperSize, double widthMeters, double heightMeters) =>
+        paperSize switch
+        {
+            (int)swDwgPaperSizes_e.swDwgPaperA4size or (int)swDwgPaperSizes_e.swDwgPaperA4sizeVertical => "A4",
+            (int)swDwgPaperSizes_e.swDwgPaperA3size => "A3",
+            (int)swDwgPaperSizes_e.swDwgPaperA2size => "A2",
+            (int)swDwgPaperSizes_e.swDwgPaperA1size => "A1",
+            (int)swDwgPaperSizes_e.swDwgPaperA0size => "A0",
+            _ => $"custom:{widthMeters * 1000d:0.###}x{heightMeters * 1000d:0.###}",
+        };
 
     private static (Coordinate3D Minimum, Coordinate3D Maximum) ToBoundingBox(double[] values)
     {

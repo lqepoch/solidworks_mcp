@@ -325,3 +325,12 @@ The rounded-plate PDF was rendered and visually checked after the first placemen
 is visible inside the sheet boundary, separate from the pattern callout and title area. The formed U-bracket remains the
 second generic non-cylindrical case and does not request a surface-finish symbol. Private source PDFs, names and source
 values are not copied into this corpus.
+## Drawing sheet properties / 工程图图纸属性
+
+| interface | method | signature / return | versions | official source | runtime notes |
+| --- | --- | --- | --- | --- | --- |
+| `ISheet` | `GetProperties2` | `object GetProperties2()`; eight packed doubles: paper size, template index, scale numerator, scale denominator, first-angle flag, width, height, same-custom-property flag | 2022, 2026 | https://help.solidworks.com/2023/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISheet~GetProperties2.html | Treat the returned object as a numeric array and verify width/height/projection by read-back. Do not infer sheet size from the template filename. |
+| `ISheet` | `GetTemplateName` | `string GetTemplateName()` | 2022, 2026 | https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISheet~GetTemplateName.html | Template identity is evidence only; it does not prove paper size or title-block placement. |
+| `ISheet` | `GetSize` | `int GetSize(out double width, out double height)` | 2022, 2026 | https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISheet~GetSize.html | Use as an independent size read-back beside `GetProperties2`. |
+| `IDrawingDoc` | `SetupSheet3` | `bool SetupSheet3(string name, int paperSize, int templateIn, double scale1, double scale2, bool firstAngle, string templateName, double width, double height)` | 2022, 2026 | https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDrawingDoc~SetupSheet3.html | Use only with an explicit provider-neutral sheet contract, then force rebuild and inspect. A true return value is not sufficient evidence. |
+| `swDwgPaperSizes_e` | `swDwgPaperA4size` | enum value `6`; `swDwgPaperA4sizeVertical` is `7` | 2022, 2026 | https://help.solidworks.com/2022/english/api/swconst/SolidWorks.Interop.swconst~SolidWorks.Interop.swconst.swDwgPaperSizes_e.html | Chinese baseline uses A4 landscape unless an approved RulePack selects another A-series sheet. |

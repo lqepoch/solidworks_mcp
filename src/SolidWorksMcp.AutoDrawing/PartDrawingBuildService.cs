@@ -143,6 +143,18 @@ public static class PartDrawingBuildService
                 return Failure(partSave);
             }
 
+            // Layout is planned before the drawing is opened, but only from the RulePack's sheet contract and the
+            // actual requested model profile. The native provider must still read back the effective sheet before any
+            // view or annotation mutation; this is a plan, never a visual-success assumption.
+            // 图幅布局在打开 drawing 前生成，但只消费 RulePack 图幅契约和真实 profile；Provider 仍必须在任何视图/标注
+            // mutation 前读回有效图纸。这里是 plan，不是“看起来成功”的假设。
+            DrawingViewPlacementPlan layoutPlan = DrawingViewPlacementPlanner.Plan(
+                request.InitialSketchProfile,
+                request.ExtrusionDepth,
+                request.ScaleDenominator,
+                request.RulePack,
+                needsSectionView: request.ThroughHolePattern is not null,
+                needsDetailView: request.DetailView is not null);
             OperationResult<ICadDrawingDocument> createdDrawing = await session.CreateDrawingAsync(
                 new CreateDrawingRequest
                 {
@@ -150,6 +162,14 @@ public static class PartDrawingBuildService
                     Configuration = request.Configuration,
                     Path = request.DrawingPath,
                     SourceDocumentId = part.DocumentId,
+                    // The GB RulePack selects the installed GB title-block/template family. The request carries only
+                    // a semantic profile; the native provider discovers the actual template from the running
+                    // SOLIDWORKS installation. GB RulePack 选择安装的 GB 标题栏/模板族；request 只携带语义 profile，
+                    // 实际模板由 native provider 从当前 SOLIDWORKS 安装中发现。
+                    TemplateProfile = request.RulePack?.PackId.Equals("GB.rulepack", StringComparison.OrdinalIgnoreCase) == true
+                        ? DrawingTemplateProfile.GbMechanical
+                        : DrawingTemplateProfile.SolidWorksDefault,
+                    Sheet = layoutPlan.Sheet,
                 },
                 cancellationToken).ConfigureAwait(false);
             if (!createdDrawing.IsSuccess || createdDrawing.Value is null)
@@ -158,8 +178,34 @@ public static class PartDrawingBuildService
             }
 
             drawing = createdDrawing.Value;
+            OperationResult<CadInspectionSnapshot> initialDrawingInspection = await session.Inspection.InspectAsync(
+                drawing.DocumentId,
+                cancellationToken).ConfigureAwait(false);
+            if (!initialDrawingInspection.IsSuccess || initialDrawingInspection.Value is null)
+            {
+                return Failure(initialDrawingInspection);
+            }
+
+            if (!SheetMatches(layoutPlan.Sheet, initialDrawingInspection.Value.Sheet))
+            {
+                return OperationResults.Failure<PartDrawingBuildResult>(
+                    initialDrawingInspection.OperationId,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The native drawing sheet did not match the RulePack sheet contract before view creation.",
+                        ErrorCategories.Invariant,
+                        details: new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["requested-paper-size"] = layoutPlan.Sheet.PaperSize,
+                            ["actual-paper-size"] = initialDrawingInspection.Value.Sheet?.PaperSize ?? "missing",
+                            ["actual-template"] = initialDrawingInspection.Value.Sheet?.TemplateName ?? "missing",
+                        },
+                        remediation: "Preserve the drawing and inspect the installed template/sheet setup; do not continue with guessed view coordinates."),
+                    initialDrawingInspection.Evidence);
+            }
+
             ImmutableArray<DrawingViewSnapshot>.Builder views = ImmutableArray.CreateBuilder<DrawingViewSnapshot>(3);
-            foreach (DrawingSeed seed in DrawingSeeds(request.RulePack, request.DetailView is not null))
+            foreach (PlannedDrawingView seed in layoutPlan.Views)
             {
                 OperationResult<DrawingViewSnapshot> view = await drawing.AddViewAsync(
                     new DrawingViewRequest
@@ -167,9 +213,7 @@ public static class PartDrawingBuildService
                         RequestedViewId = new ViewId($"{request.DrawingDocumentId.Value}:{seed.Name.ToLowerInvariant()}"),
                         Name = seed.Name,
                         Orientation = seed.Orientation,
-                        Position = new Coordinate2D(
-                            Length.FromMillimeters(seed.XMillimeters),
-                            Length.FromMillimeters(seed.YMillimeters)),
+                        Position = seed.Position,
                         ScaleDenominator = request.ScaleDenominator,
                     },
                     cancellationToken).ConfigureAwait(false);
@@ -201,13 +245,10 @@ public static class PartDrawingBuildService
                         ParentViewId = views[0].ViewId,
                         Name = "Section A-A",
                         Label = "A",
-                        // Place the section in the lower-right view band.  Y=210 mm is the sheet upper boundary for
-                        // the current landscape template and clips the section label/geometry; keeping this explicit
-                        // coordinate below the seed views makes the first deterministic layout useful before D06's
-                        // general collision/reflow planner takes ownership.
-                        // 剖视放在右下视图区。当前横向模板的 Y=210 mm 接近图幅上边界，会裁切剖视；在 D06 通用碰撞/重排
-                        // planner 接管前，先用明确的下方坐标保证首个剖视具备工程可读性。
-                        Position = new Coordinate2D(Length.FromMillimeters(210d), Length.FromMillimeters(75d)),
+                        // The section position is derived from the same sheet/profile plan as the primary views. It
+                        // therefore stays outside the GB title-block corridor when the model size changes.
+                        // 剖视位置与主视图使用同一套图幅/profile plan，模型尺寸变化时仍避开 GB 标题栏保留区。
+                        Position = layoutPlan.SectionViewPosition,
                         CutLineStart = new Coordinate2D(Length.FromMillimeters(90d), Length.FromMillimeters(90d)),
                         CutLineEnd = new Coordinate2D(Length.FromMillimeters(90d), Length.FromMillimeters(160d)),
                         ScaleDenominator = request.ScaleDenominator,
@@ -274,7 +315,7 @@ public static class PartDrawingBuildService
                         // Keep the deterministic group callout in the lower reserved note band, away from the Top view
                         // at Y=210 mm and the provider-selected model dimension. 将重复组语义标注固定在下方保留
                         // note band，避开 Y=210 mm 的 Top view 以及 Provider 自己布置的原生模型尺寸。
-                        Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(35d)),
+                        Position = layoutPlan.FeatureNotePosition,
                     },
                     cancellationToken).ConfigureAwait(false);
                 if (!callout.IsSuccess || callout.Value is null)
@@ -291,8 +332,13 @@ public static class PartDrawingBuildService
                 double centerlineLengthMillimeters = Math.Sqrt(
                     Math.Pow(request.SlotCut.End.X.Millimeters - request.SlotCut.Start.X.Millimeters, 2d)
                     + Math.Pow(request.SlotCut.End.Y.Millimeters - request.SlotCut.Start.Y.Millimeters, 2d));
-                string slotText = $"SLOT W{request.SlotCut.Width.Millimeters.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}; "
-                    + $"C-C {centerlineLengthMillimeters.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}";
+                // Use a concise Chinese engineering note for the current semantic slot requirement. This is still a
+                // compiler-owned note, not a claim that SOLIDWORKS has generated a native slot callout; release QA
+                // must keep that distinction explicit until the native association path is implemented.
+                // 当前语义长圆槽要求使用简洁中文工程注记；它仍是 compiler note，不冒充 SOLIDWORKS native slot callout，
+                // 在 native 关联路径完成前，Release QA 必须保留这个区别。
+                string slotText = $"长圆槽：槽宽{request.SlotCut.Width.Millimeters.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}，"
+                    + $"中心距{centerlineLengthMillimeters.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}";
                 OperationResult<DrawingAnnotationSnapshot> callout = await drawing.AddAnnotationAsync(
                     new DrawingAnnotationRequest
                     {
@@ -307,7 +353,7 @@ public static class PartDrawingBuildService
                             $"feature.{NormalizeSemanticKey(request.SlotCut.Name)}.centerline-length",
                             $"feature.{NormalizeSemanticKey(request.SlotCut.Name)}.profile",
                         ],
-                        Position = new Coordinate2D(Length.FromMillimeters(45d), Length.FromMillimeters(25d)),
+                        Position = layoutPlan.SlotNotePosition,
                     },
                     cancellationToken).ConfigureAwait(false);
                 if (!callout.IsSuccess || callout.Value is null)
@@ -341,6 +387,35 @@ public static class PartDrawingBuildService
                     [
                         .. symbol.Evidence.Observations.Select(observation => new EvidenceObservation(
                             $"drawing.surface-finish.native.{observation.Key}",
+                            observation.Value,
+                            observation.ExpectedValue)),
+                    ];
+                }
+            }
+
+            ImmutableArray<DrawingAnnotationSnapshot> centerMarks = [];
+            ImmutableArray<EvidenceObservation> centerMarkEvidence = [];
+            if (request.CenterMarks is not null)
+            {
+                // Center marks remain native view annotations. The compiler sends one approved semantic request;
+                // the provider performs SOLIDWORKS view recognition and returns every newly materialized mark. 中心
+                // 标记保持为 native view annotation；compiler 只发送一个已批准语义请求，Provider 负责 SOLIDWORKS
+                // view recognition，并返回每一个真正 materialize 的 mark。
+                OperationResult<ImmutableArray<DrawingAnnotationSnapshot>> marks = await drawing.AddCenterMarksAsync(
+                    request.CenterMarks,
+                    cancellationToken).ConfigureAwait(false);
+                if (!marks.IsSuccess || marks.Value.IsDefaultOrEmpty)
+                {
+                    return Failure(marks);
+                }
+
+                centerMarks = marks.Value;
+                if (marks.Evidence is not null)
+                {
+                    centerMarkEvidence =
+                    [
+                        .. marks.Evidence.Observations.Select(observation => new EvidenceObservation(
+                            $"drawing.center-mark.native.{observation.Key}",
                             observation.Value,
                             observation.ExpectedValue)),
                     ];
@@ -458,6 +533,21 @@ public static class PartDrawingBuildService
                     drawingInspection.Evidence);
             }
 
+            if (!centerMarks.IsDefaultOrEmpty
+                && !centerMarks.All(centerMark => drawingInspection.Value.Annotations.Any(annotation =>
+                    annotation.AnnotationId == centerMark.AnnotationId
+                    && annotation.Kind.Equals("center-mark", StringComparison.Ordinal))))
+            {
+                return OperationResults.Failure<PartDrawingBuildResult>(
+                    drawingInspection.OperationId,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The persisted drawing did not contain every verified native center-mark identity.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing artifact and inspect native center-mark annotations before retrying."),
+                    drawingInspection.Evidence);
+            }
+
             if (!drawingInspection.Value.Annotations.Any(annotation => annotation.AnnotationId == modelDimensions.AnnotationId))
             {
                 return OperationResults.Failure<PartDrawingBuildResult>(
@@ -506,11 +596,13 @@ public static class PartDrawingBuildService
                 PatternCallout = patternCallout,
                 SlotCallout = slotCallout,
                 SurfaceFinish = surfaceFinish,
+                CenterMarks = centerMarks,
                 Pdf = pdf.Value,
                 RulePackId = request.RulePack?.PackId,
                 Projection = request.RulePack is null
                     ? null
                     : ToPlannerProjection(request.RulePack.Values.ProjectionMethod),
+                Disposition = "DRAFT_REVIEW_REQUIRED",
             };
             return OperationResults.Success(
                 result,
@@ -562,7 +654,23 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.surface-finish.maximum-roughness", request.SurfaceFinish?.MaximumRoughness?.Trim() ?? "none"),
                         new EvidenceObservation("drawing.surface-finish.reopened", surfaceFinish is null ? "not-requested" : "verified"),
                         .. surfaceFinishEvidence,
+                        new EvidenceObservation("drawing.center-mark.reopened", centerMarks.IsDefaultOrEmpty ? "not-requested" : "verified"),
+                        .. centerMarkEvidence,
                         new EvidenceObservation("drawing.rule-pack.id", request.RulePack?.PackId ?? "legacy-unresolved"),
+                        new EvidenceObservation("drawing.disposition", "DRAFT_REVIEW_REQUIRED"),
+                        new EvidenceObservation("drawing.release-authority", "drawing.release"),
+                        new EvidenceObservation("drawing.sheet.plan.name", layoutPlan.SheetName),
+                        new EvidenceObservation(
+                            "drawing.sheet.plan.size-millimeters",
+                            $"{layoutPlan.SheetWidth.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)}x{layoutPlan.SheetHeight.Millimeters.ToString("G17", System.Globalization.CultureInfo.InvariantCulture)}"),
+                        new EvidenceObservation("drawing.layout.plan.rationale", string.Join(" | ", layoutPlan.Rationale)),
+                        new EvidenceObservation("drawing.sheet.actual.name", drawingInspection.Value.Sheet?.Name ?? "missing"),
+                        new EvidenceObservation("drawing.sheet.actual.paper-size", drawingInspection.Value.Sheet?.PaperSize ?? "missing"),
+                        new EvidenceObservation("drawing.sheet.actual.size-millimeters", drawingInspection.Value.Sheet is null
+                            ? "missing"
+                            : $"{drawingInspection.Value.Sheet.Width.Millimeters:G17}x{drawingInspection.Value.Sheet.Height.Millimeters:G17}"),
+                        new EvidenceObservation("drawing.sheet.actual.projection", drawingInspection.Value.Sheet?.ProjectionMethod ?? "missing"),
+                        new EvidenceObservation("drawing.sheet.actual.template", drawingInspection.Value.Sheet?.TemplateName ?? "missing"),
                         new EvidenceObservation(
                             "drawing.rule-pack.projection",
                             request.RulePack?.Values.ProjectionMethod.ToString() ?? "legacy-request"),
@@ -678,27 +786,6 @@ public static class PartDrawingBuildService
             ?? string.Empty;
     }
 
-    private static IEnumerable<DrawingSeed> DrawingSeeds(
-        ResolvedDrawingRulePack? rulePack,
-        bool detailViewRequested)
-    {
-        yield return new DrawingSeed("Front", "Front", 90d, 125d);
-        // First-angle places the projected top view below the front view; third-angle places it above. This is a
-        // deliberate paper-space consequence of the resolved rule, not an ActiveDoc/UI guess.
-        // 第一角把俯视图放在主视图下方，第三角放在上方；这是 resolved rule 的纸空间结果，不猜 ActiveDoc/UI。
-        double projectedY = rulePack?.Values.ProjectionMethod switch
-        {
-            DrawingProjectionMethod.FirstAngle => 50d,
-            DrawingProjectionMethod.ThirdAngle => 210d,
-            _ => 210d,
-        };
-        yield return new DrawingSeed("Top", "Top", 90d, projectedY);
-        // Reserve the right-side label corridor for an explicit Detail View. The deterministic shift is part of the
-        // seed plan, so it does not depend on screen pixels or a live ActiveDoc layout guess. 对显式 Detail View 预留
-        // 右侧标签通道；这个确定性偏移属于 seed plan，不依赖屏幕像素或 live ActiveDoc 的布局猜测。
-        yield return new DrawingSeed("Isometric", "Isometric", detailViewRequested ? 175d : 210d, 125d);
-    }
-
     private static PartDrawingProjectionMethod ToPlannerProjection(DrawingProjectionMethod method) =>
         method switch
         {
@@ -712,6 +799,21 @@ public static class PartDrawingBuildService
             ? provenance.Source.SourceId
             : "unavailable";
 
+    /// <summary>Compares the compiler contract with native sheet read-back before any view mutation.</summary>
+    /// <summary>在任何视图 mutation 前比较 compiler contract 与 native sheet 读回结果。</summary>
+    private static bool SheetMatches(DrawingSheetRequest expected, DrawingSheetSnapshot? actual)
+    {
+        if (actual is null
+            || !actual.PaperSize.Equals(expected.PaperSize, StringComparison.OrdinalIgnoreCase)
+            || !actual.ProjectionMethod.Equals(expected.ProjectionMethod, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return Math.Abs(actual.Width.Millimeters - expected.Width.Millimeters) <= 0.01d
+            && Math.Abs(actual.Height.Millimeters - expected.Height.Millimeters) <= 0.01d;
+    }
+
     private static string NormalizeSemanticKey(string value) => string.Concat(
             value.Trim().ToLowerInvariant().Select(character => char.IsLetterOrDigit(character) ? character : '-'))
         .Trim('-');
@@ -719,7 +821,6 @@ public static class PartDrawingBuildService
     private static OperationResult<PartDrawingBuildResult> Failure<T>(OperationResult<T> failure) =>
         OperationResults.Failure<PartDrawingBuildResult>(failure.OperationId, failure.Error!, failure.Evidence);
 
-    private readonly record struct DrawingSeed(string Name, string Orientation, double XMillimeters, double YMillimeters);
 }
 
 /// <summary>Input for one explicit part-to-drawing build.</summary>
@@ -783,6 +884,12 @@ public sealed record PartDrawingBuildRequest
     public SurfaceFinishSymbolRequest? SurfaceFinish { get; init; }
 
     /// <summary>
+    /// Optional approval-gated native center-mark request for one exact drawing view.
+    /// 可选的、经过审批门禁的精确 drawing view native center-mark 请求。
+    /// </summary>
+    public DrawingCenterMarkRequest? CenterMarks { get; init; }
+
+    /// <summary>
     /// Optional explicit detail-view request. The request names the parent view, source circle and enlarged-view
     /// position; it is never inferred from a screenshot or an arbitrary active selection.
     /// 可选的显式局部放大视图请求；请求明确父视图、源圆和放大视图位置，绝不从截图或任意 active selection 猜测。
@@ -832,6 +939,9 @@ public sealed record PartDrawingBuildResult
     /// <summary>Verified native surface-finish symbol, when requested.</summary>
     public DrawingAnnotationSnapshot? SurfaceFinish { get; init; }
 
+    /// <summary>Verified native center marks materialized by the provider.</summary>
+    public ImmutableArray<DrawingAnnotationSnapshot> CenterMarks { get; init; } = [];
+
     /// <summary>Verified PDF export receipt.</summary>
     public required ExportReceipt Pdf { get; init; }
 
@@ -840,4 +950,11 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>Projection method actually selected from the resolved RulePack.</summary>
     public PartDrawingProjectionMethod? Projection { get; init; }
+
+    /// <summary>
+    /// High-level build disposition. This compiler endpoint produces a persisted draft; only drawing.release can
+    /// convert it to a release artifact after the independent QA gate passes.
+    /// 高层构建状态；本 compiler endpoint 只生成已持久化 draft，必须通过独立 QA gate 的 drawing.release 才能发布。
+    /// </summary>
+    public string Disposition { get; init; } = "DRAFT_REVIEW_REQUIRED";
 }

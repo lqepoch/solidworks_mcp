@@ -124,6 +124,10 @@ public sealed record DrawingRuleValues
 
     public required Length ViewSpacing { get; init; }
 
+    /// <summary>Minimum clear sheet margin from the printable border in millimetres.</summary>
+    /// <summary>距可打印边界的最小图纸留边，单位毫米。</summary>
+    public required Length SheetMargin { get; init; }
+
     public required string SectionLabelPrefix { get; init; }
 
     public required string DetailLabelPrefix { get; init; }
@@ -172,7 +176,7 @@ public sealed record DrawingRuleValues
             Add("rule.scales.invalid", "AllowedScaleDenominators", "Scale denominators must be finite, positive and unique.");
         }
 
-        if (!IsPositive(DefaultTextHeight) || !IsPositive(DimensionSpacing) || !IsPositive(ViewSpacing))
+        if (!IsPositive(DefaultTextHeight) || !IsPositive(DimensionSpacing) || !IsPositive(ViewSpacing) || !IsPositive(SheetMargin))
         {
             Add("rule.spacing.invalid", "DrawingRuleValues", "Text height and spacing rules must be finite and positive.");
         }
@@ -301,6 +305,8 @@ public sealed record DrawingRulePackOverride
 
     public Length? ViewSpacing { get; init; }
 
+    public Length? SheetMargin { get; init; }
+
     public string? SectionLabelPrefix { get; init; }
 
     public string? DetailLabelPrefix { get; init; }
@@ -402,6 +408,7 @@ public static class DrawingRulePackResolver
         "text.default-height",
         "dimension.spacing",
         "view.spacing",
+        "sheet.margin",
         "section.label-prefix",
         "detail.label-prefix",
         "repeated-feature.notation",
@@ -575,6 +582,11 @@ public static class DrawingRulePackResolver
             Apply("view.spacing", viewSpacing, () => current = current with { ViewSpacing = viewSpacing });
         }
 
+        if (patch.SheetMargin is Length sheetMargin)
+        {
+            Apply("sheet.margin", sheetMargin, () => current = current with { SheetMargin = sheetMargin });
+        }
+
         if (patch.SectionLabelPrefix is not null)
         {
             Apply("section.label-prefix", patch.SectionLabelPrefix, () => current = current with { SectionLabelPrefix = patch.SectionLabelPrefix });
@@ -695,6 +707,7 @@ public static class DrawingRulePackResolver
         "text.default-height" => CanonicalLength(values.DefaultTextHeight),
         "dimension.spacing" => CanonicalLength(values.DimensionSpacing),
         "view.spacing" => CanonicalLength(values.ViewSpacing),
+        "sheet.margin" => CanonicalLength(values.SheetMargin),
         "section.label-prefix" => values.SectionLabelPrefix,
         "detail.label-prefix" => values.DetailLabelPrefix,
         "repeated-feature.notation" => CanonicalNotation(values.RepeatedFeatureNotation),
@@ -709,6 +722,7 @@ public static class DrawingRulePackResolver
         "sheet.sizes" => CanonicalSheets((ImmutableArray<SheetSizeRule>)value),
         "scale.denominators" => CanonicalDoubles((ImmutableArray<ScaleDenominator>)value),
         "text.default-height" or "dimension.spacing" or "view.spacing" => CanonicalLength((Length)value),
+        "sheet.margin" => CanonicalLength((Length)value),
         "section.label-prefix" or "detail.label-prefix" => (string)value,
         "repeated-feature.notation" => CanonicalNotation((RepeatedFeatureNotationRule)value),
         "sheet.reserved-zones" => CanonicalZones((ImmutableArray<ReservedZoneRule>)value),

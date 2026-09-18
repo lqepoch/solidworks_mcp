@@ -178,6 +178,53 @@ public sealed record DrawingViewSnapshot
 
     /// <summary>Optional scale denominator.</summary>
     public int? ScaleDenominator { get; init; }
+
+    /// <summary>
+    /// Native paper-space outline read from the provider after view creation. Null means the provider could not prove
+    /// the outline and the drawing must not be treated as release-ready.
+    /// Provider 创建视图后读回的 native 纸空间轮廓；为空表示无法证明轮廓，工程图不能当作可发布结果。
+    /// </summary>
+    public DrawingViewOutlineSnapshot? Outline { get; init; }
+}
+
+/// <summary>Provider-neutral native drawing-view outline in canonical millimetres.</summary>
+/// <summary>使用统一毫米表达的厂商无关 native drawing view 轮廓。</summary>
+public sealed record DrawingViewOutlineSnapshot
+{
+    public required Length Left { get; init; }
+
+    public required Length Bottom { get; init; }
+
+    public required Length Right { get; init; }
+
+    public required Length Top { get; init; }
+
+    public Length Width => Length.FromMillimeters(Right.Millimeters - Left.Millimeters);
+
+    public Length Height => Length.FromMillimeters(Top.Millimeters - Bottom.Millimeters);
+}
+
+/// <summary>
+/// Read-back of the effective native sheet. This is deliberately separate from a RulePack request so a wrong template,
+/// Letter sheet or wrong projection cannot be hidden by a planner's estimate.
+/// 有效 native 图纸的读回结果；它与 RulePack request 分离，防止错误模板、Letter 图幅或错误投影被 planner 估算掩盖。
+/// </summary>
+public sealed record DrawingSheetSnapshot
+{
+    public required string Name { get; init; }
+
+    public required string PaperSize { get; init; }
+
+    public required Length Width { get; init; }
+
+    public required Length Height { get; init; }
+
+    public required bool IsLandscape { get; init; }
+
+    public required string ProjectionMethod { get; init; }
+
+    /// <summary>Native template path/name reported by SOLIDWORKS; callers should redact local roots in public logs.</summary>
+    public required string TemplateName { get; init; }
 }
 
 /// <summary>Inspection snapshot of one drawing annotation.</summary>
@@ -240,6 +287,9 @@ public sealed record CadInspectionSnapshot
 
     /// <summary>Drawing views; empty for non-drawing documents.</summary>
     public ImmutableArray<DrawingViewSnapshot> Views { get; init; } = [];
+
+    /// <summary>Effective drawing sheet, present only for drawing documents.</summary>
+    public DrawingSheetSnapshot? Sheet { get; init; }
 
     /// <summary>Drawing annotations; empty for non-drawing documents.</summary>
     public ImmutableArray<DrawingAnnotationSnapshot> Annotations { get; init; } = [];

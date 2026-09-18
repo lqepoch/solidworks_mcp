@@ -35,7 +35,7 @@ public sealed class RepeatedFeatureCalloutPlannerTests
         RepeatedFeatureCalloutPlan plan = RepeatedFeatureCalloutPlanner.Plan(request);
 
         Assert.Equal("linear-Y", plan.Distribution);
-        Assert.Equal("10X Ø12 THRU; PITCH 10; SYMMETRIC", plan.Text);
+        Assert.Equal("10×⌀12 通孔，孔距10，对称", plan.Text);
         Assert.Contains("feature.bracket-hole-pattern.quantity", plan.CoverageKeys);
         Assert.Contains("feature.bracket-hole-pattern.linear.pitch", plan.CoverageKeys);
         Assert.Contains("feature.bracket-hole-pattern.symmetry", plan.CoverageKeys);
@@ -61,7 +61,7 @@ public sealed class RepeatedFeatureCalloutPlannerTests
         RepeatedFeatureCalloutPlan plan = RepeatedFeatureCalloutPlanner.Plan(request);
 
         Assert.Equal("explicit-centers", plan.Distribution);
-        Assert.Contains("EXPLICIT CENTERS", plan.Text, StringComparison.Ordinal);
+        Assert.Contains("按中心坐标", plan.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("PITCH", plan.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("PCD", plan.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("SYMMETRIC", plan.Text, StringComparison.Ordinal);

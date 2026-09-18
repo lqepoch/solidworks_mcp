@@ -157,6 +157,38 @@
       "directCodeAdaptation": null
     },
     {
+      "name": "eyfel/mcp-server-solidworks",
+      "url": "https://github.com/eyfel/mcp-server-solidworks",
+      "cloneUrl": "https://github.com/eyfel/mcp-server-solidworks.git",
+      "path": "references/eyfel-mcp-server-solidworks",
+      "commit": "fc3c743228d717393c639ec7fcc5b562ab97662e",
+      "ref": "main",
+      "license": "MIT",
+      "licenseSource": "https://github.com/eyfel/mcp-server-solidworks/blob/fc3c743228d717393c639ec7fcc5b562ab97662e/LICENSE",
+      "role": "MCP tool composition, prompt-oriented SOLIDWORKS command surface and practical end-to-end interaction reference.",
+      "reviewedFiles": [
+        "README.md",
+        "src/",
+        "server.py",
+        "pyproject.toml"
+      ],
+      "capabilities": [
+        "MCP tool registration and transport composition",
+        "Prompt-facing CAD operation naming",
+        "Practical SOLIDWORKS automation examples"
+      ],
+      "adoptedIdeas": [
+        "Expose high-level intent-oriented MCP entry points instead of forcing clients to discover every low-level CAD call",
+        "Use tool descriptions and examples to teach an AI client the safe operation boundary"
+      ],
+      "rejectedIdeas": [
+        "Python as a required runtime",
+        "Unbounded direct COM tool access",
+        "Using prompt text or screenshots as a substitute for typed engineering requirements and read-back verification"
+      ],
+      "directCodeAdaptation": null
+    },
+    {
       "name": "modelcontextprotocol/csharp-sdk",
       "url": "https://github.com/modelcontextprotocol/csharp-sdk",
       "cloneUrl": "https://github.com/modelcontextprotocol/csharp-sdk.git",

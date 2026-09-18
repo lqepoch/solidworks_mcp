@@ -15,6 +15,7 @@ source snapshots are intentionally committed for auditability but remain exclude
 | czuryk/SolidworksMCP | MIT | Research reference for transactions and invariant verification | None |
 | Slacker-LLC/solidworks-mcp | Apache-2.0 | Research reference for drawing/selection/unit boundaries | None |
 | hjbaard/SolidWorks-MCP | MIT | Research reference for live verification workflows | None |
+| eyfel/mcp-server-solidworks | MIT | Research reference for intent-oriented MCP tool composition and prompt-facing operation descriptions | None |
 | modelcontextprotocol/csharp-sdk | Apache-2.0 | Official MCP SDK dependency and API reference | None beyond package use |
 
 When code is adapted, the contributor must add the exact source repository, commit, file/symbol, license and notice text to the manifest and this document before merging.

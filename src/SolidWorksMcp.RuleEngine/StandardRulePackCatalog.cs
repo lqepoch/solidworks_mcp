@@ -60,14 +60,20 @@ public static class StandardRulePackCatalog
                 DefaultTextHeight = Length.FromMillimeters(3.5d),
                 DimensionSpacing = Length.FromMillimeters(8d),
                 ViewSpacing = Length.FromMillimeters(20d),
+                // Derived from the local GB/T 14689 catalogue policy record; the official standard text is not copied.
+                // 来源于本地 GB/T 14689 目录 policy 记录；仓库不复制标准正文。
+                SheetMargin = Length.FromMillimeters(10d),
                 SectionLabelPrefix = "A-",
                 DetailLabelPrefix = "DETAIL ",
                 RepeatedFeatureNotation = new RepeatedFeatureNotationRule
                 {
-                    QuantitySizeTemplate = "N-{size}",
-                    UniformDistributionText = "EQ SP",
-                    LinearPitchTemplate = "P={pitch}",
-                    CircularPitchTemplate = "PCD={pcd};{angle}",
+                    // Keep the baseline notation aligned with the Chinese-language engineering deliverable. The
+                    // templates are metadata for future compiler stages; no standard prose is redistributed here.
+                    // baseline notation 与中文工程交付保持一致；这些是未来 compiler 使用的 metadata，不复制标准正文。
+                    QuantitySizeTemplate = "{quantity}×⌀{size}",
+                    UniformDistributionText = "均布",
+                    LinearPitchTemplate = "孔距{pitch}",
+                    CircularPitchTemplate = "节圆直径{pcd}，{angle}",
                 },
                 ReservedZones =
                 [

@@ -18,7 +18,7 @@ public sealed record RepeatedFeatureCalloutPlan
     /// <summary>Stable source feature/group name.</summary>
     public required string FeatureName { get; init; }
 
-    /// <summary>Compact deterministic callout text, for example <c>2X Ø6 THRU; PITCH 20; SYMMETRIC</c>.</summary>
+    /// <summary>Compact GB-oriented callout text, for example <c>2×⌀6 通孔，孔距20，对称</c>.</summary>
     public required string Text { get; init; }
 
     /// <summary>Detected distribution classification used in evidence and explain output.</summary>
@@ -80,35 +80,35 @@ public static class RepeatedFeatureCalloutPlanner
         if (linear is not null)
         {
             distribution = $"linear-{linear.Value.Axis}";
-            distributionText = $"PITCH {FormatMillimeters(linear.Value.PitchMillimeters)}";
+            distributionText = $"孔距{FormatMillimeters(linear.Value.PitchMillimeters)}";
             coverage.Add($"feature.{featureKey}.linear.pitch");
             coverage.Add($"feature.{featureKey}.linear.equal-spacing");
         }
         else if (circular is not null)
         {
             distribution = "circular";
-            distributionText = $"PCD {FormatMillimeters(circular.Value.PcdMillimeters)}; EQ SP";
+            distributionText = $"节圆直径{FormatMillimeters(circular.Value.PcdMillimeters)}，均布";
             coverage.Add($"feature.{featureKey}.circular.pcd");
             coverage.Add($"feature.{featureKey}.circular.equal-distribution");
         }
         else
         {
             distribution = "explicit-centers";
-            distributionText = "EXPLICIT CENTERS";
+            distributionText = "按中心坐标";
             coverage.Add($"feature.{featureKey}.explicit-centers");
         }
 
         if (originSymmetry)
         {
-            distributionText += "; SYMMETRIC";
+            distributionText += "，对称";
             coverage.Add($"feature.{featureKey}.symmetry");
         }
 
         string text = string.Concat(
             request.Centers.Length.ToString(CultureInfo.InvariantCulture),
-            "X Ø",
+            "×⌀",
             FormatMillimeters(request.Diameter.Millimeters),
-            " THRU; ",
+            " 通孔，",
             distributionText);
         return new RepeatedFeatureCalloutPlan
         {

@@ -154,6 +154,59 @@ public sealed record CreateDrawingRequest
 
     /// <summary>Drawing configuration name.</summary>
     public string Configuration { get; init; } = "Default";
+
+    /// <summary>
+    /// Provider-neutral template profile selected by the engineering RulePack.
+    /// 由工程 RulePack 选择的厂商无关模板 profile。
+    ///
+    /// The value is a semantic request, not a machine path. The native provider discovers the installed template
+    /// from the running SOLIDWORKS installation and fails closed when the requested profile is unavailable. 这里是
+    /// 语义请求而不是机器绝对路径；native provider 从当前 SOLIDWORKS 安装中发现模板，不可用时 fail closed。
+    /// </summary>
+    public DrawingTemplateProfile TemplateProfile { get; init; } = DrawingTemplateProfile.SolidWorksDefault;
+
+    /// <summary>
+    /// Explicit sheet contract selected by the RulePack/compiler. The provider must apply it and read it back;
+    /// a template filename alone is never accepted as proof of paper size or projection.
+    /// 由 RulePack/compiler 选择的显式图纸契约；Provider 必须应用后读回验证，不能把模板文件名当作图幅或投影证明。
+    /// </summary>
+    public DrawingSheetRequest? Sheet { get; init; }
+}
+
+/// <summary>
+/// Vendor-neutral drawing-sheet contract. Dimensions are canonical millimetres and projection is semantic text so
+/// CadAbstractions does not reference RuleEngine or SOLIDWORKS enums.
+/// 厂商无关的工程图图纸契约；尺寸统一为毫米，投影使用语义文本，避免 CadAbstractions 引用 RuleEngine 或 COM enum。
+/// </summary>
+public sealed record DrawingSheetRequest
+{
+    /// <summary>Stable sheet name used by the provider.</summary>
+    public string Name { get; init; } = "Sheet1";
+
+    /// <summary>Standard paper name, for example A4 or A3.</summary>
+    public required string PaperSize { get; init; }
+
+    /// <summary>Paper width in millimetres in landscape/portrait orientation as selected by the compiler.</summary>
+    public required Length Width { get; init; }
+
+    /// <summary>Paper height in millimetres in landscape/portrait orientation as selected by the compiler.</summary>
+    public required Length Height { get; init; }
+
+    /// <summary>Projection method name, currently FirstAngle or ThirdAngle.</summary>
+    public required string ProjectionMethod { get; init; }
+}
+
+/// <summary>
+/// Drawing template families understood by the provider without leaking vendor COM types into the core.
+/// Provider 支持的工程图模板族，不把厂商 COM 类型泄漏到 Core/Compiler。
+/// </summary>
+public enum DrawingTemplateProfile
+{
+    /// <summary>Use the user's configured SOLIDWORKS default template.</summary>
+    SolidWorksDefault,
+
+    /// <summary>Use the installed GB mechanical drawing template and its native title-block frame.</summary>
+    GbMechanical,
 }
 
 /// <summary>Request to create a solid body in a part.</summary>
@@ -476,6 +529,108 @@ public sealed record SurfaceFinishSymbolRequest
     public DrawingAnnotationApprovalState ApprovalState { get; init; }
 
     /// <summary>Stable requirement-graph keys covered by this symbol.</summary>
+    public ImmutableArray<string> CoverageKeys { get; init; } = [];
+}
+
+/// <summary>
+/// Selects the native geometry classes that SOLIDWORKS may center-mark in one exact drawing view.
+/// 选择 SOLIDWORKS 可以在一个精确工程图视图中自动生成中心标记的原生几何类别。
+/// </summary>
+[Flags]
+public enum DrawingCenterMarkTarget
+{
+    /// <summary>No target; rejected by the request validator.</summary>
+    None = 0,
+
+    /// <summary>Hole edges and cylindrical hole features.</summary>
+    Holes = 1,
+
+    /// <summary>Fillet/round arcs.</summary>
+    Fillets = 2,
+
+    /// <summary>Obround slot geometry.</summary>
+    Slots = 4,
+}
+
+/// <summary>Connection-line options aligned to SOLIDWORKS swCenterMarkConnectionLine_e.</summary>
+/// <summary>与 SOLIDWORKS swCenterMarkConnectionLine_e 对齐的中心标记连接线选项。</summary>
+[Flags]
+public enum DrawingCenterMarkConnectionLines
+{
+    /// <summary>Do not add connection lines.</summary>
+    None = 0,
+
+    /// <summary>Show linear pattern connection lines.</summary>
+    Linear = 1,
+
+    /// <summary>Show circular pattern connection lines.</summary>
+    Circular = 2,
+
+    /// <summary>Show radial pattern connection lines.</summary>
+    Radial = 4,
+
+    /// <summary>Show base center-mark lines.</summary>
+    Base = 8,
+}
+
+/// <summary>
+/// Requests deterministic native center marks for one exact drawing view.
+/// 请求在一个精确 drawing view 上确定性生成 native center marks。
+/// </summary>
+/// <remarks>
+/// This request deliberately uses SOLIDWORKS' bounded view operation instead of exposing global selection marks. The
+/// provider verifies the exact view, compares native center-mark counts before/after, names each new annotation, and
+/// returns read-back snapshots. 该请求刻意使用 SOLIDWORKS 有界 view operation，而不是向 MCP 暴露全局 selection mark；
+/// Provider 会校验精确视图、比较 native center-mark 数量、命名新 annotation，并返回读回快照。
+/// </remarks>
+public sealed record DrawingCenterMarkRequest
+{
+    /// <summary>Stable identity prefix for the generated center-mark set.</summary>
+    public required AnnotationId RequestedAnnotationId { get; init; }
+
+    /// <summary>Exact drawing view that owns the center marks.</summary>
+    public required ViewId ViewId { get; init; }
+
+    /// <summary>Allowlisted native geometry target classes.</summary>
+    public DrawingCenterMarkTarget Target { get; init; } = DrawingCenterMarkTarget.Holes;
+
+    /// <summary>Pattern connection lines to request.</summary>
+    public DrawingCenterMarkConnectionLines ConnectionLines { get; init; } = DrawingCenterMarkConnectionLines.None;
+
+    /// <summary>Whether a slot center or each slot end receives the mark.</summary>
+    public bool LinearSlotCenter { get; init; } = true;
+
+    /// <summary>Whether an arc center or each arc end receives the mark.</summary>
+    public bool ArcSlotCenter { get; init; } = true;
+
+    /// <summary>Whether SOLIDWORKS document center-mark display defaults should be used.</summary>
+    public bool UseDocumentDefaults { get; init; } = true;
+
+    /// <summary>Center-mark size when document defaults are disabled.</summary>
+    public Length Size { get; init; } = Length.FromMillimeters(3d);
+
+    /// <summary>Gap when document defaults are disabled.</summary>
+    public Length Gap { get; init; } = Length.FromMillimeters(0.5d);
+
+    /// <summary>Whether extension lines are requested when document defaults are disabled.</summary>
+    public bool ExtendedLines { get; init; }
+
+    /// <summary>Whether the center-line font is requested when document defaults are disabled.</summary>
+    public bool CenterLineFont { get; init; } = true;
+
+    /// <summary>Minimum number of newly created native marks required as evidence.</summary>
+    public int MinimumNewMarks { get; init; } = 1;
+
+    /// <summary>Requirement provenance class; unapproved proposals cannot mutate a drawing.</summary>
+    public string ProvenanceKind { get; init; } = string.Empty;
+
+    /// <summary>Concrete provenance method, for example model-native center recognition.</summary>
+    public string ProvenanceMethod { get; init; } = string.Empty;
+
+    /// <summary>Approval state required before native materialization.</summary>
+    public DrawingAnnotationApprovalState ApprovalState { get; init; }
+
+    /// <summary>Stable requirement-graph keys covered by the generated set.</summary>
     public ImmutableArray<string> CoverageKeys { get; init; } = [];
 }
 

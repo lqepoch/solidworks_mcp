@@ -1,0 +1,160 @@
+﻿{
+    "schemaVersion":  "1.0",
+    "source":  "National Standard Full Text Publicity System (SAMR/SAC) catalogue metadata",
+    "generatedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+    "localCacheRoot":  "C:\\Users\\lqepo\\AppData\\Local\\SolidWorksMcp\\standards",
+    "standards":  [
+                      {
+                          "standardId":  "GB/T 14689-2008",
+                          "chineseTitle":  "技术制图 图纸幅面和格式",
+                          "status":  "现行",
+                          "effectiveDate":  "2009-01-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=6C3BD0FCD8FFFE7CEC6404FB0180EA96",
+                          "adoptedFromIsoOrIec":  true,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "857CBBBC49995AB9C1CC9E2007C272A3E4372D988784A7ED5235F7EE874AEC26",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 14690-1993",
+                          "chineseTitle":  "技术制图 比例",
+                          "status":  "现行",
+                          "effectiveDate":  "1994-07-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=C111329A862219BCCCAAF32E14FF4CD0",
+                          "adoptedFromIsoOrIec":  true,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "5F33C57CCE8EA8255E9D6CC7A66EB47737B2D3A430C5EB6F735E9B2CFCFC68CC",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 14692-2008",
+                          "chineseTitle":  "技术制图 投影法",
+                          "status":  "现行",
+                          "effectiveDate":  "2009-01-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=1072044E4F129FBC0423C354C2D6FE51",
+                          "adoptedFromIsoOrIec":  true,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "B485607173E05748910197CFFA1F26CFB1AA56D70BA3F9157F918ADEC51C1AE4",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 10609.1-2008",
+                          "chineseTitle":  "技术制图 标题栏",
+                          "status":  "现行",
+                          "effectiveDate":  "2009-01-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=0F8577CB9AB82D5819048A87920CABAB",
+                          "adoptedFromIsoOrIec":  false,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "02743047047611F73C49EE6183184619103C771FBFD99F4A52A98B8E79B2F718",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 4458.1-2002",
+                          "chineseTitle":  "机械制图 图样画法 视图",
+                          "status":  "现行",
+                          "effectiveDate":  "2003-04-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/std_list?p.p1=0\u0026p.p2=GBT%204458.1\u0026p.p90=circulation_date\u0026p.p91=desc",
+                          "adoptedFromIsoOrIec":  true,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "F99B81042FE85FA35260B9B9D946B39AC232515A0035DA155879B23B15523686",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 4458.3-2013",
+                          "chineseTitle":  "机械制图 轴测图",
+                          "status":  "现行",
+                          "effectiveDate":  "2014-10-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=52098A4E44A7F21B33FB11F2609052B4",
+                          "adoptedFromIsoOrIec":  false,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "E270E6343500F4F1471E4AF15DF7FD21757F9EE298C05C9687512084F4CAFCAD",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 4458.4-2003",
+                          "chineseTitle":  "机械制图 尺寸注法",
+                          "status":  "现行",
+                          "effectiveDate":  "2003-12-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=08588A5F3FE19F16B9EE8D5D87E064D5",
+                          "adoptedFromIsoOrIec":  false,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "7107A0F072C5663FB473343FE2E9EC6F28A2D9DB8F0557B098A7680B16E41665",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 4458.5-2003",
+                          "chineseTitle":  "机械制图 尺寸公差与配合注法",
+                          "status":  "现行",
+                          "effectiveDate":  "2003-12-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/std_list?p.p1=0\u0026p.p2=GBT%204458.\u0026p.p90=circulation_date\u0026p.p91=desc",
+                          "adoptedFromIsoOrIec":  false,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "E49545F7F8325342065EC162604D2BE267205ACB5B8ECE2763E350DE7D6B2428",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 4458.6-2002",
+                          "chineseTitle":  "机械制图 图样画法 剖视图和断面图",
+                          "status":  "现行",
+                          "effectiveDate":  "2003-04-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/gb/newGbInfo?hcno=98FC4489987C8309C89CC2816AFFCE9C",
+                          "adoptedFromIsoOrIec":  true,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "1BAF23ED3FC30F21E0619035831F566499AC933C9BC15E675BCBF4C16638E58B",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 1800.1-2020",
+                          "chineseTitle":  "产品几何技术规范（GPS）线性尺寸公差 ISO 代号体系",
+                          "status":  "现行",
+                          "effectiveDate":  "2021-03-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=B2EA3A6454B903DCF466A0CE16F2ED26",
+                          "adoptedFromIsoOrIec":  true,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "7855B7E6E875ED4554CA148785D8B2564A864FBB74457CBA9E0939204C2FD18A",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 1804-2000",
+                          "chineseTitle":  "一般公差 未注公差的线性和角度尺寸的公差",
+                          "status":  "现行",
+                          "effectiveDate":  "2000-12-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=1BF8CFBC644315488F68433EEC2F9D58",
+                          "adoptedFromIsoOrIec":  false,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "FCE59586380358F55AB6C02211DB38E77955D72C62DD7056B40C79EE431FE94A",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      },
+                      {
+                          "standardId":  "GB/T 1182-2018",
+                          "chineseTitle":  "产品几何技术规范（GPS）几何公差",
+                          "status":  "现行",
+                          "effectiveDate":  "2019-04-01",
+                          "officialUrl":  "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=C87A687A21B36E2F2D3A09BDF03DCA01",
+                          "adoptedFromIsoOrIec":  true,
+                          "retrievedAtUtc":  "2026-09-18T01:21:47.3321951Z",
+                          "officialPageCache":  "official-page-cached-user-local",
+                          "officialPageSha256":  "1537B6B7E974014EC29D94BBB7CFA55EDE9E5B93CB418409D8C2EE668346489C",
+                          "redistribution":  "catalogue metadata and derived RulePack policy only; no standard text or scanned pages"
+                      }
+                  ],
+    "derivedPolicy":  {
+                          "defaultSheet":  "A4-landscape",
+                          "projection":  "FirstAngle unless enterprise/customer RulePack overrides with provenance",
+                          "titleBlock":  "GB/T 10609.1-2008 metadata reference; native installed GB template required",
+                          "viewLayout":  "Aligned projected views; reserved title-block zone; validate native IView.GetOutline after creation",
+                          "dimensions":  "Do not invent dimensions from appearance; native/model-associated or approved requirement graph only",
+                          "releaseGate":  "Wrong sheet/template, unsupported association, missing requirement coverage, or collision is not Released"
+                      }
+}

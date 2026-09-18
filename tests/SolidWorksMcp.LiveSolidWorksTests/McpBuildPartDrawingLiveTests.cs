@@ -81,10 +81,9 @@ public sealed class McpBuildPartDrawingLiveTests
             Assert.Contains("Section A-A", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("pattern-callout", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.Contains("drawing.pattern-callout.reopened", result.StructuredContent.ToString(), StringComparison.Ordinal);
-            Assert.Contains("2X", result.StructuredContent.ToString(), StringComparison.Ordinal);
-            Assert.Contains("THRU", result.StructuredContent.ToString(), StringComparison.Ordinal);
-            Assert.Contains("PITCH 20", result.StructuredContent.ToString(), StringComparison.Ordinal);
-            Assert.Contains("SYMMETRIC", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("2×⌀6 通孔", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("孔距20", result.StructuredContent.ToString(), StringComparison.Ordinal);
+            Assert.Contains("对称", result.StructuredContent.ToString(), StringComparison.Ordinal);
             Assert.True(File.Exists(partPath), "The MCP workflow did not persist the native .sldprt artifact.");
             Assert.True(File.Exists(drawingPath), "The MCP workflow did not persist the native .slddrw artifact.");
             Assert.True(File.Exists(pdfPath), "The MCP workflow did not export the native PDF artifact.");
@@ -147,6 +146,7 @@ public sealed class McpBuildPartDrawingLiveTests
                 ThroughHolePatternJson,
                 SlotCutJson: null,
                 SurfaceFinishJson: SurfaceFinishJson(),
+                CenterMarkJson: CenterMarkJson(),
                 IncludeDetailView: true),
             new ReferencePartCase(
                 "formed-u-bracket",
@@ -155,6 +155,7 @@ public sealed class McpBuildPartDrawingLiveTests
                 ThroughHolePatternJson: null,
                 SlotCutJson: SlotCutJson,
                 SurfaceFinishJson: null,
+                CenterMarkJson: null,
                 IncludeDetailView: false),
         ];
 
@@ -209,6 +210,13 @@ public sealed class McpBuildPartDrawingLiveTests
                 if (referenceCase.SurfaceFinishJson is not null)
                 {
                     arguments["surfaceFinishJson"] = referenceCase.SurfaceFinishJson.Replace(
+                        "{0}",
+                        $"mcp-reference-drawing-{caseId}",
+                        StringComparison.Ordinal);
+                }
+                if (referenceCase.CenterMarkJson is not null)
+                {
+                    arguments["centerMarkJson"] = referenceCase.CenterMarkJson.Replace(
                         "{0}",
                         $"mcp-reference-drawing-{caseId}",
                         StringComparison.Ordinal);
@@ -270,6 +278,7 @@ public sealed class McpBuildPartDrawingLiveTests
         string? ThroughHolePatternJson,
         string? SlotCutJson,
         string? SurfaceFinishJson,
+        string? CenterMarkJson,
         bool IncludeDetailView);
 
     /// <summary>
@@ -363,7 +372,7 @@ public sealed class McpBuildPartDrawingLiveTests
             JsonElement slotCallout = value.GetProperty("slotCallout");
             Assert.NotEqual(JsonValueKind.Null, slotCallout.ValueKind);
             Assert.Equal("slot-callout", slotCallout.GetProperty("kind").GetString());
-            Assert.Equal("SLOT W4; C-C 12", slotCallout.GetProperty("text").GetString());
+            Assert.Equal("长圆槽：槽宽4，中心距12", slotCallout.GetProperty("text").GetString());
             Assert.Contains("drawing.slot-callout.reopened", structuredText, StringComparison.Ordinal);
             Assert.Contains("part.slot-cut.native.slot.native-length-millimeters", structuredText, StringComparison.Ordinal);
         }
@@ -386,6 +395,20 @@ public sealed class McpBuildPartDrawingLiveTests
         else
         {
             Assert.Equal(JsonValueKind.Null, surfaceFinish.ValueKind);
+        }
+
+        JsonElement centerMarks = value.GetProperty("centerMarks");
+        if (referenceCase.CenterMarkJson is not null)
+        {
+            Assert.True(centerMarks.GetArrayLength() >= 2, "The native center-mark group did not return two marks.");
+            Assert.All(centerMarks.EnumerateArray(), mark => Assert.Equal("center-mark", mark.GetProperty("kind").GetString()));
+            Assert.Contains("drawing.center-mark.reopened", structuredText, StringComparison.Ordinal);
+            Assert.Contains("drawing.center-mark.native.center-mark.association", structuredText, StringComparison.Ordinal);
+            Assert.Contains("auto_insert_center_marks2", structuredText, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(0, centerMarks.GetArrayLength());
         }
 
         JsonElement[] drawingViews = [.. drawing.GetProperty("views").EnumerateArray()];
@@ -462,6 +485,16 @@ public sealed class McpBuildPartDrawingLiveTests
         + "\"maximumRoughness\":\"0.8\",\"provenanceKind\":\"human_approved\","
         + "\"provenanceMethod\":\"live-reference-fixture\",\"approvalState\":\"Approved\","
         + "\"coverageKeys\":[\"surface-finish.primary-faces\"]"
+        + "}";
+
+    /// <summary>Returns an approved native center-mark request for the rounded-plate hole group.</summary>
+    /// <summary>返回圆角板孔组使用的已批准 native center-mark 请求。</summary>
+    private static string CenterMarkJson() => "{"
+        + "\"annotationId\":\"{0}:center-marks:hole-group\","
+        + "\"viewId\":\"{0}:front\","
+        + "\"target\":\"Holes\",\"connectionLines\":\"Linear\",\"minimumNewMarks\":2,"
+        + "\"provenanceKind\":\"model_native\",\"provenanceMethod\":\"auto_insert_center_marks2\","
+        + "\"approvalState\":\"Approved\",\"coverageKeys\":[\"hole-group.center-marks\"]"
         + "}";
 
     private const string DProfileJson = "{\"segments\":["

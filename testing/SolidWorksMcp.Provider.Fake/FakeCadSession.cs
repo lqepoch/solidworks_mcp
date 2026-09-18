@@ -139,7 +139,13 @@ internal sealed class FakeCadSession : ICadSession
             request.Path,
             request.Configuration,
             CadDocumentType.Drawing,
-            (session, id, path, configuration) => new FakeCadDrawingDocument(session, id, path, configuration, request.SourceDocumentId),
+            (session, id, path, configuration) => new FakeCadDrawingDocument(
+                session,
+                id,
+                path,
+                configuration,
+                request.SourceDocumentId,
+                request.Sheet),
             cancellationToken);
     }
 

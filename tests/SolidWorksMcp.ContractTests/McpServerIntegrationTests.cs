@@ -1,5 +1,6 @@
 ﻿using System.IO.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -325,7 +326,7 @@ public sealed class McpServerIntegrationTests
                     + "\"start\":{\"xMillimeters\":-20,\"yMillimeters\":-8},"
                     + "\"end\":{\"xMillimeters\":-20,\"yMillimeters\":8},"
                     + "\"supportFaceProbe\":{\"xMillimeters\":-22,\"yMillimeters\":0}}",
-                ["surfaceFinishJson"] = "{\"annotationId\":\"mcp-build-drawing-001:surface-finish:plate\","
+                ["surfaceFinishJson"] = "{\"annotationId\":\"mcp-build-drawing-001:surface-finish:plate\"," 
                     + "\"viewId\":\"mcp-build-drawing-001:front\","
                     + "\"positionXMillimeters\":145,\"positionYMillimeters\":35,"
                     + "\"symbolType\":\"MachiningRequired\",\"layDirection\":\"None\","
@@ -333,6 +334,11 @@ public sealed class McpServerIntegrationTests
                     + "\"maximumRoughness\":\"0.8\",\"provenanceKind\":\"human_approved\","
                     + "\"provenanceMethod\":\"contract-fixture\",\"approvalState\":\"Approved\","
                     + "\"coverageKeys\":[\"surface-finish.primary-faces\"]}",
+                ["centerMarkJson"] = "{\"annotationId\":\"mcp-build-drawing-001:center-marks:holes\","
+                    + "\"viewId\":\"mcp-build-drawing-001:front\",\"target\":\"Holes\","
+                    + "\"connectionLines\":\"Linear\",\"minimumNewMarks\":2,"
+                    + "\"provenanceKind\":\"model_native\",\"provenanceMethod\":\"contract-fixture\","
+                    + "\"approvalState\":\"Approved\",\"coverageKeys\":[\"hole-group.center-marks\"]}",
             });
 
         Assert.False(result.IsError);
@@ -348,17 +354,21 @@ public sealed class McpServerIntegrationTests
         Assert.Contains("GB.rulepack", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.rule-pack.projection", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("FirstAngle", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
-        Assert.Contains("2X", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
-        Assert.Contains("THRU", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
-        Assert.Contains("PITCH 16", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
-        Assert.Contains("SYMMETRIC", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        JsonElement buildValue = result.StructuredContent.Value.GetProperty("value");
+        string patternText = buildValue.GetProperty("patternCallout").GetProperty("text").GetString()!;
+        Assert.Equal("2×⌀6 通孔，孔距16，对称", patternText);
         Assert.Contains("slot-cut", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
-        Assert.Contains("SLOT W4; C-C 16", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Equal(
+            "长圆槽：槽宽4，中心距16",
+            buildValue.GetProperty("slotCallout").GetProperty("text").GetString());
         Assert.Contains("drawing.slot-callout.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.surface-finish", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.surface-finish.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("surface-finish", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("human_approved", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.center-mark.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.center-mark.native.center-mark.association", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("center-mark", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>Invalid repeated-hole JSON fails before a provider session can mutate a document.</summary>
