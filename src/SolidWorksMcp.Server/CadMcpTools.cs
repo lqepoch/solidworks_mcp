@@ -314,6 +314,56 @@ public sealed class CadMcpTools(
         return McpToolResultWriter.Write(result);
     }
 
+    /// <summary>
+    /// Builds a part drawing from one versioned engineering-intent document.
+    /// 根据一个版本化工程意图文档构建零件工程图。
+    /// </summary>
+    /// <remarks>
+    /// This is the preferred AI-facing entry point. The intent codec lowers only supported semantic features into the
+    /// existing deterministic compiler; it does not expose COM, ActiveDoc or a sequence of primitive tool calls.
+    /// 这是推荐的 AI-facing 入口。intent codec 只把已支持的工程特征降低到既有确定性 compiler，不暴露 COM、ActiveDoc
+    /// 或一串 primitive tool call。
+    /// </remarks>
+    [McpServerTool(Name = "cad.build-part-drawing-intent")]
+    [Description("Preferred AI-facing part drawing compiler entry point. Preconditions: bounded schemaVersion=1.0 intent JSON with explicit part/drawing paths, closed millimetre profile, positive extrusion and supported semantic features. The intent is validated before any CAD session; native SOLIDWORKS mutation, rebuild, reopen inspection and PDF export then use the same deterministic compiler as cad.build-part-drawing. Do not put private PDF text, screenshots or arbitrary COM commands in the intent.")]
+    public Task<CallToolResult> BuildPartDrawingIntentAsync(
+        [Description("Versioned JSON intent: {schemaVersion:'1.0',part:{documentId,configuration,path,profile:{segments:[...]},extrusionDepthMillimeters,features:[{kind:'throughHolePattern|slot',payload:{...}}]},drawing:{documentId,path,pdfPath,scaleDenominator,surfaceFinish,centerMarks,detailView}}. All dimensions are millimetres.")] string intentJson,
+        [Description("Optional application operation correlation key.")] string? operationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        string correlationId = correlation.Resolve(operationId);
+        if (!PartDrawingIntentMcpCodec.TryParse(intentJson, out PartDrawingIntentInput? input, out string? parseError))
+        {
+            return Task.FromResult(
+                McpToolResultWriter.Write(
+                    OperationResults.Failure<PartDrawingBuildResult>(
+                        correlationId,
+                        InvalidInput(parseError ?? "partDrawingIntentJson-invalid"))));
+        }
+
+        // Keep one authoritative compiler implementation. The intent entry point only changes the AI-facing input
+        // shape; it must not fork the provider sequence or silently bypass the existing validation gates.
+        // 保持唯一的 compiler 实现：intent 入口只改变 AI-facing 输入形状，不能复制 Provider 流程或绕过既有门禁。
+        return BuildPartDrawingAsync(
+            input!.SchemaVersion,
+            input.DocumentId,
+            input.DrawingDocumentId,
+            input.Configuration,
+            input.PartPath,
+            input.DrawingPath,
+            input.PdfPath,
+            input.ExtrusionDepthMillimeters,
+            input.InitialSketchProfileJson,
+            input.ThroughHolePatternJson,
+            input.SlotCutJson,
+            input.SurfaceFinishJson,
+            input.CenterMarkJson,
+            input.ScaleDenominator,
+            input.DetailViewJson,
+            operationId,
+            cancellationToken);
+    }
+
     /// <summary>Inspects one stable document identity and returns provider evidence.</summary>
     [McpServerTool(Name = "cad.inspect")]
     [Description("Inspect one CAD document. Preconditions: schemaVersion=1.0 and stable document ID. Side effects: none.")]

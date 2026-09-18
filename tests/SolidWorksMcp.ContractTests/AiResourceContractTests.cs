@@ -17,6 +17,7 @@ public sealed class AiResourceContractTests
         TextResourceContents index = SolidWorksAiResources.UsageIndex();
         TextResourceContents drawing = SolidWorksAiResources.DrawingRecipe();
         TextResourceContents schema = SolidWorksAiResources.FeaturePlanSchema();
+        TextResourceContents intentSchema = SolidWorksAiResources.PartDrawingIntentSchema();
         TextResourceContents release = SolidWorksAiResources.ReleaseRecipe();
 
         Assert.Equal("recipe://solidworks/usage/index", index.Uri);
@@ -24,6 +25,9 @@ public sealed class AiResourceContractTests
         Assert.Contains("IView.GetOutline", drawing.Text, StringComparison.Ordinal);
         Assert.Equal("application/json", schema.MimeType);
         Assert.Contains("schemaVersion", schema.Text, StringComparison.Ordinal);
+        Assert.Equal("schema://solidworks/part-drawing-intent", intentSchema.Uri);
+        Assert.Contains("throughHolePattern", intentSchema.Text, StringComparison.Ordinal);
+        Assert.Contains("scaleDenominator", intentSchema.Text, StringComparison.Ordinal);
         Assert.Contains("REVIEW_REQUIRED", release.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("图纸/", index.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("SLDWORKS.exe", drawing.Text, StringComparison.Ordinal);

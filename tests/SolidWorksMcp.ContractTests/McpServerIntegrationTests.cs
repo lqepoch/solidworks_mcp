@@ -29,7 +29,7 @@ public sealed class McpServerIntegrationTests
 
         IList<McpClientTool> tools = await host.Client.ListToolsAsync();
 
-        Assert.Equal(9, tools.Count);
+        Assert.Equal(10, tools.Count);
         McpClientTool createTool = Assert.Single(tools, tool => tool.Name == "cad.create-part");
         Assert.Contains("Preconditions", createTool.Description, StringComparison.Ordinal);
         Assert.Contains("Side effects", createTool.Description, StringComparison.Ordinal);
@@ -369,6 +369,68 @@ public sealed class McpServerIntegrationTests
         Assert.Contains("drawing.center-mark.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.center-mark.native.center-mark.association", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("center-mark", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The intent-oriented MCP entry point lowers one engineering document into the existing high-level compiler.
+    /// 工程意图 MCP 入口将一个工程文档降低到既有高层 compiler，而不是把调用拆成 primitive tool spam。
+    /// </summary>
+    [Fact]
+    public async Task IntentDrawingToolRunsTheSameBoundedWorkflow()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "cad.build-part-drawing-intent",
+            new Dictionary<string, object?>
+            {
+                ["intentJson"] = "{"
+                    + "\"schemaVersion\":\"1.0\","
+                    + "\"part\":{\"documentId\":\"intent-part-001\",\"configuration\":\"Default\","
+                    + "\"path\":\"C:\\\\mcp-artifacts\\\\intent-part-001.sldprt\","
+                    + "\"profile\":{\"segments\":["
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":0,\"endXMillimeters\":40,\"endYMillimeters\":0},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":40,\"startYMillimeters\":0,\"endXMillimeters\":40,\"endYMillimeters\":20},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":40,\"startYMillimeters\":20,\"endXMillimeters\":0,\"endYMillimeters\":20},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":20,\"endXMillimeters\":0,\"endYMillimeters\":0}"
+                    + "]},\"extrusionDepthMillimeters\":6,\"features\":[]},"
+                    + "\"drawing\":{\"documentId\":\"intent-drawing-001\","
+                    + "\"path\":\"C:\\\\mcp-artifacts\\\\intent-drawing-001.slddrw\","
+                    + "\"pdfPath\":\"C:\\\\mcp-artifacts\\\\intent-drawing-001.pdf\",\"scaleDenominator\":1}"
+                    + "}",
+            });
+
+        Assert.False(result.IsError);
+        Assert.Equal(1, countingProvider.StartSessionCount);
+        Assert.Contains("drawing.disposition", result.StructuredContent!.Value.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>Unsupported semantic features are rejected before a provider session is requested.</summary>
+    [Fact]
+    public async Task IntentDrawingToolRejectsUnsupportedFeatureBeforeBusinessExecution()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "cad.build-part-drawing-intent",
+            new Dictionary<string, object?>
+            {
+                ["intentJson"] = "{"
+                    + "\"schemaVersion\":\"1.0\",\"part\":{\"documentId\":\"p\",\"configuration\":\"Default\",\"path\":\"C:\\\\p.sldprt\","
+                    + "\"profile\":{\"segments\":["
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":0,\"endXMillimeters\":10,\"endYMillimeters\":0},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":10,\"startYMillimeters\":0,\"endXMillimeters\":10,\"endYMillimeters\":10},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":10,\"startYMillimeters\":10,\"endXMillimeters\":0,\"endYMillimeters\":10},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":10,\"endXMillimeters\":0,\"endYMillimeters\":0}"
+                    + "]},\"extrusionDepthMillimeters\":5,\"features\":[{\"kind\":\"sweep\",\"payload\":{}}]},"
+                    + "\"drawing\":{\"documentId\":\"d\",\"path\":\"C:\\\\d.slddrw\",\"pdfPath\":\"C:\\\\d.pdf\"}}",
+            });
+
+        Assert.True(result.IsError);
+        Assert.Contains("partDrawingIntentJson-feature-kind-unsupported", result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
     }
 
     /// <summary>Invalid repeated-hole JSON fails before a provider session can mutate a document.</summary>

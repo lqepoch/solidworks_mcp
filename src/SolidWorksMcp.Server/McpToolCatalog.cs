@@ -96,6 +96,7 @@ public sealed class McpToolCatalog
         new McpToolDescriptor("cad.health", "read", "none", "none"),
         new McpToolDescriptor("cad.capabilities", "read", "none", "none"),
         new McpToolDescriptor("cad.create-part", "mutation", "schemaVersion=1.0; valid configuration; provider session", "creates one CAD part document", CadAbstractions.CadCapabilityNames.PartMutation),
+        new McpToolDescriptor("cad.build-part-drawing-intent", "mutation", "schemaVersion=1.0; bounded intent JSON; allowlisted part/drawing/PDF paths; resolved RulePack", "creates a draft part/drawing/PDF through the deterministic compiler; release remains a separate gated operation", CadAbstractions.CadCapabilityNames.DrawingMutation),
         new McpToolDescriptor("cad.build-part-drawing", "mutation", "schemaVersion=1.0; allowlisted part/drawing/PDF paths; closed profile; resolved RulePack", "creates a draft part/drawing/PDF with native read-back evidence; release remains a separate gated operation", CadAbstractions.CadCapabilityNames.DrawingMutation),
         new McpToolDescriptor("cad.inspect", "read", "schemaVersion=1.0; stable document ID", "none", CadAbstractions.CadCapabilityNames.Inspection),
         new McpToolDescriptor("tolerance.explain", "read", "schemaVersion=1.0; bounded redacted tolerance JSON", "none"),

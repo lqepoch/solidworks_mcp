@@ -26,9 +26,9 @@ public sealed class SolidWorksAiResources
         "recipe://solidworks/usage/index",
         "# SolidWorks MCP usage index\n\n"
         + "1. Discover with `cad.health` and `cad.capabilities`.\n"
-        + "2. Read `schema://solidworks/feature-plan` before proposing model features.\n"
+        + "2. Read `schema://solidworks/feature-plan` and `schema://solidworks/part-drawing-intent` before proposing model features.\n"
         + "3. Keep user/AI proposals separate from approved engineering requirements.\n"
-        + "4. Prefer `cad.build-part-drawing` for a bounded part-to-drawing compiler run; do not loop over raw COM calls.\n"
+        + "4. Prefer `cad.build-part-drawing-intent` with one versioned engineering-intent JSON document; use `cad.build-part-drawing` only for the compatibility/advanced flat contract. Do not loop over raw COM calls.\n"
         + "5. Inspect native geometry and drawing state after every mutation.\n"
         + "6. Use `drawing.validate` and `drawing.release`; unresolved provenance, missing coverage or wrong sheet data must block release.\n\n"
         + "Do not send private PDF text, private drawing paths, screenshots as geometry proof, or arbitrary PowerShell/macros.\n\n"
@@ -70,7 +70,9 @@ public sealed class SolidWorksAiResources
         + " and must remain REVIEW_REQUIRED until its feature association is verified. Never use `AutoDimension(all)` as"
         + " a substitute for an explicit manufacturing coverage graph.\n\n"
         + "For GB output, verify A-series sheet dimensions, first/third-angle projection, title-block reserved zone and"
-        + " Chinese notation from the resolved RulePack before exporting PDF.");
+        + " Chinese notation from the resolved RulePack before exporting PDF. The preferred mutation boundary is"
+        + " `cad.build-part-drawing-intent`; its feature payloads are lowered into the same compiler and cannot contain"
+        + " private source-drawing text or arbitrary COM commands.");
 
     [McpServerResource(
         UriTemplate = "recipe://solidworks/usage/release",
@@ -115,6 +117,44 @@ public sealed class SolidWorksAiResources
         + "}\n\n"
         + "The value is an intent proposal, not raw SOLIDWORKS COM and not permission to release. Keep identities stable"
         + " across regeneration; do not encode source PDF filenames or copied private drawing text.",
+        "application/json");
+
+    [McpServerResource(
+        UriTemplate = "schema://solidworks/part-drawing-intent",
+        Name = "SolidWorks part drawing intent schema",
+        MimeType = "application/json")]
+    [Description("Machine-readable high-level intent contract for one single-part 3D-to-2D compiler run.")]
+    public static TextResourceContents PartDrawingIntentSchema() => Text(
+        "schema://solidworks/part-drawing-intent",
+        "{\n"
+        + "  \"schemaVersion\": \"1.0\",\n"
+        + "  \"part\": {\n"
+        + "    \"documentId\": \"part:example\",\n"
+        + "    \"configuration\": \"Default\",\n"
+        + "    \"path\": \"C:/allowed/generated/example.sldprt\",\n"
+        + "    \"profile\": { \"segments\": [\n"
+        + "      { \"kind\": \"line\", \"startXMillimeters\": 0, \"startYMillimeters\": 0, \"endXMillimeters\": 10, \"endYMillimeters\": 0 },\n"
+        + "      { \"kind\": \"line\", \"startXMillimeters\": 10, \"startYMillimeters\": 0, \"endXMillimeters\": 10, \"endYMillimeters\": 5 },\n"
+        + "      { \"kind\": \"line\", \"startXMillimeters\": 10, \"startYMillimeters\": 5, \"endXMillimeters\": 0, \"endYMillimeters\": 5 },\n"
+        + "      { \"kind\": \"line\", \"startXMillimeters\": 0, \"startYMillimeters\": 5, \"endXMillimeters\": 0, \"endYMillimeters\": 0 }\n"
+        + "    ] },\n"
+        + "    \"extrusionDepthMillimeters\": 5,\n"
+        + "    \"features\": [\n"
+        + "      { \"kind\": \"throughHolePattern\", \"payload\": { \"name\": \"mounting-holes\", \"diameterMillimeters\": 6, \"centers\": [ { \"xMillimeters\": 0, \"yMillimeters\": 0 } ] } },\n"
+        + "      { \"kind\": \"slot\", \"payload\": { \"name\": \"access-slot\", \"widthMillimeters\": 4, \"start\": { \"xMillimeters\": 0, \"yMillimeters\": 0 }, \"end\": { \"xMillimeters\": 10, \"yMillimeters\": 0 }, \"supportFaceProbe\": { \"xMillimeters\": 0, \"yMillimeters\": 0 } } }\n"
+        + "    ]\n"
+        + "  },\n"
+        + "  \"drawing\": {\n"
+        + "    \"documentId\": \"drawing:example\",\n"
+        + "    \"path\": \"C:/allowed/generated/example.slddrw\",\n"
+        + "    \"pdfPath\": \"C:/allowed/generated/example.pdf\",\n"
+        + "    \"scaleDenominator\": 1\n"
+        + "  }\n"
+        + "}\n\n"
+        + "The profile shown is illustrative only and must be a connected closed line/arc loop in a real request."
+        + " Feature payloads are lowered only when their kind is supported; unsupported kinds fail before CAD startup."
+        + " All dimensions are canonical millimetres. Paths must pass the user-local allowlist. Never include private"
+        + " source drawing text, screenshots, arbitrary COM, PowerShell or macro commands.",
         "application/json");
 
     private static TextResourceContents Text(string uri, string text, string mimeType = "text/markdown") => new()

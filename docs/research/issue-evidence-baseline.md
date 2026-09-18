@@ -1339,3 +1339,25 @@ Hosted-safe evidence for this increment:
 Live rerun was intentionally not started in this turn because a pre-existing `SLDWORKS.exe` process with no usable
 window handle remained present. The safety policy requires human/safe graceful cleanup before another process can be
 started; no forced termination or blind modal action was used.
+
+## Intent-oriented MCP compiler boundary / 工程意图 MCP 编译边界
+
+The Server now exposes `cad.build-part-drawing-intent` as the preferred AI-facing mutation entry point. Its bounded
+`schemaVersion=1.0` document contains explicit part/drawing identities and allowlisted paths, a connected closed
+millimetre line/arc profile, extrusion depth, and a finite list of supported semantic feature payloads. The codec rejects
+malformed JSON, unsupported feature kinds, duplicate supported groups and invalid profile/depth values before provider
+session startup. The method then delegates to the existing `cad.build-part-drawing` compiler path, so there is one
+transaction/read-back/reopen/export implementation rather than a second provider workflow.
+
+Server resources now publish `schema://solidworks/part-drawing-intent`; it teaches the AI the allowed high-level shape
+without exposing COM, private drawing text or screenshot coordinates. The old flat `cad.build-part-drawing` contract is
+retained for compatibility and advanced/debug callers.
+
+Evidence:
+
+    dotnet build SolidWorksMcp.slnx -c Release --nologo                              # exit 0; 0 warnings; 0 errors
+    dotnet test tests/SolidWorksMcp.ContractTests/SolidWorksMcp.ContractTests.csproj -c Release --no-build # exit 0; 20 passed
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1             # exit 0; Unit 106, Contract 20, FakeCad 15 passed
+
+This proves the MCP boundary and FakeCad orchestration only; it does not claim a new native Live run while the existing
+SOLIDWORKS process safety blocker remains.
