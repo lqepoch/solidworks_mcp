@@ -23,6 +23,7 @@ public sealed class CadMcpTools(
     McpOperationCorrelation correlation,
     CadSessionAccessor sessions,
     McpCapabilityNegotiator capabilities,
+    McpControlPlane controlPlane,
     SolidWorksMcpConfiguration configuration,
     DrawingReleaseService releaseService)
 {
@@ -31,48 +32,60 @@ public sealed class CadMcpTools(
     private readonly McpOperationCorrelation correlation = correlation ?? throw new ArgumentNullException(nameof(correlation));
     private readonly CadSessionAccessor sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
     private readonly McpCapabilityNegotiator capabilities = capabilities ?? throw new ArgumentNullException(nameof(capabilities));
+    private readonly McpControlPlane controlPlane = controlPlane ?? throw new ArgumentNullException(nameof(controlPlane));
     private readonly SolidWorksMcpConfiguration configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
     private readonly DrawingReleaseService releaseService = releaseService ?? throw new ArgumentNullException(nameof(releaseService));
 
     /// <summary>Returns read-only server and provider health.</summary>
     [McpServerTool(Name = "cad.health")]
     [Description("Read-only health for SolidWorksMcp. Preconditions: none. Side effects: none.")]
-    public CallToolResult Health()
+    public async Task<CallToolResult> Health()
     {
-        var health = new ServerHealth
-        {
-            ServerName = "solidworks-mcp",
-            Schema = ProtocolSchema.OperationResult,
-            SchemaVersion = ProtocolSchema.CurrentVersion,
-            ProviderType = provider.GetType().Name,
-            ProviderConfigured = provider is not UnavailableCadProvider,
-            ProviderMode = configuration.ProviderMode,
-            Features = configuration.Features,
-        };
-        var result = OperationResults.Success(
-            health,
-            correlation.Resolve(null),
-            new OperationEvidence("server", [new EvidenceObservation("side-effects", "none")]));
+        string operationId = correlation.Resolve(null);
+        OperationResult<ServerHealth> result = await controlPlane.ExecuteAsync(
+            new McpInvocationContext { OperationId = operationId, ToolName = "cad.health" },
+            _ =>
+            {
+                var health = new ServerHealth
+                {
+                    ServerName = "solidworks-mcp",
+                    Schema = ProtocolSchema.OperationResult,
+                    SchemaVersion = ProtocolSchema.CurrentVersion,
+                    ProviderType = provider.GetType().Name,
+                    ProviderConfigured = provider is not UnavailableCadProvider,
+                    ProviderMode = configuration.ProviderMode,
+                    Features = configuration.Features,
+                };
+                OperationEvidence evidence = new("server", [new EvidenceObservation("side-effects", "none")]);
+                return Task.FromResult(OperationResults.Success(health, operationId, evidence));
+            }).ConfigureAwait(false);
         return McpToolResultWriter.Write(result);
     }
 
     /// <summary>Returns provider capabilities and the compact tool metadata catalog.</summary>
     [McpServerTool(Name = "cad.capabilities")]
     [Description("Discover CAD capabilities and tool metadata. Preconditions: none. Side effects: none.")]
-    public CallToolResult Capabilities()
+    public async Task<CallToolResult> Capabilities()
     {
-        var discovery = new CapabilityDiscovery
-        {
-            ProviderType = provider.GetType().Name,
-            Capabilities = provider.Capabilities,
-            Tools = catalog.Tools,
-            ToolAvailability = capabilities.GetAvailability(),
-            Configuration = configuration,
-        };
-        var result = OperationResults.Success(
-            discovery,
-            correlation.Resolve(null),
-            new OperationEvidence("server", [new EvidenceObservation("tool-count", catalog.Tools.Length.ToString(System.Globalization.CultureInfo.InvariantCulture))]));
+        string operationId = correlation.Resolve(null);
+        OperationResult<CapabilityDiscovery> result = await controlPlane.ExecuteAsync(
+            new McpInvocationContext { OperationId = operationId, ToolName = "cad.capabilities" },
+            _ =>
+            {
+                var discovery = new CapabilityDiscovery
+                {
+                    ProviderType = provider.GetType().Name,
+                    Capabilities = provider.Capabilities,
+                    Tools = catalog.Tools,
+                    ControlPlaneOperations = controlPlane.ListOperations(),
+                    ToolAvailability = capabilities.GetAvailability(),
+                    Configuration = configuration,
+                };
+                OperationEvidence evidence = new(
+                    "server",
+                    [new EvidenceObservation("tool-count", catalog.Tools.Length.ToString(System.Globalization.CultureInfo.InvariantCulture))]);
+                return Task.FromResult(OperationResults.Success(discovery, operationId, evidence));
+            }).ConfigureAwait(false);
         return McpToolResultWriter.Write(result);
     }
 
@@ -169,7 +182,18 @@ public sealed class CadMcpTools(
             return McpToolResultWriter.Write(OperationResults.Failure<CadDocumentSummary>(correlationId, sessionResult.Error!, sessionResult.Evidence));
         }
 
-        OperationResult<ICadPartDocument> created = await sessionResult.Value!.CreatePartAsync(
+        OperationError? controlPlaneError = ValidateBound(
+            "cad.create-part",
+            correlationId,
+            sessionResult.Value!.SessionId,
+            targetPath: validInput.Path,
+            requiredPathExtension: validInput.Path is null ? null : ".sldprt");
+        if (controlPlaneError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<CadDocumentSummary>(correlationId, controlPlaneError));
+        }
+
+        OperationResult<ICadPartDocument> created = await sessionResult.Value.CreatePartAsync(
             new CreatePartRequest
             {
                 RequestedDocumentId = new DocumentId(validInput.DocumentId),
@@ -287,6 +311,17 @@ public sealed class CadMcpTools(
             return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, sessionResult.Error!, sessionResult.Evidence));
         }
 
+        // The build service validates all three artifact paths against the provider-owned policy as one atomic input.
+        // build service 会把三个 artifact path 作为一个原子输入交给 Provider-owned policy 校验。
+        OperationError? controlPlaneError = ValidateBound(
+            "cad.build-part-drawing",
+            correlationId,
+            sessionResult.Value.SessionId);
+        if (controlPlaneError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, controlPlaneError));
+        }
+
         OperationResult<PartDrawingBuildResult> built = await PartDrawingBuildService.ExecuteAsync(
             sessionResult.Value,
             new PartDrawingBuildRequest
@@ -402,7 +437,17 @@ public sealed class CadMcpTools(
             return McpToolResultWriter.Write(OperationResults.Failure<CadInspectionSnapshot>(correlationId, sessionResult.Error!, sessionResult.Evidence));
         }
 
-        OperationResult<CadInspectionSnapshot> inspected = await sessionResult.Value!.Inspection.InspectAsync(
+        OperationError? controlPlaneError = ValidateBound(
+            "cad.inspect",
+            correlationId,
+            sessionResult.Value!.SessionId,
+            documentId: new DocumentId(validInput.DocumentId));
+        if (controlPlaneError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<CadInspectionSnapshot>(correlationId, controlPlaneError));
+        }
+
+        OperationResult<CadInspectionSnapshot> inspected = await sessionResult.Value.Inspection.InspectAsync(
             new DocumentId(validInput.DocumentId),
             cancellationToken).ConfigureAwait(false);
         OperationResult<CadInspectionSnapshot> result = inspected.IsSuccess
@@ -474,6 +519,16 @@ public sealed class CadMcpTools(
         if (!sessionResult.IsSuccess || sessionResult.Value is null)
         {
             return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingValidationResult>(correlationId, sessionResult.Error!, sessionResult.Evidence));
+        }
+
+        OperationError? controlPlaneError = ValidateBound(
+            "drawing.validate",
+            correlationId,
+            sessionResult.Value.SessionId,
+            documentId: new DocumentId(documentId.Trim()));
+        if (controlPlaneError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingValidationResult>(correlationId, controlPlaneError));
         }
 
         OperationResult<CadInspectionSnapshot> inspection = await sessionResult.Value.Inspection.InspectAsync(
@@ -576,6 +631,17 @@ public sealed class CadMcpTools(
         }
 
         DocumentId targetDocumentId = new(documentId.Trim());
+        OperationError? controlPlaneError = ValidateBound(
+            "drawing.repair",
+            correlationId,
+            sessionResult.Value.SessionId,
+            documentId: targetDocumentId,
+            expectedStateHash: expectedStateHash.Trim());
+        if (controlPlaneError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<DrawingRepairExecutionResult>(correlationId, controlPlaneError));
+        }
+
         OperationResult<CadInspectionSnapshot> initialInspection = await sessionResult.Value.Inspection.InspectAsync(
             targetDocumentId,
             cancellationToken).ConfigureAwait(false);
@@ -869,6 +935,17 @@ public sealed class CadMcpTools(
         }
 
         DocumentId targetDocumentId = new(documentId.Trim());
+        OperationError? controlPlaneError = ValidateBound(
+            "drawing.release",
+            correlationId,
+            sessionResult.Value.SessionId,
+            documentId: targetDocumentId,
+            expectedStateHash: expectedStateHash.Trim());
+        if (controlPlaneError is not null)
+        {
+            return McpToolResultWriter.Write(OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, controlPlaneError));
+        }
+
         OperationResult<CadInspectionSnapshot> inspection = await sessionResult.Value.Inspection.InspectAsync(
             targetDocumentId,
             cancellationToken).ConfigureAwait(false);
@@ -958,6 +1035,36 @@ public sealed class CadMcpTools(
     private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
         Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d
         && Math.Abs(first.Y.Millimeters - second.Y.Millimeters) <= 0.000001d;
+
+    /// <summary>
+    /// Re-checks the exact binding immediately before provider execution.
+    /// 在进入 Provider 前重新核对精确 binding。
+    /// </summary>
+    /// <remarks>
+    /// Capability negotiation remains a side-effect-free early check; this second gate is the authoritative session,
+    /// document, state, idempotency and path check. 能力协商仍是无副作用的早期检查；这里的第二道 gate 才是权威的
+    /// session、document、state、idempotency 和 path 检查。
+    /// </remarks>
+    private OperationError? ValidateBound(
+        string toolName,
+        string operationId,
+        SessionId sessionId,
+        DocumentId? documentId = null,
+        string? expectedStateHash = null,
+        string? targetPath = null,
+        string? requiredPathExtension = null) =>
+        controlPlane.Validate(
+            new McpInvocationContext
+            {
+                OperationId = operationId,
+                ToolName = toolName,
+                IdempotencyKey = operationId,
+                SessionId = sessionId,
+                DocumentId = documentId,
+                ExpectedStateHash = expectedStateHash,
+                TargetPath = targetPath,
+                RequiredPathExtension = requiredPathExtension,
+            });
 
     private static CadDocumentSummary ToSummary(ICadDocument document) => new()
     {
@@ -1220,6 +1327,9 @@ public sealed class CapabilityDiscovery
 
     /// <summary>Compact tool registry with precondition/side-effect metadata.</summary>
     public required System.Collections.Immutable.ImmutableArray<McpToolDescriptor> Tools { get; init; }
+
+    /// <summary>Typed control-plane descriptors consumed by policy and audit.</summary>
+    public required System.Collections.Immutable.ImmutableArray<McpOperationDescriptor> ControlPlaneOperations { get; init; }
 
     /// <summary>Effective availability after provider and feature negotiation.</summary>
     public required System.Collections.Immutable.ImmutableArray<McpToolAvailability> ToolAvailability { get; init; }

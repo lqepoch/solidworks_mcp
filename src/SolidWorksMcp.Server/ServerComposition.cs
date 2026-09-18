@@ -25,7 +25,8 @@ public static class ServerComposition
         this IServiceCollection services,
         ICadProvider? provider = null,
         SolidWorksMcpConfiguration? configuration = null,
-        CadSessionOptions? sessionOptions = null)
+        CadSessionOptions? sessionOptions = null,
+        CadPathAllowlist? pathAllowlist = null)
     {
         ArgumentNullException.ThrowIfNull(services);
         if (provider is not null)
@@ -40,7 +41,18 @@ public static class ServerComposition
 
         services.TryAddSingleton(configuration ?? new SolidWorksMcpConfiguration());
         services.TryAddSingleton(sessionOptions ?? new CadSessionOptions());
+        services.TryAddSingleton(pathAllowlist ?? CadPathAllowlist.DenyAll);
         services.TryAddSingleton(McpToolCatalog.CreateDefault());
+        services.TryAddSingleton<IMcpOperationCatalog>(serviceProvider => serviceProvider.GetRequiredService<McpToolCatalog>());
+        services.TryAddSingleton<InMemoryMcpAuditSink>();
+        services.TryAddSingleton<IMcpAuditSink>(serviceProvider => serviceProvider.GetRequiredService<InMemoryMcpAuditSink>());
+        services.TryAddSingleton<McpControlPlane>(serviceProvider =>
+            new McpControlPlane(
+                serviceProvider.GetRequiredService<IMcpOperationCatalog>(),
+                serviceProvider.GetRequiredService<ICadProvider>().Capabilities,
+                serviceProvider.GetRequiredService<SolidWorksMcpConfiguration>(),
+                serviceProvider.GetRequiredService<CadPathAllowlist>(),
+                serviceProvider.GetRequiredService<IMcpAuditSink>()));
         services.TryAddSingleton<McpOperationCorrelation>();
         services.TryAddSingleton<McpCapabilityNegotiator>();
         services.TryAddSingleton<CadSessionAccessor>();

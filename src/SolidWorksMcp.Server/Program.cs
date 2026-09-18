@@ -31,7 +31,7 @@ if (runtimeConfiguration.ProviderMode == ProviderModes.Native)
 }
 #endif
 var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddSolidWorksMcp(runtimeProvider, runtimeConfiguration);
+builder.Services.AddSolidWorksMcp(runtimeProvider, runtimeConfiguration, pathAllowlist: loadedConfiguration.PathAllowlist);
 builder.Services
     .AddMcpServer(options =>
     {
