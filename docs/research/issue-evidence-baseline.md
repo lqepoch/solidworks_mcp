@@ -1387,3 +1387,37 @@ The required native attempt was made and stopped before process launch:
 
     powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksLiveTests.ps1 -SolidWorksPath D:\Solidworks2022\SOLIDWORKS\SLDWORKS.exe -Filter FullyQualifiedName~D09ViewReflowLiveTests -NoBuild
     # exit 1; SLDWORKS_COUNT_BEFORE=1; BLOCKED_HUMAN_ACTION_REQUIRED; PID 21396 had no closable main window; no blind termination
+
+## I03 Windows doctor safety evidence / I03 Windows doctor 安全证据
+
+Issue #62/I03 requires one bootstrap/doctor path that discovers the local prerequisites, explains remediation,
+and generates user-local build/MCP inputs without requiring manual vendor-DLL copying. For each running SOLIDWORKS
+process the doctor performs a PID-only safe probe and marks UI/close readiness as unknown. The diagnostic intentionally
+avoids synchronous process/UI property queries because they can hang on a modal COM UI; the bounded Live harness
+performs the final responding/close check. This
+distinguishes “a process exists” from “the bounded Live harness may request a graceful close”; it does not stop,
+kill or dismiss any process/dialog.
+
+本节对应 #62/I03：doctor 必须发现本机依赖、给出修复建议，并生成用户本地构建/MCP 输入，同时不要求手工复制厂商 DLL。
+现在 doctor 对每个运行中的 SOLIDWORKS 进程只执行 PID-only safe probe，并把 UI/关闭能力标记为未知。由于同步
+进程/UI 属性查询可能在 COM 模态 UI 上挂起，doctor 有意不执行该探测，最终响应/关闭检查由有界 Live harness 完成；
+它明确区分“进程存在”和“Live harness 可以请求优雅关闭”，不会停止、强杀进程或盲目处理对话框。
+
+Observed evidence on the current Windows workstation:
+
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksMcpDoctor.ps1 -Json
+    # exit 0; .NET 10 SDK and Git pass; one complete SOLIDWORKS installation discovered;
+    # solidworks-session=warning because one running process had no closable main-window handle
+
+    powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksMcpDoctor.ps1 -Initialize -Json
+    # exit 0; user-local doctor/config/props/MCP files and test/output roots generated;
+    # no repository vendor DLLs or global registry/settings were modified
+
+The same session safety condition was then enforced by the Live harness: it returned
+`BLOCKED_HUMAN_ACTION_REQUIRED` before launching a second SOLIDWORKS process. This is a blocked Live attempt,
+not a passed Live test. After the operator closes the affected session through its normal UI, rerun the required
+focused Live test; do not use force termination or blind Enter/Escape/OK automation.
+
+同一会话安全条件随后由 Live harness 强制执行：在启动第二个 SOLIDWORKS 进程前返回
+`BLOCKED_HUMAN_ACTION_REQUIRED`。这属于被阻断的 Live 尝试，不是通过的 Live 测试。操作员通过正常 UI 关闭受影响
+会话后，再重新运行对应 focused Live test；不得使用强制结束或 blind Enter/Escape/OK 自动化。

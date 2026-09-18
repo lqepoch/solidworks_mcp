@@ -92,10 +92,26 @@ function Get-SolidWorksInstallations {
     # 先排序安装根目录再探测，避免 PowerShell 哈希表顺序变化导致选择不稳定。
     foreach ($root in @($rootMap.Values | Sort-Object)) {
         Write-Verbose "Inspecting SOLIDWORKS root: $root"
-        $executable = Get-ChildItem -LiteralPath $root -Filter 'SLDWORKS.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -eq $executable) {
+        # Probe only the root and one child directory.  A full recursive scan of a SOLIDWORKS installation can
+        # traverse thousands of files or a mounted library and make the doctor appear hung.
+        # 只探测安装根目录及其一层子目录。完整递归扫描可能遍历成千上万个文件或挂载库，导致 doctor 假死。
+        $executableCandidates = @()
+        $directExecutable = Join-Path $root 'SLDWORKS.exe'
+        if (Test-Path -LiteralPath $directExecutable -PathType Leaf) {
+            $executableCandidates += Get-Item -LiteralPath $directExecutable -ErrorAction SilentlyContinue
+        }
+        if ($executableCandidates.Count -eq 0) {
+            foreach ($childDirectory in @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue)) {
+                $childExecutable = Join-Path $childDirectory.FullName 'SLDWORKS.exe'
+                if (Test-Path -LiteralPath $childExecutable -PathType Leaf) {
+                    $executableCandidates += Get-Item -LiteralPath $childExecutable -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        if ($executableCandidates.Count -eq 0) {
             continue
         }
+        $executable = $executableCandidates[0]
         if ($seenExecutables.ContainsKey($executable.FullName)) {
             continue
         }
@@ -105,24 +121,44 @@ function Get-SolidWorksInstallations {
         # Use the executable directory as the canonical install root even when a registry value points to its parent.
         # 即使注册表值指向父目录，也使用可执行文件目录作为规范安装根目录。
         $canonicalRoot = $executable.DirectoryName
-        $redist = Get-ChildItem -LiteralPath $canonicalRoot -Directory -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -ieq 'redist' -and $_.FullName -match 'api' } |
-            Select-Object -First 1
+        $redistCandidates = @(
+            (Join-Path $canonicalRoot 'api\redist'),
+            (Join-Path $canonicalRoot 'API\redist')
+        )
+        $redist = [string](@($redistCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Container } | Select-Object -First 1))
         $interopPaths = @()
         foreach ($interopName in @('SolidWorks.Interop.sldworks.dll', 'SolidWorks.Interop.swconst.dll')) {
-            $interopFile = Get-ChildItem -LiteralPath $canonicalRoot -Filter $interopName -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            $interopCandidates = @(
+                (Join-Path $canonicalRoot $interopName),
+                (Join-Path $canonicalRoot ("api\redist\" + $interopName)),
+                (Join-Path $canonicalRoot ("API\redist\" + $interopName))
+            )
+            $interopFile = @($interopCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1)
             if ($interopFile) {
-                $interopPaths += $interopFile.FullName
+                $interopPaths += [string]$interopFile
             }
         }
-        $typeLibraryPaths = @(Get-ChildItem -LiteralPath $canonicalRoot -File -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match 'sldworks.*\.(tlb|olb)$' } |
-            Select-Object -First 3 |
-            ForEach-Object { $_.FullName })
-        $templatePaths = @(Get-ChildItem -LiteralPath $canonicalRoot -File -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.Extension -in @('.prtdot', '.asmdot', '.drwdot') } |
-            Select-Object -First 20 |
-            ForEach-Object { $_.FullName })
+        $typeLibraryCandidates = @(
+            (Join-Path $canonicalRoot 'sldworks.tlb'),
+            (Join-Path $canonicalRoot 'sldworks.olb'),
+            (Join-Path $canonicalRoot 'api\redist\sldworks.tlb'),
+            (Join-Path $canonicalRoot 'API\redist\sldworks.tlb')
+        )
+        $typeLibraryPaths = @($typeLibraryCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 3)
+        $templateDirectories = @(
+            (Join-Path $canonicalRoot 'data\templates'),
+            (Join-Path $canonicalRoot 'lang\chinese\Tutorial'),
+            (Join-Path $canonicalRoot 'lang\english\Tutorial')
+        )
+        $templatePaths = @(
+            foreach ($templateDirectory in $templateDirectories) {
+                if (Test-Path -LiteralPath $templateDirectory -PathType Container) {
+                    Get-ChildItem -LiteralPath $templateDirectory -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Extension -in @('.prtdot', '.asmdot', '.drwdot') } |
+                        ForEach-Object { $_.FullName }
+                }
+            }
+        )
 
         # Partial installations remain visible and actionable instead of disappearing from diagnostics.
         # 不完整安装仍要出现在诊断中并列出缺失项，不能直接从结果中消失。
@@ -138,7 +174,7 @@ function Get-SolidWorksInstallations {
             version = $executable.VersionInfo.ProductVersion
             status = if ($missing.Count -eq 0) { 'complete' } else { 'partial' }
             missing = @($missing)
-            apiRedist = if ($redist) { $redist.FullName } else { $null }
+            apiRedist = if ($redist) { $redist } else { $null }
             interop = $interopPaths
             typeLibraries = $typeLibraryPaths
             templates = $templatePaths
@@ -165,13 +201,36 @@ if (Get-Command dotnet -ErrorAction SilentlyContinue) {
 }
 
 $installations = @(Get-SolidWorksInstallations)
+# A process can be alive while any UI/property query blocks (for example a modal COM or startup state).
+# 进程存活时 UI/属性查询可能阻塞（例如 COM 模态框或启动阶段），因此 doctor 只读取 PID。
 $processes = @(Get-Process -Name SLDWORKS -ErrorAction SilentlyContinue | ForEach-Object {
-        $processPath = $null
-        try { $processPath = $_.Path } catch { }
-        [pscustomobject]@{ id = $_.Id; path = $processPath; responding = $_.Responding }
+        $processId = $null
+        try { $processId = [int]$_.Id } catch { }
+        [pscustomobject]@{
+            id = $processId
+            path = $null
+            processProbe = 'pid-only-safe-probe'
+            hasExited = $null
+            mainWindowHandle = $null
+            gracefulCloseReady = $false
+        }
     })
 $checks += New-Check -Name 'solidworks-installation' -Status $(if ($installations.Count -gt 0) { 'pass' } else { 'warning' }) -Detail "$($installations.Count) installation(s) discovered." -Remediation 'Install or repair SOLIDWORKS, or run hosted-safe tests without the provider.'
-$checks += New-Check -Name 'solidworks-session' -Status $(if ($processes.Count -gt 0) { 'pass' } else { 'info' }) -Detail "$($processes.Count) running SLDWORKS process(es)."
+# Live-test cleanup is fail-closed: an unclosable process is a warning with remediation, never an invitation to kill it.
+# Live 测试清理必须 fail-closed：无法安全关闭的进程只产生告警和处置建议，绝不诱导强杀进程。
+$unclosableSessions = @($processes | Where-Object { -not $_.gracefulCloseReady })
+$sessionStatus = if ($processes.Count -eq 0) { 'info' } elseif ($unclosableSessions.Count -eq 0) { 'pass' } else { 'warning' }
+$sessionDetail = if ($processes.Count -eq 0) {
+    'No running SLDWORKS process was discovered.'
+} elseif ($unclosableSessions.Count -eq 0) {
+    "$($processes.Count) running SLDWORKS process(es); doctor used a PID-only safe probe; the bounded Live harness must perform the final UI/close check."
+} else {
+    "$($processes.Count) running SLDWORKS process(es); $($unclosableSessions.Count) is not safely closable by the bounded Live harness."
+}
+$sessionRemediation = if ($unclosableSessions.Count -gt 0) {
+    'Close the affected SOLIDWORKS session through its normal UI or operator-approved graceful path before Live tests; do not force-terminate or blind-dismiss dialogs.'
+} else { '' }
+$checks += New-Check -Name 'solidworks-session' -Status $sessionStatus -Detail $sessionDetail -Remediation $sessionRemediation
 
 $paths = [pscustomobject]@{
     userLocalRoot = $UserLocalRoot

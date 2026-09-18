@@ -24,7 +24,7 @@ The Hosted script forces `SolidWorksMcpNativeProviderEnabled=false` and writes p
 
 ## Windows doctor
 
-The doctor detects .NET/Git, SOLIDWORKS installations and running sessions, API redist/type-library candidates, templates and safe user-local test/output roots. It does not modify global registry or settings and is read-only unless -Initialize is supplied.
+The doctor detects .NET/Git, SOLIDWORKS installations and running sessions, API redist/type-library candidates, templates and safe user-local test/output roots. For a running SOLIDWORKS process it uses a PID-only safe probe; it deliberately avoids synchronous UI/property queries that could hang on a modal COM UI. The bounded Live harness performs the final UI/responsiveness/close check. A running session is therefore a warning requiring operator remediation before Live tests, never an automatic termination. The doctor does not modify global registry or settings and is read-only unless -Initialize is supplied.
 
     powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksMcpDoctor.ps1
     powershell -ExecutionPolicy Bypass -File .\scripts\Invoke-SolidWorksMcpDoctor.ps1 -Initialize -Json
