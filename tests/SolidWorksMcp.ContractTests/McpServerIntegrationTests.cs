@@ -325,6 +325,14 @@ public sealed class McpServerIntegrationTests
                     + "\"start\":{\"xMillimeters\":-20,\"yMillimeters\":-8},"
                     + "\"end\":{\"xMillimeters\":-20,\"yMillimeters\":8},"
                     + "\"supportFaceProbe\":{\"xMillimeters\":-22,\"yMillimeters\":0}}",
+                ["surfaceFinishJson"] = "{\"annotationId\":\"mcp-build-drawing-001:surface-finish:plate\","
+                    + "\"viewId\":\"mcp-build-drawing-001:front\","
+                    + "\"positionXMillimeters\":145,\"positionYMillimeters\":35,"
+                    + "\"symbolType\":\"MachiningRequired\",\"layDirection\":\"None\","
+                    + "\"leaderStyle\":\"Straight\",\"arrowStyle\":\"Open\","
+                    + "\"maximumRoughness\":\"0.8\",\"provenanceKind\":\"human_approved\","
+                    + "\"provenanceMethod\":\"contract-fixture\",\"approvalState\":\"Approved\","
+                    + "\"coverageKeys\":[\"surface-finish.primary-faces\"]}",
             });
 
         Assert.False(result.IsError);
@@ -347,6 +355,10 @@ public sealed class McpServerIntegrationTests
         Assert.Contains("slot-cut", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("SLOT W4; C-C 16", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
         Assert.Contains("drawing.slot-callout.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.surface-finish", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("drawing.surface-finish.reopened", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("surface-finish", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
+        Assert.Contains("human_approved", result.StructuredContent.Value.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>Invalid repeated-hole JSON fails before a provider session can mutate a document.</summary>
@@ -380,6 +392,43 @@ public sealed class McpServerIntegrationTests
                     + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":20,\"endXMillimeters\":0,\"endYMillimeters\":0}"
                     + "]}",
                 ["throughHolePatternJson"] = "{\"diameterMillimeters\":6,\"centers\":[{\"xMillimeters\":5,\"yMillimeters\":5}]}",
+            });
+
+        Assert.True(result.IsError);
+        Assert.Contains(ErrorCodes.InvalidRequest, result.Content.OfType<TextContentBlock>().Single().Text, StringComparison.Ordinal);
+        Assert.Equal(0, countingProvider.StartSessionCount);
+    }
+
+    /// <summary>Unapproved surface-finish proposals fail before a CAD session can start.</summary>
+    /// <summary>未批准的表面粗糙度 proposal 必须在 CAD session 启动前 fail closed。</summary>
+    [Fact]
+    public async Task UnapprovedSurfaceFinishFailsBeforeBusinessExecution()
+    {
+        var countingProvider = new CountingCadProvider(new FakeCadProvider());
+        await using var host = await InMemoryMcpHost.CreateAsync(countingProvider);
+
+        CallToolResult result = await host.Client.CallToolAsync(
+            "cad.build-part-drawing",
+            new Dictionary<string, object?>
+            {
+                ["schemaVersion"] = ProtocolSchema.CurrentVersion,
+                ["documentId"] = "mcp-invalid-surface-part-001",
+                ["drawingDocumentId"] = "mcp-invalid-surface-drawing-001",
+                ["configuration"] = "Default",
+                ["partPath"] = "C:\\mcp-artifacts\\invalid-surface-part-001.sldprt",
+                ["drawingPath"] = "C:\\mcp-artifacts\\invalid-surface-drawing-001.slddrw",
+                ["pdfPath"] = "C:\\mcp-artifacts\\invalid-surface-drawing-001.pdf",
+                ["extrusionDepthMillimeters"] = 8d,
+                ["initialSketchProfileJson"] = "{\"segments\":["
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":0,\"endXMillimeters\":20,\"endYMillimeters\":0},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":20,\"startYMillimeters\":0,\"endXMillimeters\":20,\"endYMillimeters\":20},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":20,\"startYMillimeters\":20,\"endXMillimeters\":0,\"endYMillimeters\":20},"
+                    + "{\"kind\":\"line\",\"startXMillimeters\":0,\"startYMillimeters\":20,\"endXMillimeters\":0,\"endYMillimeters\":0}"
+                    + "]}",
+                ["surfaceFinishJson"] = "{\"annotationId\":\"surface-001\",\"viewId\":\"front\","
+                    + "\"positionXMillimeters\":100,\"positionYMillimeters\":50,\"maximumRoughness\":\"0.8\","
+                    + "\"provenanceKind\":\"ai_proposed\",\"provenanceMethod\":\"contract-test\","
+                    + "\"approvalState\":\"Proposal\"}",
             });
 
         Assert.True(result.IsError);

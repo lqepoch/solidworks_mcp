@@ -280,6 +280,83 @@ internal sealed class FakeCadDrawingDocument(
     }
 
     /// <inheritdoc />
+    public Task<OperationResult<DrawingAnnotationSnapshot>> AddSurfaceFinishSymbolAsync(
+        SurfaceFinishSymbolRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        const string operation = "add-surface-finish-symbol";
+        if (request is null
+            || string.IsNullOrWhiteSpace(request.RequestedAnnotationId.Value)
+            || string.IsNullOrWhiteSpace(request.ViewId.Value)
+            || string.IsNullOrWhiteSpace(request.ProvenanceKind)
+            || string.IsNullOrWhiteSpace(request.ProvenanceMethod)
+            || request.ApprovalState is not (DrawingAnnotationApprovalState.Approved or DrawingAnnotationApprovalState.Released)
+            || string.IsNullOrWhiteSpace(request.MaximumRoughness))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingAnnotationSnapshot>(
+                operation,
+                "A surface-finish symbol requires stable view/annotation identities, approved provenance and a roughness value."));
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(FakeCadResults.Cancelled<DrawingAnnotationSnapshot>(operation));
+        }
+
+        if (!Session.Supports(CadCapabilityNames.DrawingMutation, out CadCapability capability))
+        {
+            return Task.FromResult(FakeCadResults.Unsupported<DrawingAnnotationSnapshot>(operation, capability));
+        }
+
+        if (Session.IsClosed)
+        {
+            return Task.FromResult(FakeCadResults.Closed<DrawingAnnotationSnapshot>(operation));
+        }
+
+        if (Session.Failures.TryTake(FakeCadFailurePoints.AddSurfaceFinishSymbol, out OperationError? injectedError))
+        {
+            return Task.FromResult(FakeCadResults.Failure<DrawingAnnotationSnapshot>(operation, injectedError!));
+        }
+
+        if (!views.Any(view => view.ViewId == request.ViewId))
+        {
+            return Task.FromResult(FakeCadResults.NotFound<DrawingAnnotationSnapshot>(operation, request.ViewId.Value));
+        }
+
+        if (annotations.Any(annotation => annotation.AnnotationId == request.RequestedAnnotationId))
+        {
+            return Task.FromResult(FakeCadResults.Invalid<DrawingAnnotationSnapshot>(
+                operation,
+                $"Annotation identity '{request.RequestedAnnotationId.Value}' already exists."));
+        }
+
+        var snapshot = new DrawingAnnotationSnapshot
+        {
+            AnnotationId = request.RequestedAnnotationId,
+            ViewId = request.ViewId,
+            Kind = "surface-finish",
+            Text = request.MaximumRoughness.Trim(),
+            CoverageKeys = request.CoverageKeys,
+            Position = request.Position,
+        };
+        annotations.Add(snapshot);
+        MarkMutated();
+        return Task.FromResult(
+            FakeCadResults.Success(
+                snapshot,
+                operation,
+                new EvidenceObservation("annotation.id", snapshot.AnnotationId.Value),
+                new EvidenceObservation("annotation.kind", snapshot.Kind),
+                new EvidenceObservation("annotation.view-id", snapshot.ViewId.Value),
+                new EvidenceObservation("annotation.provenance.kind", request.ProvenanceKind.Trim()),
+                new EvidenceObservation("annotation.provenance.method", request.ProvenanceMethod.Trim()),
+                new EvidenceObservation("annotation.approval-state", request.ApprovalState.ToString()),
+                new EvidenceObservation("annotation.association", "view-scoped-unattached"),
+                new EvidenceObservation("surface-finish.maximum-roughness", request.MaximumRoughness.Trim()),
+                new EvidenceObservation("state.hash", StateHash)));
+    }
+
+    /// <inheritdoc />
     public Task<OperationResult<DrawingRepairReceipt>> RepositionAnnotationAsync(
         DrawingAnnotationPositionRepairRequest request,
         CancellationToken cancellationToken = default)

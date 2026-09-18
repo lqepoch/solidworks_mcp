@@ -411,6 +411,113 @@ public sealed record DrawingDetailViewRequest
 }
 
 /// <summary>
+/// Declares one native drawing surface-finish symbol with explicit approved engineering provenance.
+/// 声明一个带有明确、已批准工程来源的 native 工程图表面粗糙度符号。
+/// </summary>
+/// <remarks>
+/// SOLIDWORKS supports both attached and unattached surface-finish symbols. This first provider contract deliberately
+/// scopes the symbol to one exact drawing view and records the attachment mode as view-scoped/unattached until a
+/// persistent model-edge selector is available. It never turns a guessed roughness value into release evidence.
+/// SOLIDWORKS 同时支持关联与非关联表面粗糙度符号。本首版 provider contract 只绑定精确 drawing view，并在尚未具备
+/// persistent model-edge selector 时明确记录为 view-scoped/unattached；绝不把猜测的粗糙度值伪装成 release evidence。
+/// </remarks>
+public sealed record SurfaceFinishSymbolRequest
+{
+    /// <summary>Stable annotation identity required for idempotent native read-back.</summary>
+    public required AnnotationId RequestedAnnotationId { get; init; }
+
+    /// <summary>Exact drawing view that owns the symbol placement.</summary>
+    public required ViewId ViewId { get; init; }
+
+    /// <summary>Paper-space symbol position in canonical millimetres.</summary>
+    public Coordinate2D Position { get; init; }
+
+    /// <summary>Native surface symbol style represented without vendor enum types.</summary>
+    public SurfaceFinishSymbolType SymbolType { get; init; } = SurfaceFinishSymbolType.MachiningRequired;
+
+    /// <summary>Direction of lay represented without vendor enum types.</summary>
+    public SurfaceFinishLayDirection LayDirection { get; init; } = SurfaceFinishLayDirection.None;
+
+    /// <summary>Native leader style; a leader makes paper-space placement deterministic in the public API.</summary>
+    /// <summary>Native leader style；leader 使 public API 的纸空间 placement 具备确定性。</summary>
+    public SurfaceFinishLeaderStyle LeaderStyle { get; init; } = SurfaceFinishLeaderStyle.Straight;
+
+    /// <summary>Native arrow style used when a leader is requested.</summary>
+    public SurfaceFinishArrowStyle ArrowStyle { get; init; } = SurfaceFinishArrowStyle.Open;
+
+    /// <summary>Manufacturing method text supplied by an approved requirement, if any.</summary>
+    public string? ProductionMethod { get; init; }
+
+    /// <summary>Maximum roughness text supplied by an approved requirement, if any.</summary>
+    public string? MaximumRoughness { get; init; }
+
+    /// <summary>Minimum roughness text supplied by an approved requirement, if any.</summary>
+    public string? MinimumRoughness { get; init; }
+
+    /// <summary>Optional sampling-length text supplied by an approved requirement.</summary>
+    public string? SamplingLength { get; init; }
+
+    /// <summary>Optional machining allowance text supplied by an approved requirement.</summary>
+    public string? MachiningAllowance { get; init; }
+
+    /// <summary>Optional other roughness values supplied by an approved requirement.</summary>
+    public string? OtherValues { get; init; }
+
+    /// <summary>Optional roughness-spacing text supplied by an approved requirement.</summary>
+    public string? RoughnessSpacing { get; init; }
+
+    /// <summary>Requirement provenance class; AI proposals are not eligible for this native mutation.</summary>
+    public string ProvenanceKind { get; init; } = string.Empty;
+
+    /// <summary>Concrete provenance method such as human approval or native PMI import.</summary>
+    public string ProvenanceMethod { get; init; } = string.Empty;
+
+    /// <summary>Approval state required before a native symbol can be created.</summary>
+    public DrawingAnnotationApprovalState ApprovalState { get; init; }
+
+    /// <summary>Stable requirement-graph keys covered by this symbol.</summary>
+    public ImmutableArray<string> CoverageKeys { get; init; } = [];
+}
+
+/// <summary>Provider-neutral surface symbol style values aligned to the public SOLIDWORKS enum.</summary>
+public enum SurfaceFinishSymbolType
+{
+    Basic = 0,
+    MachiningRequired = 1,
+    DoNotMachine = 2,
+}
+
+/// <summary>Provider-neutral direction-of-lay values aligned to the public SOLIDWORKS enum.</summary>
+public enum SurfaceFinishLayDirection
+{
+    None = 0,
+    Circular = 1,
+    Cross = 2,
+    MultiDirectional = 3,
+    Parallel = 4,
+    Perpendicular = 5,
+    Radial = 6,
+    Particulate = 7,
+}
+
+/// <summary>Provider-neutral leader styles aligned to the public SOLIDWORKS enum.</summary>
+public enum SurfaceFinishLeaderStyle
+{
+    NoLeader = 0,
+    Straight = 1,
+    Bent = 2,
+}
+
+/// <summary>Provider-neutral arrow styles aligned to the public SOLIDWORKS enum.</summary>
+public enum SurfaceFinishArrowStyle
+{
+    Open = 0,
+    Closed = 1,
+    Dot = 3,
+    NoArrow = 10,
+}
+
+/// <summary>
 /// Request to apply one verified annotation-position repair.
 /// 应用一个经过验证的标注位置修复请求。
 /// </summary>

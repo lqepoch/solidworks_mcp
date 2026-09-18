@@ -253,6 +253,7 @@ internal static class SolidWorksNativeInspectionReader
                 {
                     Note note => note.GetText()?.Trim() ?? string.Empty,
                     DisplayDimension dimension => SolidWorksNativeDimensionText.Read(dimension),
+                    SFSymbol symbol => symbol.GetText((int)swSurfaceFinishSymbolText_e.swSFSymbolMaximumRoughness)?.Trim() ?? string.Empty,
                     _ => string.Empty,
                 };
                 double[] position = ReadNumbers(annotation.GetPosition());

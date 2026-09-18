@@ -198,7 +198,7 @@ public sealed class CadMcpTools(
     /// 不按每个 COM primitive 暴露 tool；确定性序列由工程服务编排，SOLIDWORKS 调用和 read-back invariant 仍归 Provider。
     /// </remarks>
     [McpServerTool(Name = "cad.build-part-drawing")]
-    [Description("Build one part and its engineering drawing under the versioned GB RulePack. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group and emits one deterministic compact pattern callout. Optional slotCutJson creates one native obround slot cut from an explicit support-face probe and emits one semantic slot callout. Optional detailViewJson declares an exact parent view, source circle, paper-space destination and scale for one native circular detail view. Side effects: creates a real part, RulePack-selected projection views, native model-dimension insertion, optional native slot/detail views, semantic feature notes, and a PDF export.")]
+    [Description("Build one part and its engineering drawing under the versioned GB RulePack. Preconditions: schemaVersion=1.0, allowlisted part/drawing/PDF paths, and a connected closed line/arc profile JSON. Optional throughHolePatternJson preserves one repeated-hole engineering group and emits one deterministic compact pattern callout. Optional slotCutJson creates one native obround slot cut from an explicit support-face probe and emits one semantic slot callout. Optional surfaceFinishJson creates one approval-gated native surface-finish symbol on an exact drawing view. Optional detailViewJson declares an exact parent view, source circle, paper-space destination and scale for one native circular detail view. Side effects: creates a real part, RulePack-selected projection views, native model-dimension insertion, optional native slot/surface/detail views, semantic feature notes, and a PDF export.")]
     public async Task<CallToolResult> BuildPartDrawingAsync(
         [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
         [Description("Stable part document identity.")] string documentId,
@@ -211,6 +211,7 @@ public sealed class CadMcpTools(
         [Description("JSON closed line/arc profile in millimetres; same wire format as cad.create-part.")] string initialSketchProfileJson,
         [Description("Optional JSON semantic through-hole group: {name, diameterMillimeters, centers:[{xMillimeters,yMillimeters}]}.")] string? throughHolePatternJson = null,
         [Description("Optional JSON native obround slot: {name,widthMillimeters,start:{xMillimeters,yMillimeters},end:{xMillimeters,yMillimeters},supportFaceProbe:{xMillimeters,yMillimeters}}.")] string? slotCutJson = null,
+        [Description("Optional JSON approval-gated surface-finish symbol: {annotationId,viewId,positionXMillimeters,positionYMillimeters,symbolType,layDirection,leaderStyle,arrowStyle,maximumRoughness,provenanceKind,provenanceMethod,approvalState,coverageKeys[]}.")] string? surfaceFinishJson = null,
         [Description("Drawing scale denominator for the deterministic seed views.")] int scaleDenominator = 1,
         [Description("Optional JSON explicit detail view: {parentViewId,name,label,detailCenterXMillimeters,detailCenterYMillimeters,detailRadiusMillimeters,positionXMillimeters,positionYMillimeters,scaleNumerator,scaleDenominator,fullOutline,jaggedOutline}. Coordinates are paper-space millimetres; no screenshot or arbitrary selection is accepted.")] string? detailViewJson = null,
         [Description("Optional application operation correlation key.")] string? operationId = null,
@@ -229,12 +230,14 @@ public sealed class CadMcpTools(
                 initialSketchProfileJson,
                 throughHolePatternJson,
                 slotCutJson,
+                surfaceFinishJson,
                 scaleDenominator,
                 detailViewJson,
                 out OperationError? validationError,
                 out SketchProfileRequest? sketchProfile,
                 out ThroughHolePatternRequest? holePattern,
                 out SlotCutRequest? slotCut,
+                out SurfaceFinishSymbolRequest? surfaceFinish,
                 out DrawingDetailViewRequest? detailView))
         {
             return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, validationError!));
@@ -297,6 +300,7 @@ public sealed class CadMcpTools(
                 RulePack = rulePackResolution.Pack,
                 ThroughHolePattern = holePattern,
                 SlotCut = slotCut,
+                SurfaceFinish = surfaceFinish,
                 DetailView = detailView,
             },
             cancellationToken).ConfigureAwait(false);
@@ -967,18 +971,21 @@ public sealed class CadMcpTools(
         string? initialSketchProfileJson,
         string? throughHolePatternJson,
         string? slotCutJson,
+        string? surfaceFinishJson,
         int scaleDenominator,
         string? detailViewJson,
         out OperationError? error,
         out SketchProfileRequest? sketchProfile,
         out ThroughHolePatternRequest? holePattern,
         out SlotCutRequest? slotCut,
+        out SurfaceFinishSymbolRequest? surfaceFinish,
         out DrawingDetailViewRequest? detailView)
     {
         error = null;
         sketchProfile = null;
         holePattern = null;
         slotCut = null;
+        surfaceFinish = null;
         detailView = null;
         if (!string.Equals(schemaVersion, ProtocolSchema.CurrentVersion, StringComparison.Ordinal))
         {
@@ -1014,6 +1021,10 @@ public sealed class CadMcpTools(
         else if (!SlotCutMcpCodec.TryParse(slotCutJson, out slotCut, out string? slotCutError))
         {
             error = InvalidInput(slotCutError ?? "slotCutJson-invalid");
+        }
+        else if (!SurfaceFinishMcpCodec.TryParse(surfaceFinishJson, out surfaceFinish, out string? surfaceFinishError))
+        {
+            error = InvalidInput(surfaceFinishError ?? "surfaceFinishJson-invalid");
         }
         else if (!DetailViewMcpCodec.TryParse(detailViewJson, out detailView, out string? detailViewError))
         {

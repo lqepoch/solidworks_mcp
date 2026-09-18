@@ -33,6 +33,9 @@ public static class FakeCadFailurePoints
     /// <summary>Failure while adding a drawing annotation.</summary>
     public const string AddAnnotation = "drawing.add-annotation";
 
+    /// <summary>Failure while adding a native surface-finish symbol.</summary>
+    public const string AddSurfaceFinishSymbol = "drawing.add-surface-finish-symbol";
+
     /// <summary>Failure while rebuilding a document.</summary>
     public const string Rebuild = "document.rebuild";
 

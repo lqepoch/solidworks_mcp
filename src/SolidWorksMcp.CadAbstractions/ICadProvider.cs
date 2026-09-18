@@ -203,6 +203,14 @@ public interface ICadDrawingDocument : ICadDocument
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Adds one native surface-finish symbol after provenance/approval and exact-view preflight.
+    /// 在 provenance/approval 与精确 view preflight 通过后添加一个 native 表面粗糙度符号。
+    /// </summary>
+    Task<OperationResult<DrawingAnnotationSnapshot>> AddSurfaceFinishSymbolAsync(
+        SurfaceFinishSymbolRequest request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Applies one exact annotation-position repair after state and current-position preflight.
     /// 在 state 与当前坐标 preflight 通过后，应用一个精确的 annotation-position repair。
     /// </summary>

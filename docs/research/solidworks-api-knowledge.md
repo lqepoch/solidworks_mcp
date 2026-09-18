@@ -283,3 +283,45 @@ Fresh-process Live proof uses one generated generic formed U-bracket case in the
 The rendered native PDF shows the actual obround opening in the bracket leg, not just a semantic note. This is a
 focused D05 slice; Hole Wizard semantics, sheet-metal bend features, slot dimension association and general layout
 reflow remain separate compiler/provider work.
+
+### D07 native surface-finish symbol boundary / D07 原生表面粗糙度符号边界
+
+Before implementation, the installed SOLIDWORKS 2022 Interop assembly was reflected and the public 2026 API Help was
+cross-checked. The verified contract is:
+
+| Interface / method | Verified signature | Version evidence | Official source | Runtime note |
+| --- | --- | --- | --- | --- |
+| `IDrawingDoc.InsertSurfaceFinishSymbol` | `Boolean InsertSurfaceFinishSymbol(Int32 SymType, Int32 LeaderType, Double LocX, Double LocY, Double LocZ, Int32 LaySymbol, Int32 ArrowType, String MachAllowance, String OtherVals, String ProdMethod, String SampleLen, String MaxRoughness, String MinRoughness, String RoughnessSpacing)` | SOLIDWORKS 2022 Interop reflection; public signature cross-checked against SOLIDWORKS 2026 API Help | [InsertSurfaceFinishSymbol Method](https://help.solidworks.com/2026/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDrawingDoc~InsertSurfaceFinishSymbol.html) | The provider passes canonical paper-space metres, then reads the resulting `SFSymbol` and `IAnnotation` back on the owning STA. |
+| `ISFSymbol.GetText` | `String GetText(Int32 Type)` | SOLIDWORKS 2022 Interop reflection; `swSurfaceFinishSymbolText_e.swSFSymbolMaximumRoughness` verified locally | [ISFSymbol Interface](https://help.solidworks.com/2026/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISFSymbol.html) | Maximum roughness is compared with the approved request; a successful insertion return value alone is not accepted as evidence. |
+| `ISFSymbol.GetSymbolType` / `GetDirectionOfLay` | `Int32 GetSymbolType()` / `Int32 GetDirectionOfLay()` | SOLIDWORKS 2022 Interop reflection | [ISFSymbol Interface](https://help.solidworks.com/2022/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISFSymbol.html) | Native symbol style and lay direction are verified before the compiler commits the annotation descriptor. |
+| `IView.GetSFSymbols` | `Object GetSFSymbols()` | SOLIDWORKS 2022 Interop reflection; `GetSFSymbolCount`/`IGetSFSymbols` fallback also verified | [Get Annotations Arrays Example (C#)](https://help.solidworks.com/2026/english/api/sldworksapi/Get_Annotations_Arrays_Example_CSharp.htm) | The provider compares the exact target view's symbol collection before/after insertion and requires exactly one new native symbol. |
+
+The public Help explicitly states that the `LocX/LocY/LocZ` location is used only when a leader is present. The compiler
+therefore defaults the wire contract to `Straight` leader plus `Open` arrow for deterministic paper-space placement;
+`NoLeader` remains an explicit public enum option but is not used by the reference Live fixture because SOLIDWORKS may
+place it at its default location. 官方帮助明确说明只有存在 leader 时才使用 `LocX/LocY/LocZ`；因此 compiler 默认使用
+`Straight` leader 与 `Open` arrow 来获得确定性纸空间 placement。`NoLeader` 仍是公开 enum 选项，但参考 Live fixture
+不使用它，因为 SOLIDWORKS 可能把符号放到默认位置。
+
+The provider-neutral request requires stable annotation/view identities, approved or released provenance, an explicit
+roughness value and coverage keys. The current native association is recorded as `view-scoped-unattached`: it is a
+deliberate fail-closed boundary until a persistent model-edge selector is available. An AI proposal or a roughness value
+guessed from a screenshot cannot pass this mutation contract. vendor-neutral request 强制要求稳定 annotation/view identity、
+Approved/Released provenance、明确粗糙度值和 coverage keys。当前 native association 明确记录为
+`view-scoped-unattached`；在 persistent model-edge selector 完成前保持这个 fail-closed boundary。AI proposal 或从截图
+猜出的粗糙度不能通过该 mutation contract。
+
+Fresh-process Live evidence from the two redacted single-part classes:
+
+    drawing.surface-finish=surface-finish
+    drawing.surface-finish.maximum-roughness=0.8
+    drawing.surface-finish.reopened=verified
+    drawing.surface-finish.native.surface-finish.association=view-scoped-unattached
+    drawing.surface-finish.native.surface-finish.maximum-roughness=0.8
+    SLDWORKS_COUNT_BEFORE=0
+    SLDWORKS_COUNT_AFTER=0
+
+The rounded-plate PDF was rendered and visually checked after the first placement defect was corrected: the native symbol
+is visible inside the sheet boundary, separate from the pattern callout and title area. The formed U-bracket remains the
+second generic non-cylindrical case and does not request a surface-finish symbol. Private source PDFs, names and source
+values are not copied into this corpus.

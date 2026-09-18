@@ -298,6 +298,57 @@ internal sealed class SolidWorksNativeDrawingDocument(
             result.Evidence ?? new OperationEvidence("solidworks-drawing"));
     }
 
+    /// <inheritdoc />
+    public async Task<OperationResult<DrawingAnnotationSnapshot>> AddSurfaceFinishSymbolAsync(
+        SurfaceFinishSymbolRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.RequestedAnnotationId.Value)
+            || string.IsNullOrWhiteSpace(request.ViewId.Value)
+            || string.IsNullOrWhiteSpace(request.ProvenanceKind)
+            || string.IsNullOrWhiteSpace(request.ProvenanceMethod)
+            || request.ApprovalState is not (DrawingAnnotationApprovalState.Approved or DrawingAnnotationApprovalState.Released)
+            || string.IsNullOrWhiteSpace(request.MaximumRoughness)
+            || !double.IsFinite(request.Position.X.Millimeters)
+            || !double.IsFinite(request.Position.Y.Millimeters)
+            || !Enum.IsDefined(request.SymbolType)
+            || !Enum.IsDefined(request.LayDirection)
+            || !Enum.IsDefined(request.LeaderStyle)
+            || !Enum.IsDefined(request.ArrowStyle))
+        {
+            return SolidWorksProviderResults.Failure<DrawingAnnotationSnapshot>(
+                "drawing.surface-finish.create",
+                new OperationError(
+                    ErrorCodes.InvalidRequest,
+                    "A surface-finish symbol requires a stable view/annotation identity, finite position, approved provenance and a roughness value.",
+                    ErrorCategories.Validation));
+        }
+
+        OperationResult<NativeDrawingAnnotationResult> result = await host.InvokeOnStaAsync(
+            sessionId,
+            attachmentGeneration,
+            application => AddSurfaceFinishSymbolOnSta(application, request),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return OperationResults.Failure<DrawingAnnotationSnapshot>(result.OperationId, result.Error!, result.Evidence);
+        }
+
+        if (!TryCommitDescriptor(result.Value.ExpectedDescriptor, result.Value.Descriptor, out _))
+        {
+            return DescriptorCommitFailure<DrawingAnnotationSnapshot>(
+                result.OperationId,
+                result.Value.ExpectedDescriptor,
+                result.Value.Descriptor);
+        }
+
+        return OperationResults.Success(
+            result.Value.Annotation,
+            result.OperationId,
+            result.Evidence ?? new OperationEvidence("solidworks-drawing"));
+    }
+
     /// <summary>
     /// Applies the narrow D08 layout-position repair to one exact named native annotation.
     /// 对一个精确命名的 native annotation 应用 D08 窄范围布局位置修复。
@@ -1242,6 +1293,208 @@ internal sealed class SolidWorksNativeDrawingDocument(
         {
             SolidWorksDocumentRouting.Release(view);
             SolidWorksDocumentRouting.Release(resolvedSource.Value);
+            SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
+        }
+    }
+
+    /// <summary>
+    /// Inserts one native surface-finish symbol and proves its type, style, value and stable identity by read-back.
+    /// 插入一个 native 表面粗糙度符号，并通过读回证明其类型、样式、数值和稳定 identity。
+    /// </summary>
+    private OperationResult<NativeDrawingAnnotationResult> AddSurfaceFinishSymbolOnSta(
+        ISldWorks application,
+        SurfaceFinishSymbolRequest request)
+    {
+        const string operation = "drawing.surface-finish.create";
+        if (!registry.TryGet(descriptor.DocumentId, out SolidWorksDocumentDescriptor? current) || current is null)
+        {
+            return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                operation,
+                new OperationError(ErrorCodes.NotFound, "The native drawing identity is no longer registered.", ErrorCategories.State));
+        }
+
+        OperationResult<ModelDoc2> resolvedDrawing = SolidWorksDocumentRouting.ResolveOpenDocument(
+            application,
+            current,
+            activate: true,
+            verifyStateHash: true);
+        if (!resolvedDrawing.IsSuccess || resolvedDrawing.Value is null)
+        {
+            return OperationResults.Failure<NativeDrawingAnnotationResult>(
+                resolvedDrawing.OperationId,
+                resolvedDrawing.Error!,
+                resolvedDrawing.Evidence);
+        }
+
+        View? view = null;
+        List<NativeSurfaceFinishCandidate>? afterSymbols = null;
+        try
+        {
+            var drawing = (IDrawingDoc)resolvedDrawing.Value;
+            view = FindNativeView(
+                drawing,
+                current.DocumentId.Value,
+                request.ViewId.Value,
+                nativeViewNames.TryGetValue(request.ViewId.Value, out string? boundName) ? boundName : null,
+                out string? nativeViewName);
+            if (view is null || string.IsNullOrWhiteSpace(nativeViewName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.SelectionStale,
+                        "The requested drawing view identity could not be resolved for the surface-finish symbol.",
+                        ErrorCategories.State,
+                        remediation: "Re-inspect the drawing and use the current declarative ViewId."));
+            }
+
+            if (!drawing.ActivateView(nativeViewName))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS did not activate the exact drawing view before surface-finish insertion.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the native view identity before retrying."));
+            }
+
+            HashSet<string> existingNames = ReadSurfaceFinishAnnotationNames(view, out int existingCount);
+            resolvedDrawing.Value.ClearSelection2(true);
+            // IDrawingDoc.InsertSurfaceFinishSymbol accepts paper-space metres. No arbitrary selection is used for
+            // this bounded view-scoped symbol; attachment to a persistent model edge remains a separate selector slice.
+            // IDrawingDoc.InsertSurfaceFinishSymbol 接收纸空间米。本 bounded view-scoped symbol 不使用任意 selection；
+            // 关联 persistent model edge 仍由独立 selector slice 负责。
+            bool inserted = drawing.InsertSurfaceFinishSymbol(
+                (int)request.SymbolType,
+                (int)request.LeaderStyle,
+                request.Position.X.ToMeters(),
+                request.Position.Y.ToMeters(),
+                0d,
+                (int)request.LayDirection,
+                (int)request.ArrowStyle,
+                request.MachiningAllowance?.Trim() ?? string.Empty,
+                request.OtherValues?.Trim() ?? string.Empty,
+                request.ProductionMethod?.Trim() ?? string.Empty,
+                request.SamplingLength?.Trim() ?? string.Empty,
+                request.MaximumRoughness!.Trim(),
+                request.MinimumRoughness?.Trim() ?? string.Empty,
+                request.RoughnessSpacing?.Trim() ?? string.Empty);
+            if (!inserted)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS rejected the native surface-finish symbol request.",
+                        ErrorCategories.Provider,
+                        remediation: "Preserve the drawing and inspect the approved surface-finish symbol inputs."));
+            }
+
+            drawing.ForceRebuild();
+            afterSymbols = ReadSurfaceFinishSymbols(view);
+            NativeSurfaceFinishCandidate[] newSymbols = [.. afterSymbols.Where(candidate => !existingNames.Contains(candidate.Name))];
+            if (afterSymbols.Count != existingCount + 1 || newSymbols.Length != 1)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "SOLIDWORKS inserted a surface-finish symbol, but exactly one new symbol could not be identified on the requested view.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and re-inspect native surface-finish identities before retrying."),
+                    new EvidenceObservation(
+                        "surface-finish.native-count",
+                        afterSymbols.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            NativeSurfaceFinishCandidate candidate = newSymbols[0];
+            Annotation annotation = candidate.Annotation;
+            SFSymbol symbol = candidate.Symbol;
+            if (annotation.GetType() != (int)swAnnotationType_e.swSFSymbol)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The inserted object was not read back as a native surface-finish annotation.",
+                        ErrorCategories.Invariant));
+            }
+
+            if (!annotation.SetName(request.RequestedAnnotationId.Value))
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.ProviderFailure,
+                        "SOLIDWORKS did not persist the requested surface-finish annotation identity.",
+                        ErrorCategories.Provider,
+                        remediation: "Use a new annotation identity and preserve the artifact for diagnosis."));
+            }
+
+            string observedMaximumRoughness = symbol.GetText((int)swSurfaceFinishSymbolText_e.swSFSymbolMaximumRoughness)?.Trim() ?? string.Empty;
+            if (!observedMaximumRoughness.Equals(request.MaximumRoughness.Trim(), StringComparison.Ordinal)
+                || symbol.GetSymbolType() != (int)request.SymbolType
+                || symbol.GetDirectionOfLay() != (int)request.LayDirection)
+            {
+                return SolidWorksProviderResults.Failure<NativeDrawingAnnotationResult>(
+                    operation,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The native surface-finish symbol did not read back the approved style and roughness inputs.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing and inspect the native SFSymbol properties before retrying."),
+                    new EvidenceObservation("surface-finish.observed-maximum-roughness", observedMaximumRoughness),
+                    new EvidenceObservation("surface-finish.observed-symbol-type", symbol.GetSymbolType().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                    new EvidenceObservation("surface-finish.observed-lay-direction", symbol.GetDirectionOfLay().ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            double[] position = ReadNumbers(annotation.GetPosition());
+            var snapshot = new DrawingAnnotationSnapshot
+            {
+                AnnotationId = request.RequestedAnnotationId,
+                ViewId = request.ViewId,
+                Kind = "surface-finish",
+                Text = observedMaximumRoughness,
+                CoverageKeys = request.CoverageKeys,
+                Position = new Coordinate2D(
+                    Length.FromMeters(position.Length > 0 ? position[0] : request.Position.X.ToMeters()),
+                    Length.FromMeters(position.Length > 1 ? position[1] : request.Position.Y.ToMeters())),
+            };
+            string stateHash = SolidWorksDocumentRouting.ComputeStateHash(resolvedDrawing.Value);
+            var updated = current with
+            {
+                StateHash = stateHash,
+                IsDirty = resolvedDrawing.Value.GetSaveFlag(),
+            };
+            return SolidWorksProviderResults.Success(
+                operation,
+                new NativeDrawingAnnotationResult(snapshot, updated, current),
+                new EvidenceObservation("annotation.id", request.RequestedAnnotationId.Value),
+                new EvidenceObservation("annotation.kind", snapshot.Kind),
+                new EvidenceObservation("annotation.native-type", ((int)swAnnotationType_e.swSFSymbol).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("annotation.view-id", request.ViewId.Value),
+                new EvidenceObservation("annotation.native-view", nativeViewName),
+                new EvidenceObservation("annotation.provenance.kind", request.ProvenanceKind.Trim()),
+                new EvidenceObservation("annotation.provenance.method", request.ProvenanceMethod.Trim()),
+                new EvidenceObservation("annotation.approval-state", request.ApprovalState.ToString()),
+                new EvidenceObservation("surface-finish.symbol-type", symbol.GetSymbolType().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("surface-finish.lay-direction", symbol.GetDirectionOfLay().ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new EvidenceObservation("surface-finish.maximum-roughness", observedMaximumRoughness),
+                new EvidenceObservation("surface-finish.association", "view-scoped-unattached"),
+                new EvidenceObservation("state.hash", stateHash));
+        }
+        catch (Exception exception)
+        {
+            return SolidWorksProviderResults.ProviderFailure<NativeDrawingAnnotationResult>(
+                operation,
+                exception,
+                "SOLIDWORKS native surface-finish insertion failed before a complete read-back proof was returned.");
+        }
+        finally
+        {
+            ReleaseSurfaceFinishCandidates(afterSymbols);
+            SolidWorksDocumentRouting.Release(view);
             SolidWorksDocumentRouting.Release(resolvedDrawing.Value);
         }
     }
@@ -2405,6 +2658,100 @@ internal sealed class SolidWorksNativeDrawingDocument(
             (-sine * deltaX) + (cosine * deltaY));
     }
 
+    private static HashSet<string> ReadSurfaceFinishAnnotationNames(View view, out int count)
+    {
+        List<NativeSurfaceFinishCandidate> symbols = ReadSurfaceFinishSymbols(view);
+        try
+        {
+            count = symbols.Count;
+            return [.. symbols
+                .Select(symbol => symbol.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))];
+        }
+        finally
+        {
+            ReleaseSurfaceFinishCandidates(symbols);
+        }
+    }
+
+    /// <summary>
+    /// Reads the surface-finish collection while retaining each symbol/annotation pair for one caller-scoped proof.
+    /// 读取 surface-finish collection，并在当前 caller 证明范围内保留 symbol/annotation 成对 RCW。
+    /// </summary>
+    private static List<NativeSurfaceFinishCandidate> ReadSurfaceFinishSymbols(View view)
+    {
+        var result = new List<NativeSurfaceFinishCandidate>();
+        object? raw = view.GetSFSymbols();
+        if (raw is Array symbols)
+        {
+            for (int index = 0; index < symbols.Length; index++)
+            {
+                if (symbols.GetValue(index) is SFSymbol symbol)
+                {
+                    AddSurfaceFinishCandidate(result, symbol);
+                }
+            }
+
+            return result;
+        }
+
+        int count = view.GetSFSymbolCount();
+        for (int index = 0; index < count; index++)
+        {
+            SFSymbol? symbol = view.IGetSFSymbols(index);
+            if (symbol is not null)
+            {
+                AddSurfaceFinishCandidate(result, symbol);
+            }
+        }
+
+        return result;
+    }
+
+    private static void AddSurfaceFinishCandidate(
+        List<NativeSurfaceFinishCandidate> destination,
+        SFSymbol symbol)
+    {
+        Annotation? annotation = null;
+        bool retained = false;
+        try
+        {
+            annotation = symbol.GetAnnotation() as Annotation;
+            if (annotation is null)
+            {
+                return;
+            }
+
+            destination.Add(new NativeSurfaceFinishCandidate(
+                symbol,
+                annotation,
+                annotation.GetName()?.Trim() ?? string.Empty));
+            retained = true;
+        }
+        finally
+        {
+            if (!retained)
+            {
+                SolidWorksDocumentRouting.Release(annotation);
+                SolidWorksDocumentRouting.Release(symbol);
+            }
+        }
+    }
+
+    private static void ReleaseSurfaceFinishCandidates(List<NativeSurfaceFinishCandidate>? candidates)
+    {
+        if (candidates is null)
+        {
+            return;
+        }
+
+        foreach (NativeSurfaceFinishCandidate candidate in candidates)
+        {
+            SolidWorksDocumentRouting.Release(candidate.Annotation);
+            SolidWorksDocumentRouting.Release(candidate.Symbol);
+        }
+    }
+
     private static bool NearlyEqual(Coordinate2D first, Coordinate2D second) =>
         Math.Abs(first.X.Millimeters - second.X.Millimeters) <= 0.000001d
         && Math.Abs(first.Y.Millimeters - second.Y.Millimeters) <= 0.000001d;
@@ -2444,6 +2791,12 @@ internal sealed class SolidWorksNativeDrawingDocument(
         return values;
     }
 }
+
+/// <summary>Temporary native symbol/annotation pair retained only during one STA read-back.</summary>
+internal sealed record NativeSurfaceFinishCandidate(
+    SFSymbol Symbol,
+    Annotation Annotation,
+    string Name);
 
 /// <summary>Internal result carrying a verified native drawing view and descriptor update.</summary>
 internal sealed record NativeDrawingViewResult(

@@ -146,6 +146,7 @@ public sealed class McpBuildPartDrawingLiveTests
                 6d,
                 ThroughHolePatternJson,
                 SlotCutJson: null,
+                SurfaceFinishJson: SurfaceFinishJson(),
                 IncludeDetailView: true),
             new ReferencePartCase(
                 "formed-u-bracket",
@@ -153,6 +154,7 @@ public sealed class McpBuildPartDrawingLiveTests
                 12d,
                 ThroughHolePatternJson: null,
                 SlotCutJson: SlotCutJson,
+                SurfaceFinishJson: null,
                 IncludeDetailView: false),
         ];
 
@@ -203,6 +205,13 @@ public sealed class McpBuildPartDrawingLiveTests
                 if (referenceCase.SlotCutJson is not null)
                 {
                     arguments["slotCutJson"] = referenceCase.SlotCutJson;
+                }
+                if (referenceCase.SurfaceFinishJson is not null)
+                {
+                    arguments["surfaceFinishJson"] = referenceCase.SurfaceFinishJson.Replace(
+                        "{0}",
+                        $"mcp-reference-drawing-{caseId}",
+                        StringComparison.Ordinal);
                 }
 
                 CallToolResult result = await host.Client.CallToolAsync("cad.build-part-drawing", arguments);
@@ -260,6 +269,7 @@ public sealed class McpBuildPartDrawingLiveTests
         double ExtrusionDepthMillimeters,
         string? ThroughHolePatternJson,
         string? SlotCutJson,
+        string? SurfaceFinishJson,
         bool IncludeDetailView);
 
     /// <summary>
@@ -363,6 +373,21 @@ public sealed class McpBuildPartDrawingLiveTests
             Assert.Equal(JsonValueKind.Null, value.GetProperty("slotCallout").ValueKind);
         }
 
+        JsonElement surfaceFinish = value.GetProperty("surfaceFinish");
+        if (referenceCase.SurfaceFinishJson is not null)
+        {
+            Assert.NotEqual(JsonValueKind.Null, surfaceFinish.ValueKind);
+            Assert.Equal("surface-finish", surfaceFinish.GetProperty("kind").GetString());
+            Assert.Equal("0.8", surfaceFinish.GetProperty("text").GetString());
+            Assert.Contains("drawing.surface-finish.reopened", structuredText, StringComparison.Ordinal);
+            Assert.Contains("drawing.surface-finish.native.surface-finish.association", structuredText, StringComparison.Ordinal);
+            Assert.Contains("human_approved", structuredText, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(JsonValueKind.Null, surfaceFinish.ValueKind);
+        }
+
         JsonElement[] drawingViews = [.. drawing.GetProperty("views").EnumerateArray()];
         bool hasFirstAngleProjectedPlacement = drawingViews.Any(view =>
         {
@@ -424,6 +449,19 @@ public sealed class McpBuildPartDrawingLiveTests
         + "\"detailCenterXMillimeters\":90,\"detailCenterYMillimeters\":135,"
         + "\"detailRadiusMillimeters\":12,\"positionXMillimeters\":220,\"positionYMillimeters\":170,"
         + "\"scaleNumerator\":2,\"scaleDenominator\":1,\"fullOutline\":true,\"jaggedOutline\":false"
+        + "}";
+
+    /// <summary>Returns an approval-gated generic roughness symbol request for the rounded-plate case.</summary>
+    /// <summary>返回圆角板 case 使用的、经过审批门禁的通用粗糙度符号请求。</summary>
+    private static string SurfaceFinishJson() => "{"
+        + "\"annotationId\":\"{0}:surface-finish:plate\","
+        + "\"viewId\":\"{0}:front\","
+        + "\"positionXMillimeters\":145,\"positionYMillimeters\":35,"
+        + "\"symbolType\":\"MachiningRequired\","
+        + "\"layDirection\":\"None\",\"leaderStyle\":\"Straight\",\"arrowStyle\":\"Open\","
+        + "\"maximumRoughness\":\"0.8\",\"provenanceKind\":\"human_approved\","
+        + "\"provenanceMethod\":\"live-reference-fixture\",\"approvalState\":\"Approved\","
+        + "\"coverageKeys\":[\"surface-finish.primary-faces\"]"
         + "}";
 
     private const string DProfileJson = "{\"segments\":["

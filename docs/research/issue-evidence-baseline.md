@@ -1014,6 +1014,41 @@ cleanup. Private drawing-PDF content is not stored in this repository.
 Hole Wizard/Model Items native 运行都必须通过 `scripts/Invoke-SolidWorksLiveTests.ps1`：启动前关闭现有会话，只拥有一个
 新进程，清理后验证进程数为零。秘密图纸 PDF 内容不会存入本仓库。
 
+### D07 surface-finish native symbol slice / D07 原生表面粗糙度符号切片
+
+The current D07 slice adds an approval-gated native surface-finish path to the high-level part drawing compiler. The MCP
+wire codec accepts only bounded semantic data: stable `annotationId`/`viewId`, finite paper-space position, approved or
+released provenance, an explicit roughness value and coverage keys. The vendor-neutral contract deliberately records the
+current native association as `view-scoped-unattached`; it does not pretend that a free-standing symbol is attached to a
+model edge. 未完成 persistent model-edge selector 前，任何 AI proposal 或由截图猜测的 roughness 都不能进入该 mutation。
+
+The SOLIDWORKS Provider calls `IDrawingDoc.InsertSurfaceFinishSymbol` on the exact registered drawing view, requires a
+non-null native result, compares the view's `SFSymbol` collection before/after insertion, verifies native type/style/lay/
+roughness through `ISFSymbol` and `IAnnotation`, sets the requested stable identity, rebuilds, and returns namespaced
+native evidence. Reopen inspection classifies `swSFSymbol` as `surface-finish` and reads back maximum roughness. The
+high-level compiler then requires that the same stable annotation identity and kind exist after reopen before PDF export.
+
+`InsertSurfaceFinishSymbol` location semantics were verified against the public 2026 API Help: SOLIDWORKS uses location
+parameters only when a leader is present. The reference fixture consequently uses an explicit Straight/Open leader and
+the rendered symbol is inside the sheet boundary. See [InsertSurfaceFinishSymbol Method](https://help.solidworks.com/2026/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.IDrawingDoc~InsertSurfaceFinishSymbol.html),
+[ISFSymbol Interface](https://help.solidworks.com/2026/English/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISFSymbol.html),
+and [Get Annotations Arrays Example (C#)](https://help.solidworks.com/2026/english/api/sldworksapi/Get_Annotations_Arrays_Example_CSharp.htm).
+
+Fresh-process native evidence from the two generic single-part classes:
+
+    SLDWORKS_COUNT_BEFORE=0
+    SLDWORKS_COUNT_AFTER_OLD=0
+    drawing.surface-finish=surface-finish
+    drawing.surface-finish.reopened=verified
+    drawing.surface-finish.native.surface-finish.association=view-scoped-unattached
+    drawing.surface-finish.native.surface-finish.maximum-roughness=0.8
+    Live: 1 passed, 0 failed, 0 skipped
+    SLDWORKS_COUNT_AFTER=0
+
+The retained local PDFs were rendered and visually inspected; no off-sheet surface symbol remained after the placement
+fix. The two native CAD/PDF artifacts are local test evidence only. Private drawing PDFs and all source-specific values
+remain outside Git, Issues, PRs, logs and release artifacts.
+
 ## D08 drawing QA, targeted repair and release evidence / D08 工程图 QA、定向修复与 Release evidence
 
 Issue #36 requires `drawing.validate`, targeted deterministic repair and `drawing.release` to fail closed when rebuild

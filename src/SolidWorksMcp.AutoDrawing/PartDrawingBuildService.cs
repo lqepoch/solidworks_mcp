@@ -318,6 +318,35 @@ public static class PartDrawingBuildService
                 slotCallout = callout.Value;
             }
 
+            DrawingAnnotationSnapshot? surfaceFinish = null;
+            ImmutableArray<EvidenceObservation> surfaceFinishEvidence = [];
+            if (request.SurfaceFinish is not null)
+            {
+                // Surface finish is a first-class manufacturing requirement. The native provider owns the COM call,
+                // while this compiler preserves approved provenance and coverage rather than inventing a roughness
+                // value from geometry or visual similarity. 表面粗糙度是一级制造要求；native Provider 负责 COM 调用，
+                // compiler 只保留已批准 provenance 与 coverage，不从几何或视觉相似性臆造粗糙度。
+                OperationResult<DrawingAnnotationSnapshot> symbol = await drawing.AddSurfaceFinishSymbolAsync(
+                    request.SurfaceFinish,
+                    cancellationToken).ConfigureAwait(false);
+                if (!symbol.IsSuccess || symbol.Value is null)
+                {
+                    return Failure(symbol);
+                }
+
+                surfaceFinish = symbol.Value;
+                if (symbol.Evidence is not null)
+                {
+                    surfaceFinishEvidence =
+                    [
+                        .. symbol.Evidence.Observations.Select(observation => new EvidenceObservation(
+                            $"drawing.surface-finish.native.{observation.Key}",
+                            observation.Value,
+                            observation.ExpectedValue)),
+                    ];
+                }
+            }
+
             if (request.DetailView is not null)
             {
                 // Create the derived Detail View after model-item and semantic-note writes. Some SOLIDWORKS 2022
@@ -414,6 +443,21 @@ public static class PartDrawingBuildService
                     drawingInspection.Evidence);
             }
 
+            if (surfaceFinish is not null
+                && !drawingInspection.Value.Annotations.Any(annotation =>
+                    annotation.AnnotationId == surfaceFinish.AnnotationId
+                    && annotation.Kind.Equals("surface-finish", StringComparison.Ordinal)))
+            {
+                return OperationResults.Failure<PartDrawingBuildResult>(
+                    drawingInspection.OperationId,
+                    new OperationError(
+                        ErrorCodes.InvariantViolation,
+                        "The persisted drawing did not contain the verified native surface-finish identity and kind.",
+                        ErrorCategories.Invariant,
+                        remediation: "Preserve the drawing artifact and inspect native surface-finish annotations before retrying."),
+                    drawingInspection.Evidence);
+            }
+
             if (!drawingInspection.Value.Annotations.Any(annotation => annotation.AnnotationId == modelDimensions.AnnotationId))
             {
                 return OperationResults.Failure<PartDrawingBuildResult>(
@@ -461,6 +505,7 @@ public static class PartDrawingBuildService
                 ManufacturingAnnotations = manufacturingAnnotations,
                 PatternCallout = patternCallout,
                 SlotCallout = slotCallout,
+                SurfaceFinish = surfaceFinish,
                 Pdf = pdf.Value,
                 RulePackId = request.RulePack?.PackId,
                 Projection = request.RulePack is null
@@ -513,6 +558,10 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.slot-callout", slotCallout?.Text ?? "none"),
                         new EvidenceObservation("drawing.slot-callout.reopened", slotCallout is null ? "not-requested" : "verified"),
                         .. slotEvidence,
+                        new EvidenceObservation("drawing.surface-finish", surfaceFinish?.Kind ?? "none"),
+                        new EvidenceObservation("drawing.surface-finish.maximum-roughness", request.SurfaceFinish?.MaximumRoughness?.Trim() ?? "none"),
+                        new EvidenceObservation("drawing.surface-finish.reopened", surfaceFinish is null ? "not-requested" : "verified"),
+                        .. surfaceFinishEvidence,
                         new EvidenceObservation("drawing.rule-pack.id", request.RulePack?.PackId ?? "legacy-unresolved"),
                         new EvidenceObservation(
                             "drawing.rule-pack.projection",
@@ -605,6 +654,23 @@ public static class PartDrawingBuildService
             if (!double.IsFinite(centerlineLength) || centerlineLength <= 0d)
             {
                 return "Slot centerline endpoints must be finite and distinct.";
+            }
+        }
+
+        if (request.SurfaceFinish is not null)
+        {
+            if (string.IsNullOrWhiteSpace(request.SurfaceFinish.RequestedAnnotationId.Value)
+                || string.IsNullOrWhiteSpace(request.SurfaceFinish.ViewId.Value))
+            {
+                return "Surface-finish annotation and view identities are required.";
+            }
+
+            if (string.IsNullOrWhiteSpace(request.SurfaceFinish.MaximumRoughness)
+                || string.IsNullOrWhiteSpace(request.SurfaceFinish.ProvenanceKind)
+                || string.IsNullOrWhiteSpace(request.SurfaceFinish.ProvenanceMethod)
+                || request.SurfaceFinish.ApprovalState is not (DrawingAnnotationApprovalState.Approved or DrawingAnnotationApprovalState.Released))
+            {
+                return "Surface-finish roughness requires approved provenance and a stable engineering value.";
             }
         }
 
@@ -711,6 +777,12 @@ public sealed record PartDrawingBuildRequest
     public SlotCutRequest? SlotCut { get; init; }
 
     /// <summary>
+    /// Optional approval-gated native surface-finish symbol retained as a manufacturing requirement.
+    /// 可选的、经过审批门禁的 native 表面粗糙度符号；作为制造要求保留。
+    /// </summary>
+    public SurfaceFinishSymbolRequest? SurfaceFinish { get; init; }
+
+    /// <summary>
     /// Optional explicit detail-view request. The request names the parent view, source circle and enlarged-view
     /// position; it is never inferred from a screenshot or an arbitrary active selection.
     /// 可选的显式局部放大视图请求；请求明确父视图、源圆和放大视图位置，绝不从截图或任意 active selection 猜测。
@@ -756,6 +828,9 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>One deterministic slot callout, when an obround slot was requested.</summary>
     public DrawingAnnotationSnapshot? SlotCallout { get; init; }
+
+    /// <summary>Verified native surface-finish symbol, when requested.</summary>
+    public DrawingAnnotationSnapshot? SurfaceFinish { get; init; }
 
     /// <summary>Verified PDF export receipt.</summary>
     public required ExportReceipt Pdf { get; init; }
