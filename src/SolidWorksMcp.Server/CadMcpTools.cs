@@ -99,7 +99,7 @@ public sealed class CadMcpTools(
     /// </remarks>
     [McpServerTool(Name = "tolerance.explain")]
     [Description("Explain a bounded worst-case tolerance stack-up. Preconditions: schemaVersion=1.0 and redacted tolerance JSON. Side effects: none; no CAD session is started.")]
-    public CallToolResult ExplainTolerance(
+    public async Task<CallToolResult> ExplainTolerance(
         [Description("Protocol schema version; currently 1.0.")] string schemaVersion,
         [Description("Bounded JSON containing functional limits, drawing tolerance, provenance and stack terms; never include PDF text or paths.")] string toleranceRequestJson,
         [Description("Optional application operation correlation key.")] string? operationId = null)
@@ -121,17 +121,23 @@ public sealed class CadMcpTools(
                     InvalidInput(parseError ?? "toleranceRequestJson-invalid")));
         }
 
-        ToleranceAnalysisResult analysis = FunctionalToleranceEngine.Analyze(request!.Requirement, request.Stackup);
-        OperationEvidence evidence = new(
-            "tolerance-engine",
-            [
-                new EvidenceObservation("analysis.status", analysis.Status.ToString()),
-                new EvidenceObservation("analysis.method", request.Stackup.Method.ToString()),
-                new EvidenceObservation("analysis.stackup-id", request.Stackup.StackupId),
-                new EvidenceObservation("analysis.dimension-id", analysis.DimensionId),
-                new EvidenceObservation("analysis.can-release", analysis.CanRelease.ToString()),
-            ]);
-        return McpToolResultWriter.Write(OperationResults.Success(analysis, correlationId, evidence));
+        OperationResult<ToleranceAnalysisResult> result = await controlPlane.ExecuteAsync(
+            new McpInvocationContext { OperationId = correlationId, ToolName = "tolerance.explain" },
+            _ =>
+            {
+                ToleranceAnalysisResult analysis = FunctionalToleranceEngine.Analyze(request!.Requirement, request.Stackup);
+                OperationEvidence evidence = new(
+                    "tolerance-engine",
+                    [
+                        new EvidenceObservation("analysis.status", analysis.Status.ToString()),
+                        new EvidenceObservation("analysis.method", request.Stackup.Method.ToString()),
+                        new EvidenceObservation("analysis.stackup-id", request.Stackup.StackupId),
+                        new EvidenceObservation("analysis.dimension-id", analysis.DimensionId),
+                        new EvidenceObservation("analysis.can-release", analysis.CanRelease.ToString()),
+                    ]);
+                return Task.FromResult(OperationResults.Success(analysis, correlationId, evidence));
+            }).ConfigureAwait(false);
+        return McpToolResultWriter.Write(result);
     }
 
     /// <summary>Creates one part after schema/version and identity validation.</summary>
@@ -144,6 +150,7 @@ public sealed class CadMcpTools(
         [Description("Explicit absolute .sldprt output path below the configured path allowlist; omit only for FakeCad.")] string? path = null,
         [Description("Optional initial circle radius in millimetres; this is not a SOLIDWORKS metre value.")] double? initialCircleRadiusMillimeters = null,
         [Description("Optional JSON profile with segments [{kind: line|arc, startXMillimeters, startYMillimeters, throughXMillimeters, throughYMillimeters, endXMillimeters, endYMillimeters}]. It must be a connected closed loop; arc through fields are required only for arc segments.")] string? initialSketchProfileJson = null,
+        [Description("Optional explicit idempotency key for this mutation; reuse it to safely reconcile a retry.")] string? idempotencyKey = null,
         [Description("Optional application operation correlation key.")] string? operationId = null,
         CancellationToken cancellationToken = default)
     {
@@ -155,6 +162,7 @@ public sealed class CadMcpTools(
         {
             SchemaVersion = schemaVersion,
             OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
             DocumentId = documentId,
             Configuration = configuration,
             Path = path,
@@ -182,32 +190,36 @@ public sealed class CadMcpTools(
             return McpToolResultWriter.Write(OperationResults.Failure<CadDocumentSummary>(correlationId, sessionResult.Error!, sessionResult.Evidence));
         }
 
-        OperationError? controlPlaneError = ValidateBound(
-            "cad.create-part",
-            correlationId,
-            sessionResult.Value!.SessionId,
-            targetPath: validInput.Path,
-            requiredPathExtension: validInput.Path is null ? null : ".sldprt");
-        if (controlPlaneError is not null)
-        {
-            return McpToolResultWriter.Write(OperationResults.Failure<CadDocumentSummary>(correlationId, controlPlaneError));
-        }
-
-        OperationResult<ICadPartDocument> created = await sessionResult.Value.CreatePartAsync(
-            new CreatePartRequest
+        OperationResult<CadDocumentSummary> result = await controlPlane.ExecuteAsync(
+            new McpInvocationContext
             {
-                RequestedDocumentId = new DocumentId(validInput.DocumentId),
+                OperationId = correlationId,
+                ToolName = "cad.create-part",
+                IdempotencyKey = ResolveIdempotencyKey(validInput.IdempotencyKey, validInput.OperationId, correlationId),
+                SessionId = sessionResult.Value!.SessionId,
                 Configuration = validInput.Configuration,
-                Path = validInput.Path,
-                InitialCircleRadius = validInput.InitialCircleRadiusMillimeters is double radius
-                    ? Length.FromMillimeters(radius)
-                    : null,
-                InitialSketchProfile = sketchProfile,
+                TargetPath = validInput.Path,
+                RequiredPathExtension = validInput.Path is null ? null : ".sldprt",
+            },
+            async token =>
+            {
+                OperationResult<ICadPartDocument> created = await sessionResult.Value.CreatePartAsync(
+                    new CreatePartRequest
+                    {
+                        RequestedDocumentId = new DocumentId(validInput.DocumentId),
+                        Configuration = validInput.Configuration,
+                        Path = validInput.Path,
+                        InitialCircleRadius = validInput.InitialCircleRadiusMillimeters is double radius
+                            ? Length.FromMillimeters(radius)
+                            : null,
+                        InitialSketchProfile = sketchProfile,
+                    },
+                    token).ConfigureAwait(false);
+                return created.IsSuccess
+                    ? OperationResults.Success(ToSummary(created.Value!), correlationId, created.Evidence!)
+                    : OperationResults.Failure<CadDocumentSummary>(correlationId, created.Error!, created.Evidence);
             },
             cancellationToken).ConfigureAwait(false);
-        OperationResult<CadDocumentSummary> result = created.IsSuccess
-            ? OperationResults.Success(ToSummary(created.Value!), correlationId, created.Evidence!)
-            : OperationResults.Failure<CadDocumentSummary>(correlationId, created.Error!, created.Evidence);
         return McpToolResultWriter.Write(result);
     }
 
@@ -239,6 +251,7 @@ public sealed class CadMcpTools(
         [Description("Optional JSON approval-gated native center marks: {annotationId,viewId,target,connectionLines,minimumNewMarks,provenanceKind,provenanceMethod,approvalState,coverageKeys[]}. The provider activates the exact view and verifies native count/read-back; it never accepts a synthetic note as a center mark.")] string? centerMarkJson = null,
         [Description("Drawing scale denominator for the deterministic seed views.")] int scaleDenominator = 1,
         [Description("Optional JSON explicit detail view: {parentViewId,name,label,detailCenterXMillimeters,detailCenterYMillimeters,detailRadiusMillimeters,positionXMillimeters,positionYMillimeters,scaleNumerator,scaleDenominator,fullOutline,jaggedOutline}. Coordinates are paper-space millimetres; no screenshot or arbitrary selection is accepted.")] string? detailViewJson = null,
+        [Description("Optional explicit idempotency key for this mutation; reuse it to safely reconcile a retry.")] string? idempotencyKey = null,
         [Description("Optional application operation correlation key.")] string? operationId = null,
         CancellationToken cancellationToken = default)
     {
@@ -313,39 +326,37 @@ public sealed class CadMcpTools(
 
         // The build service validates all three artifact paths against the provider-owned policy as one atomic input.
         // build service 会把三个 artifact path 作为一个原子输入交给 Provider-owned policy 校验。
-        OperationError? controlPlaneError = ValidateBound(
-            "cad.build-part-drawing",
-            correlationId,
-            sessionResult.Value.SessionId);
-        if (controlPlaneError is not null)
-        {
-            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingBuildResult>(correlationId, controlPlaneError));
-        }
-
-        OperationResult<PartDrawingBuildResult> built = await PartDrawingBuildService.ExecuteAsync(
-            sessionResult.Value,
-            new PartDrawingBuildRequest
+        OperationResult<PartDrawingBuildResult> result = await controlPlane.ExecuteAsync(
+            new McpInvocationContext
             {
-                DocumentId = new DocumentId(documentId),
-                DrawingDocumentId = new DocumentId(drawingDocumentId),
+                OperationId = correlationId,
+                ToolName = "cad.build-part-drawing",
+                IdempotencyKey = ResolveIdempotencyKey(idempotencyKey, operationId, correlationId),
+                SessionId = sessionResult.Value.SessionId,
                 Configuration = configuration,
-                PartPath = partPath,
-                DrawingPath = drawingPath,
-                PdfPath = pdfPath,
-                InitialSketchProfile = sketchProfile!,
-                ExtrusionDepth = Length.FromMillimeters(extrusionDepthMillimeters),
-                ScaleDenominator = scaleDenominator,
-                RulePack = rulePackResolution.Pack,
-                ThroughHolePattern = holePattern,
-                SlotCut = slotCut,
-                SurfaceFinish = surfaceFinish,
-                CenterMarks = centerMarks,
-                DetailView = detailView,
             },
+            token => PartDrawingBuildService.ExecuteAsync(
+                sessionResult.Value,
+                new PartDrawingBuildRequest
+                {
+                    DocumentId = new DocumentId(documentId),
+                    DrawingDocumentId = new DocumentId(drawingDocumentId),
+                    Configuration = configuration,
+                    PartPath = partPath,
+                    DrawingPath = drawingPath,
+                    PdfPath = pdfPath,
+                    InitialSketchProfile = sketchProfile!,
+                    ExtrusionDepth = Length.FromMillimeters(extrusionDepthMillimeters),
+                    ScaleDenominator = scaleDenominator,
+                    RulePack = rulePackResolution.Pack,
+                    ThroughHolePattern = holePattern,
+                    SlotCut = slotCut,
+                    SurfaceFinish = surfaceFinish,
+                    CenterMarks = centerMarks,
+                    DetailView = detailView,
+                },
+                token),
             cancellationToken).ConfigureAwait(false);
-        OperationResult<PartDrawingBuildResult> result = built.IsSuccess
-            ? OperationResults.Success(built.Value!, correlationId, built.Evidence!)
-            : OperationResults.Failure<PartDrawingBuildResult>(correlationId, built.Error!, built.Evidence);
         return McpToolResultWriter.Write(result);
     }
 
@@ -363,6 +374,7 @@ public sealed class CadMcpTools(
     [Description("Preferred AI-facing part drawing compiler entry point. Preconditions: bounded schemaVersion=1.0 intent JSON with explicit part/drawing paths, closed millimetre profile, positive extrusion and supported semantic features. The intent is validated before any CAD session; native SOLIDWORKS mutation, rebuild, reopen inspection and PDF export then use the same deterministic compiler as cad.build-part-drawing. Do not put private PDF text, screenshots or arbitrary COM commands in the intent.")]
     public Task<CallToolResult> BuildPartDrawingIntentAsync(
         [Description("Versioned JSON intent: {schemaVersion:'1.0',part:{documentId,configuration,path,profile:{segments:[...]},extrusionDepthMillimeters,features:[{kind:'throughHolePattern|slot',payload:{...}}]},drawing:{documentId,path,pdfPath,scaleDenominator,surfaceFinish,centerMarks,detailView}}. All dimensions are millimetres.")] string intentJson,
+        [Description("Optional explicit idempotency key for this mutation; reuse it to safely reconcile a retry.")] string? idempotencyKey = null,
         [Description("Optional application operation correlation key.")] string? operationId = null,
         CancellationToken cancellationToken = default)
     {
@@ -395,6 +407,7 @@ public sealed class CadMcpTools(
             input.CenterMarkJson,
             input.ScaleDenominator,
             input.DetailViewJson,
+            idempotencyKey,
             operationId,
             cancellationToken);
     }
@@ -437,22 +450,16 @@ public sealed class CadMcpTools(
             return McpToolResultWriter.Write(OperationResults.Failure<CadInspectionSnapshot>(correlationId, sessionResult.Error!, sessionResult.Evidence));
         }
 
-        OperationError? controlPlaneError = ValidateBound(
-            "cad.inspect",
-            correlationId,
-            sessionResult.Value!.SessionId,
-            documentId: new DocumentId(validInput.DocumentId));
-        if (controlPlaneError is not null)
-        {
-            return McpToolResultWriter.Write(OperationResults.Failure<CadInspectionSnapshot>(correlationId, controlPlaneError));
-        }
-
-        OperationResult<CadInspectionSnapshot> inspected = await sessionResult.Value.Inspection.InspectAsync(
-            new DocumentId(validInput.DocumentId),
+        OperationResult<CadInspectionSnapshot> result = await controlPlane.ExecuteAsync(
+            new McpInvocationContext
+            {
+                OperationId = correlationId,
+                ToolName = "cad.inspect",
+                SessionId = sessionResult.Value!.SessionId,
+                DocumentId = new DocumentId(validInput.DocumentId),
+            },
+            token => sessionResult.Value.Inspection.InspectAsync(new DocumentId(validInput.DocumentId), token),
             cancellationToken).ConfigureAwait(false);
-        OperationResult<CadInspectionSnapshot> result = inspected.IsSuccess
-            ? OperationResults.Success(inspected.Value!, correlationId, inspected.Evidence!)
-            : OperationResults.Failure<CadInspectionSnapshot>(correlationId, inspected.Error!, inspected.Evidence);
         return McpToolResultWriter.Write(result);
     }
 
@@ -521,18 +528,15 @@ public sealed class CadMcpTools(
             return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingValidationResult>(correlationId, sessionResult.Error!, sessionResult.Evidence));
         }
 
-        OperationError? controlPlaneError = ValidateBound(
-            "drawing.validate",
-            correlationId,
-            sessionResult.Value.SessionId,
-            documentId: new DocumentId(documentId.Trim()));
-        if (controlPlaneError is not null)
-        {
-            return McpToolResultWriter.Write(OperationResults.Failure<PartDrawingValidationResult>(correlationId, controlPlaneError));
-        }
-
-        OperationResult<CadInspectionSnapshot> inspection = await sessionResult.Value.Inspection.InspectAsync(
-            new DocumentId(documentId.Trim()),
+        OperationResult<CadInspectionSnapshot> inspection = await controlPlane.ExecuteAsync(
+            new McpInvocationContext
+            {
+                OperationId = correlationId,
+                ToolName = "drawing.validate",
+                SessionId = sessionResult.Value.SessionId,
+                DocumentId = new DocumentId(documentId.Trim()),
+            },
+            token => sessionResult.Value.Inspection.InspectAsync(new DocumentId(documentId.Trim()), token),
             cancellationToken).ConfigureAwait(false);
         if (!inspection.IsSuccess || inspection.Value is null)
         {
@@ -566,11 +570,11 @@ public sealed class CadMcpTools(
     /// 应用一个有界的定向工程图修复，并在保存/重开后证明结果。
     /// </summary>
     /// <remarks>
-    /// The first public repair slice intentionally accepts exactly one supported layout action. This keeps the
-    /// mutation atomic at the MCP boundary while the provider-native transaction/checkpoint adapter is completed.
-    /// It never loops through arbitrary annotations, trusts ActiveDoc, or moves unrelated objects. 首个公开修复切片
-    /// 刻意一次只接受一个已证明的布局 action，在 Provider transaction/checkpoint adapter 完成前保持边界原子性；
-    /// 它不会遍历任意标注、信任 ActiveDoc 或移动无关对象。
+    /// The public repair slice intentionally accepts exactly one supported layout action. The control plane admits the
+    /// mutation with an explicit replay key and state hash, while the provider proves save/reopen persistence. It
+    /// never loops through arbitrary annotations, trusts ActiveDoc, or moves unrelated objects. 首个公开修复切片
+    /// 刻意一次只接受一个已证明的布局 action；control plane 使用显式 replay key 和 state hash 准入，Provider
+    /// 负责证明 save/reopen 持久化；它不会遍历任意标注、信任 ActiveDoc 或移动无关对象。
     /// </remarks>
     [McpServerTool(Name = "drawing.repair")]
     [Description("Apply one deterministic drawing repair. Preconditions: schemaVersion=1.0, exact drawing identity, expected state hash, and one bounded layout.apply-planned-position action. Side effects: moves only the exact annotation, saves the drawing, reopens it, and verifies persisted position.")]
@@ -579,6 +583,7 @@ public sealed class CadMcpTools(
         [Description("Stable registered drawing document identity.")] string documentId,
         [Description("State hash captured immediately before planning the repair.")] string expectedStateHash,
         [Description("JSON plan: {schemaVersion:'1.0',fingerprint,actions:[{actionCode:'layout.apply-planned-position',targetId,findingCode,preconditionFingerprint,newPositionXMillimeters,newPositionYMillimeters}]}. Exactly one action is accepted in this bounded slice.")] string repairPlanJson,
+        [Description("Optional explicit idempotency key for this mutation; reuse it to safely reconcile a retry.")] string? idempotencyKey = null,
         [Description("Optional application operation correlation key.")] string? operationId = null,
         CancellationToken cancellationToken = default)
     {
@@ -636,7 +641,8 @@ public sealed class CadMcpTools(
             correlationId,
             sessionResult.Value.SessionId,
             documentId: targetDocumentId,
-            expectedStateHash: expectedStateHash.Trim());
+            expectedStateHash: expectedStateHash.Trim(),
+            idempotencyKey: ResolveIdempotencyKey(idempotencyKey, operationId, correlationId));
         if (controlPlaneError is not null)
         {
             return McpToolResultWriter.Write(OperationResults.Failure<DrawingRepairExecutionResult>(correlationId, controlPlaneError));
@@ -693,100 +699,113 @@ public sealed class CadMcpTools(
                         remediation: "Re-inspect the drawing and use the current stable annotation identity.")));
         }
 
-        OperationResult<ICadDrawingDocument> drawingResult = await sessionResult.Value.GetDrawingAsync(
-            targetDocumentId,
-            cancellationToken).ConfigureAwait(false);
-        if (!drawingResult.IsSuccess || drawingResult.Value is null)
-        {
-            return McpToolResultWriter.Write(
-                OperationResults.Failure<DrawingRepairExecutionResult>(
-                    correlationId,
-                    drawingResult.Error!,
-                    drawingResult.Evidence));
-        }
-
-        OperationResult<DrawingRepairReceipt> repaired = await drawingResult.Value.RepositionAnnotationAsync(
-            new DrawingAnnotationPositionRepairRequest
+        // The exact mutation and its save/reopen proof are one admitted control-plane execution. The read-only
+        // preflight above remains outside the mutation handler so a stale target is rejected before any write.
+        // 精确 mutation 以及 save/reopen proof 属于同一次 control-plane execution；上面的只读 preflight 保持在
+        // mutation handler 外，确保 stale target 在任何写入前被拒绝。
+        OperationResult<DrawingRepairExecutionResult> result = await controlPlane.ExecuteAsync(
+            new McpInvocationContext
             {
-                AnnotationId = targetAnnotation.AnnotationId,
-                ExpectedDocumentStateHash = initial.Document.StateHash,
-                PreconditionFingerprint = action.PreconditionFingerprint,
-                ExpectedCurrentPosition = targetAnnotation.Position,
-                NewPosition = action.NewPosition,
+                OperationId = correlationId,
+                ToolName = "drawing.repair",
+                IdempotencyKey = ResolveIdempotencyKey(idempotencyKey, operationId, correlationId),
+                SessionId = sessionResult.Value.SessionId,
+                DocumentId = targetDocumentId,
+                ExpectedStateHash = expectedStateHash.Trim(),
+            },
+            async token =>
+            {
+                OperationResult<ICadDrawingDocument> drawingResult = await sessionResult.Value.GetDrawingAsync(
+                    targetDocumentId,
+                    token).ConfigureAwait(false);
+                if (!drawingResult.IsSuccess || drawingResult.Value is null)
+                {
+                    return OperationResults.Failure<DrawingRepairExecutionResult>(
+                        correlationId,
+                        drawingResult.Error!,
+                        drawingResult.Evidence);
+                }
+
+                OperationResult<DrawingRepairReceipt> repaired = await drawingResult.Value.RepositionAnnotationAsync(
+                    new DrawingAnnotationPositionRepairRequest
+                    {
+                        AnnotationId = targetAnnotation.AnnotationId,
+                        ExpectedDocumentStateHash = initial.Document.StateHash,
+                        PreconditionFingerprint = action.PreconditionFingerprint,
+                        ExpectedCurrentPosition = targetAnnotation.Position,
+                        NewPosition = action.NewPosition,
+                    },
+                    token).ConfigureAwait(false);
+                if (!repaired.IsSuccess || repaired.Value is null)
+                {
+                    return OperationResults.Failure<DrawingRepairExecutionResult>(
+                        correlationId,
+                        repaired.Error!,
+                        repaired.Evidence);
+                }
+
+                OperationResult<SaveReceipt> saved = await drawingResult.Value.SaveAsync(token).ConfigureAwait(false);
+                if (!saved.IsSuccess || saved.Value is null)
+                {
+                    return OperationResults.Failure<DrawingRepairExecutionResult>(
+                        correlationId,
+                        saved.Error!,
+                        saved.Evidence);
+                }
+
+                OperationResult<CadInspectionSnapshot> reopened = await drawingResult.Value.ReopenAndInspectAsync(token).ConfigureAwait(false);
+                if (!reopened.IsSuccess || reopened.Value is null)
+                {
+                    return OperationResults.Failure<DrawingRepairExecutionResult>(
+                        correlationId,
+                        reopened.Error!,
+                        reopened.Evidence);
+                }
+
+                DrawingAnnotationSnapshot? persistedTarget = reopened.Value.Annotations
+                    .SingleOrDefault(annotation => annotation.AnnotationId == targetAnnotation.AnnotationId);
+                if (persistedTarget is null
+                    || !NearlyEqual(persistedTarget.Position, action.NewPosition)
+                    || !repaired.Value.Position.Equals(action.NewPosition))
+                {
+                    return OperationResults.Failure<DrawingRepairExecutionResult>(
+                        correlationId,
+                        new OperationError(
+                            ErrorCodes.InvariantViolation,
+                            "The targeted annotation position was not proven after save/reopen.",
+                            ErrorCategories.Invariant,
+                            remediation: "Preserve the drawing and inspect the native annotation before retrying."));
+                }
+
+                var output = new DrawingRepairExecutionResult
+                {
+                    DocumentId = targetDocumentId,
+                    InitialStateHash = initial.Document.StateHash,
+                    FinalStateHash = reopened.Value.Document.StateHash,
+                    RepairPlanFingerprint = repairPlan.Fingerprint,
+                    Repairs = [repaired.Value],
+                    Save = saved.Value,
+                    ReopenedDrawing = reopened.Value,
+                };
+                return OperationResults.Success(
+                    output,
+                    correlationId,
+                    new OperationEvidence(
+                        "drawing.repair",
+                        [
+                            new EvidenceObservation("document.id", targetDocumentId.Value),
+                            new EvidenceObservation("repair.action", action.ActionCode),
+                            new EvidenceObservation("repair.target-id", action.TargetId),
+                            new EvidenceObservation("repair.finding-code", action.FindingCode),
+                            new EvidenceObservation("repair.plan-fingerprint", repairPlan.Fingerprint),
+                            new EvidenceObservation("repair.persistence", "save-reopen-verified"),
+                            new EvidenceObservation("document.state-hash.before", initial.Document.StateHash),
+                            new EvidenceObservation("document.state-hash.after", reopened.Value.Document.StateHash),
+                        ],
+                        [saved.Value.Path],
+                        reopened.Value.Document.StateHash));
             },
             cancellationToken).ConfigureAwait(false);
-        if (!repaired.IsSuccess || repaired.Value is null)
-        {
-            return McpToolResultWriter.Write(
-                OperationResults.Failure<DrawingRepairExecutionResult>(
-                    correlationId,
-                    repaired.Error!,
-                    repaired.Evidence));
-        }
-
-        OperationResult<SaveReceipt> saved = await drawingResult.Value.SaveAsync(cancellationToken).ConfigureAwait(false);
-        if (!saved.IsSuccess || saved.Value is null)
-        {
-            return McpToolResultWriter.Write(
-                OperationResults.Failure<DrawingRepairExecutionResult>(
-                    correlationId,
-                    saved.Error!,
-                    saved.Evidence));
-        }
-
-        OperationResult<CadInspectionSnapshot> reopened = await drawingResult.Value.ReopenAndInspectAsync(cancellationToken).ConfigureAwait(false);
-        if (!reopened.IsSuccess || reopened.Value is null)
-        {
-            return McpToolResultWriter.Write(
-                OperationResults.Failure<DrawingRepairExecutionResult>(
-                    correlationId,
-                    reopened.Error!,
-                    reopened.Evidence));
-        }
-
-        DrawingAnnotationSnapshot? persistedTarget = reopened.Value.Annotations
-            .SingleOrDefault(annotation => annotation.AnnotationId == targetAnnotation.AnnotationId);
-        if (persistedTarget is null
-            || !NearlyEqual(persistedTarget.Position, action.NewPosition)
-            || !repaired.Value.Position.Equals(action.NewPosition))
-        {
-            return McpToolResultWriter.Write(
-                OperationResults.Failure<DrawingRepairExecutionResult>(
-                    correlationId,
-                    new OperationError(
-                        ErrorCodes.InvariantViolation,
-                        "The targeted annotation position was not proven after save/reopen.",
-                        ErrorCategories.Invariant,
-                        remediation: "Preserve the drawing and inspect the native annotation before retrying.")));
-        }
-
-        var output = new DrawingRepairExecutionResult
-        {
-            DocumentId = targetDocumentId,
-            InitialStateHash = initial.Document.StateHash,
-            FinalStateHash = reopened.Value.Document.StateHash,
-            RepairPlanFingerprint = repairPlan.Fingerprint,
-            Repairs = [repaired.Value],
-            Save = saved.Value,
-            ReopenedDrawing = reopened.Value,
-        };
-        OperationResult<DrawingRepairExecutionResult> result = OperationResults.Success(
-            output,
-            correlationId,
-            new OperationEvidence(
-                "drawing.repair",
-                [
-                    new EvidenceObservation("document.id", targetDocumentId.Value),
-                    new EvidenceObservation("repair.action", action.ActionCode),
-                    new EvidenceObservation("repair.target-id", action.TargetId),
-                    new EvidenceObservation("repair.finding-code", action.FindingCode),
-                    new EvidenceObservation("repair.plan-fingerprint", repairPlan.Fingerprint),
-                    new EvidenceObservation("repair.persistence", "save-reopen-verified"),
-                    new EvidenceObservation("document.state-hash.before", initial.Document.StateHash),
-                    new EvidenceObservation("document.state-hash.after", reopened.Value.Document.StateHash),
-                ],
-                [saved.Value.Path],
-                reopened.Value.Document.StateHash));
         return McpToolResultWriter.Write(result);
     }
 
@@ -1016,19 +1035,33 @@ public sealed class CadMcpTools(
             IncludeArtifactFindings = false,
         };
 
-        OperationResult<DrawingReleaseExecutionResult> released = await releaseService.ExecuteAsync(
-            sessionResult.Value,
-            new DrawingReleaseExecutionRequest
+        OperationResult<DrawingReleaseExecutionResult> result = await controlPlane.ExecuteAsync(
+            new McpInvocationContext
             {
-                PreflightQa = preflightQa,
-                ArtifactPolicy = artifactPolicy,
-                TransactionId = new TransactionId(transactionId.Trim()),
-                IdempotencyKey = new IdempotencyKey(idempotencyKey.Trim()),
+                OperationId = correlationId,
+                ToolName = "drawing.release",
+                IdempotencyKey = idempotencyKey.Trim(),
+                SessionId = sessionResult.Value.SessionId,
+                DocumentId = targetDocumentId,
+                ExpectedStateHash = expectedStateHash.Trim(),
+            },
+            async token =>
+            {
+                OperationResult<DrawingReleaseExecutionResult> released = await releaseService.ExecuteAsync(
+                    sessionResult.Value,
+                    new DrawingReleaseExecutionRequest
+                    {
+                        PreflightQa = preflightQa,
+                        ArtifactPolicy = artifactPolicy,
+                        TransactionId = new TransactionId(transactionId.Trim()),
+                        IdempotencyKey = new IdempotencyKey(idempotencyKey.Trim()),
+                    },
+                    token).ConfigureAwait(false);
+                return released.IsSuccess
+                    ? OperationResults.Success(released.Value!, correlationId, released.Evidence!)
+                    : OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, released.Error!, released.Evidence);
             },
             cancellationToken).ConfigureAwait(false);
-        OperationResult<DrawingReleaseExecutionResult> result = released.IsSuccess
-            ? OperationResults.Success(released.Value!, correlationId, released.Evidence!)
-            : OperationResults.Failure<DrawingReleaseExecutionResult>(correlationId, released.Error!, released.Evidence);
         return McpToolResultWriter.Write(result);
     }
 
@@ -1052,19 +1085,37 @@ public sealed class CadMcpTools(
         DocumentId? documentId = null,
         string? expectedStateHash = null,
         string? targetPath = null,
-        string? requiredPathExtension = null) =>
+        string? requiredPathExtension = null,
+        string? idempotencyKey = null) =>
         controlPlane.Validate(
             new McpInvocationContext
             {
                 OperationId = operationId,
                 ToolName = toolName,
-                IdempotencyKey = operationId,
+                IdempotencyKey = ResolveIdempotencyKey(idempotencyKey, operationId, operationId),
                 SessionId = sessionId,
                 DocumentId = documentId,
                 ExpectedStateHash = expectedStateHash,
                 TargetPath = targetPath,
                 RequiredPathExtension = requiredPathExtension,
             });
+
+    /// <summary>
+    /// Resolves the caller replay key while preserving compatibility with older MCP clients that only sent operationId.
+    /// 在兼容旧 MCP client（只发送 operationId）的同时解析 caller replay key。
+    /// </summary>
+    /// <remarks>
+    /// New clients should always send idempotencyKey. The generated correlation ID is the final bounded fallback so
+    /// every admitted mutation still has a non-empty replay identity and can never silently become an unkeyed write.
+    /// 新 client 应始终发送 idempotencyKey；生成的 correlation ID 是最后的有界 fallback，确保 mutation 永远有
+    /// 非空 replay identity，不会静默变成无 key 写入。
+    /// </remarks>
+    private static string ResolveIdempotencyKey(string? idempotencyKey, string? operationId, string correlationId) =>
+        !string.IsNullOrWhiteSpace(idempotencyKey)
+            ? idempotencyKey.Trim()
+            : !string.IsNullOrWhiteSpace(operationId)
+                ? operationId.Trim()
+                : correlationId;
 
     private static CadDocumentSummary ToSummary(ICadDocument document) => new()
     {
@@ -1243,6 +1294,10 @@ public sealed class CreatePartToolInput
     /// <summary>Optional caller correlation key.</summary>
     [Description("Optional application operation correlation key.")]
     public string? OperationId { get; init; }
+
+    /// <summary>Optional caller replay key; new clients should provide this explicitly for mutations.</summary>
+    [Description("Optional explicit idempotency key for this mutation.")]
+    public string? IdempotencyKey { get; init; }
 
     /// <summary>Stable document identity requested by the caller.</summary>
     [Description("Stable document identity; it is not a display title.")]

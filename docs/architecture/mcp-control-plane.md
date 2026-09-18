@@ -81,18 +81,25 @@ same identity and capability checks.
 3. The Core gate resolves the exact descriptor and checks risk, feature flags, provider capability and path policy.
 4. The request starts or selects a known provider session, never an arbitrary active document.
 5. The request is enriched with `sessionId`, `documentId`, configuration and expected `stateHash`.
-6. A mutation enters `CadTransactionEngine`: preflight, single-writer acquisition, checkpoint, execution, rebuild,
-   inspection, invariant verification, commit; failure enters bounded recovery and proves restoration.
+6. A mutation enters the registered control-plane execution handler. Operations that already have a full
+   `CadTransactionEngine` plan (currently `drawing.release`) perform preflight, single-writer acquisition, checkpoint,
+   execution, rebuild, inspection, invariant verification, commit and bounded recovery there. Other bounded workflows
+   still keep their provider-owned rebuild/read-back contract behind the same admission and audit boundary; they must
+   not bypass the control plane or expose primitive COM calls.
 7. The provider returns vendor-neutral `OperationResult<T>` evidence. A bare COM boolean is not success evidence.
 8. The audit sink records redacted admission and terminal events. Paths, PDF text, credentials and COM exception text
    are not part of the public audit record.
 
-The current first integration applies the second, bound control-plane gate immediately before the existing high-level
-provider calls. `drawing.release` already uses the complete Core transaction engine. The next migration slices move
-`cad.create-part`, drawing build, repair and assembly mutations to the same transaction executor one operation at a time.
+The current integration routes every advertised tool through `McpControlPlane.ExecuteAsync`: read-only tools are
+audited as well, and bounded mutations carry a replay key and exact session/document context. `drawing.release`
+already uses the complete Core transaction engine behind that boundary. `cad.create-part`, drawing build and repair
+are high-level bounded handlers; their provider services retain the authoritative rebuild/read-back checks while the
+transaction-plan migration proceeds without creating a second policy path.
 
-当前第一阶段已经在现有高层 Provider call 前加入第二道 bound control-plane gate；`drawing.release` 已使用完整 Core
-transaction engine。下一步按小切片把 `cad.create-part`、工程图 build、repair 和装配 mutation 逐个迁移到同一事务执行器。
+当前集成已经把所有已发布 tool 路由到 `McpControlPlane.ExecuteAsync`：只读操作也会审计，bounded mutation 携带
+replay key 和精确 session/document context；`drawing.release` 在该边界后继续使用完整 Core transaction engine。
+`cad.create-part`、工程图 build 和 repair 是高层 bounded handler，其 Provider service 继续负责 rebuild/read-back
+检查；后续 transaction-plan 迁移不能另造第二条 policy path。
 
 ## 4. Identity and state / Identity 与状态
 
