@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Protocol;
 

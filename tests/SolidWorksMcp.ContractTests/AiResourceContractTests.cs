@@ -1,4 +1,4 @@
-using ModelContextProtocol.Protocol;
+﻿using ModelContextProtocol.Protocol;
 using SolidWorksMcp.Server;
 
 namespace SolidWorksMcp.ContractTests;

@@ -153,8 +153,7 @@ public static class PartDrawingBuildService
                 request.ExtrusionDepth,
                 request.ScaleDenominator,
                 request.RulePack,
-                needsSectionView: request.ThroughHolePattern is not null,
-                needsDetailView: request.DetailView is not null);
+                needsSectionView: request.ThroughHolePattern is not null);
             OperationResult<ICadDrawingDocument> createdDrawing = await session.CreateDrawingAsync(
                 new CreateDrawingRequest
                 {
@@ -560,6 +559,15 @@ public static class PartDrawingBuildService
                     drawingInspection.Evidence);
             }
 
+            // The seed coordinates are only an initial constraint.  The release-facing layout proof must consume
+            // the native sheet and every persisted IView.GetOutline() read-back after reopen.  This prevents a
+            // visually plausible but geometrically invalid draft from being mistaken for a deterministic layout.
+            // 初始坐标只能作为约束；面向 release 的布局证明必须消费 reopen 后 native sheet 与每个持久化
+            // IView.GetOutline() 的读回结果，防止“看起来像图”但实际越界/重叠的草稿被误认为确定性布局。
+            DrawingLayoutPlan? nativeLayoutPlan = BuildNativeLayoutPlan(
+                drawingInspection.Value,
+                request.RulePack);
+
             OperationResult<ExportReceipt> pdf = await session.Export.ExportAsync(
                 drawing.DocumentId,
                 new CadExportRequest
@@ -598,6 +606,7 @@ public static class PartDrawingBuildService
                 SurfaceFinish = surfaceFinish,
                 CenterMarks = centerMarks,
                 Pdf = pdf.Value,
+                LayoutPlan = nativeLayoutPlan,
                 RulePackId = request.RulePack?.PackId,
                 Projection = request.RulePack is null
                     ? null
@@ -659,6 +668,20 @@ public static class PartDrawingBuildService
                         new EvidenceObservation("drawing.rule-pack.id", request.RulePack?.PackId ?? "legacy-unresolved"),
                         new EvidenceObservation("drawing.disposition", "DRAFT_REVIEW_REQUIRED"),
                         new EvidenceObservation("drawing.release-authority", "drawing.release"),
+                        new EvidenceObservation(
+                            "drawing.layout.native-proof",
+                            nativeLayoutPlan is null ? "unavailable-review-required" : "verified-from-reopen-outlines"),
+                        new EvidenceObservation(
+                            "drawing.layout.can-release",
+                            nativeLayoutPlan?.CanRelease.ToString() ?? "False"),
+                        new EvidenceObservation(
+                            "drawing.layout.fingerprint",
+                            nativeLayoutPlan?.Fingerprint ?? "missing-native-outline-proof"),
+                        new EvidenceObservation(
+                            "drawing.layout.findings",
+                            nativeLayoutPlan is null
+                                ? "missing-native-outline"
+                                : string.Join(",", nativeLayoutPlan.Findings.Select(finding => finding.Code).Distinct(StringComparer.Ordinal))),
                         new EvidenceObservation("drawing.sheet.plan.name", layoutPlan.SheetName),
                         new EvidenceObservation(
                             "drawing.sheet.plan.size-millimeters",
@@ -818,6 +841,89 @@ public static class PartDrawingBuildService
             value.Trim().ToLowerInvariant().Select(character => char.IsLetterOrDigit(character) ? character : '-'))
         .Trim('-');
 
+    /// <summary>
+    /// Builds a provider-neutral layout proof from persisted native outlines.
+    /// 从持久化 native outline 构造厂商无关的布局证明。
+    /// </summary>
+    /// <remarks>
+    /// A missing outline is intentionally represented by null rather than a guessed rectangle.  FakeCad and older
+    /// providers may still produce a draft without this evidence; the release gate must treat that state as review
+    /// required. 缺失 outline 时故意返回 null，而不是猜一个矩形。FakeCad 或旧 Provider 可以继续生成 draft，
+    /// 但 release gate 必须把这种状态当作 review required。
+    /// </remarks>
+    private static DrawingLayoutPlan? BuildNativeLayoutPlan(
+        CadInspectionSnapshot inspection,
+        ResolvedDrawingRulePack? rulePack)
+    {
+        DrawingSheetSnapshot? sheet = inspection.Sheet;
+        if (sheet is null || inspection.Views.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        DrawingViewSnapshot[] views = [.. inspection.Views];
+        if (views.Any(view => view.Outline is null))
+        {
+            return null;
+        }
+
+        Length margin = rulePack?.Values.SheetMargin ?? Length.FromMillimeters(0d);
+        Length annotationSpacing = rulePack?.Values.DimensionSpacing ?? Length.FromMillimeters(2d);
+        Length tierSpacing = rulePack?.Values.DimensionSpacing ?? Length.FromMillimeters(6d);
+        ReservedZoneRule[] reservedZones = rulePack?.Values.ReservedZones.ToArray() ?? [];
+
+        DrawingLayoutRequest request = new()
+        {
+            SheetId = sheet.Name,
+            SheetBounds = new DrawingLayoutRect(
+                Length.FromMillimeters(0d),
+                Length.FromMillimeters(0d),
+                sheet.Width,
+                sheet.Height),
+            Margins = new DrawingLayoutMargins(margin, margin, margin, margin),
+            MinimumAnnotationSpacing = annotationSpacing,
+            DimensionTierSpacing = tierSpacing,
+            Items =
+            [
+                .. views.Select(view => new DrawingLayoutItem
+                {
+                    ItemId = $"view:{view.ViewId.Value}",
+                    Kind = DrawingLayoutItemKind.View,
+                    RequestedBounds = ToLayoutRect(view.Outline!),
+                    ViewId = view.ViewId.Value,
+                    IsFixed = true,
+                }),
+            ],
+            ReservedZones =
+            [
+                .. reservedZones.Select(zone => new DrawingLayoutReservedZone
+                {
+                    ZoneId = zone.ZoneId,
+                    ZoneKind = "rule-pack-reserved-zone",
+                    Bounds = new DrawingLayoutRect(zone.Left, zone.Bottom, zone.Width, zone.Height),
+                }),
+            ],
+            AllowScaleReduction = true,
+            AllowSheetUpgrade = true,
+            AllowAdditionalSheet = true,
+            AllowDetailView = true,
+        };
+
+        return PartDrawingLayoutPlanner.Plan(request);
+    }
+
+    private static DrawingLayoutRect ToLayoutRect(DrawingViewOutlineSnapshot outline)
+    {
+        double width = outline.Right.Millimeters - outline.Left.Millimeters;
+        double height = outline.Top.Millimeters - outline.Bottom.Millimeters;
+        if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0d || height <= 0d)
+        {
+            throw new InvalidOperationException("A native drawing view returned a non-positive paper-space outline.");
+        }
+
+        return new DrawingLayoutRect(outline.Left, outline.Bottom, Length.FromMillimeters(width), Length.FromMillimeters(height));
+    }
+
     private static OperationResult<PartDrawingBuildResult> Failure<T>(OperationResult<T> failure) =>
         OperationResults.Failure<PartDrawingBuildResult>(failure.OperationId, failure.Error!, failure.Evidence);
 
@@ -944,6 +1050,12 @@ public sealed record PartDrawingBuildResult
 
     /// <summary>Verified PDF export receipt.</summary>
     public required ExportReceipt Pdf { get; init; }
+
+    /// <summary>
+    /// Layout QA plan generated from persisted native sheet/view outlines, when the provider supplied them.
+    /// 基于持久化 native 图幅/视图 outline 生成的布局 QA plan；Provider 未提供证据时为空。
+    /// </summary>
+    public DrawingLayoutPlan? LayoutPlan { get; init; }
 
     /// <summary>Resolved RulePack identity recorded for audit.</summary>
     public string? RulePackId { get; init; }

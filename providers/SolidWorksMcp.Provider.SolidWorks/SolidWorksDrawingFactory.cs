@@ -1,6 +1,6 @@
-﻿using SolidWorks.Interop.sldworks;
+﻿using System.Diagnostics;
+using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
-using System.Diagnostics;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Core;
 using SolidWorksMcp.Protocol;
@@ -467,7 +467,7 @@ internal static class SolidWorksDrawingFactory
         try
         {
             int processId = application.GetProcessID();
-            using Process process = Process.GetProcessById(processId);
+            using var process = Process.GetProcessById(processId);
             installRoot = process.MainModule?.FileName is string executable
                 ? Path.GetDirectoryName(executable)
                 : null;

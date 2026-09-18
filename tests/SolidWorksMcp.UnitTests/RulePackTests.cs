@@ -208,8 +208,8 @@ public sealed class RulePackTests
             ],
             DefaultTextHeight = Length.FromMillimeters(3.5d),
             DimensionSpacing = Length.FromMillimeters(8d),
-                ViewSpacing = Length.FromMillimeters(20d),
-                SheetMargin = Length.FromMillimeters(10d),
+            ViewSpacing = Length.FromMillimeters(20d),
+            SheetMargin = Length.FromMillimeters(10d),
             SectionLabelPrefix = "A-",
             DetailLabelPrefix = "DETAIL ",
             RepeatedFeatureNotation = new RepeatedFeatureNotationRule

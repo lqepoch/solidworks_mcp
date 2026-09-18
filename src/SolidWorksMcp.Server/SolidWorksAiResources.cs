@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -34,8 +34,7 @@ public sealed class SolidWorksAiResources
         + "Do not send private PDF text, private drawing paths, screenshots as geometry proof, or arbitrary PowerShell/macros.\n\n"
         + "## 使用索引\n\n"
         + "先调用 `cad.health` / `cad.capabilities`，再读取 feature-plan schema。AI 只提交工程意图和 proposal；模型、图幅、"
-        + "尺寸、公差和 BOM 由确定性 compiler 验证。任何缺少 provenance、覆盖不完整或 native read-back 不一致的结果都不能 release。",
-        "AI usage guidance / AI 使用边界");
+        + "尺寸、公差和 BOM 由确定性 compiler 验证。任何缺少 provenance、覆盖不完整或 native read-back 不一致的结果都不能 release。");
 
     [McpServerResource(
         UriTemplate = "recipe://solidworks/usage/modeling",
@@ -51,8 +50,7 @@ public sealed class SolidWorksAiResources
         + " -> verify invariants -> save -> reopen -> inspect again. A COM bool or screenshot is not success evidence.\n\n"
         + "Selections must use persistent references or semantic geometry signatures. Enumeration indexes become stale after"
         + " model changes and must return `SELECTION_STALE`.\n\n"
-        + "AI may propose dimensions or datums, but it cannot silently approve tolerance, GD&T, fit or release data.",
-        "Modeling recipe / 建模 recipe");
+        + "AI may propose dimensions or datums, but it cannot silently approve tolerance, GD&T, fit or release data.");
 
     [McpServerResource(
         UriTemplate = "recipe://solidworks/usage/drawing",
@@ -72,8 +70,7 @@ public sealed class SolidWorksAiResources
         + " and must remain REVIEW_REQUIRED until its feature association is verified. Never use `AutoDimension(all)` as"
         + " a substitute for an explicit manufacturing coverage graph.\n\n"
         + "For GB output, verify A-series sheet dimensions, first/third-angle projection, title-block reserved zone and"
-        + " Chinese notation from the resolved RulePack before exporting PDF.",
-        "Drawing compiler recipe / 工程图编译 recipe");
+        + " Chinese notation from the resolved RulePack before exporting PDF.");
 
     [McpServerResource(
         UriTemplate = "recipe://solidworks/usage/release",
@@ -90,8 +87,7 @@ public sealed class SolidWorksAiResources
         + "Statuses mean PASS, WARNING, REVIEW_REQUIRED or BLOCKING. Skipped is never passed. AI proposals remain"
         + " REVIEW_REQUIRED until a human or trusted native source approves them.\n\n"
         + "The 100-to-98 clearance example must retain the complete derivation chain and must still enforce part <= 98;"
-        + " the displayed drawing notation cannot weaken the functional limit.",
-        "Release recipe / 发布门禁 recipe");
+        + " the displayed drawing notation cannot weaken the functional limit.");
 
     [McpServerResource(
         UriTemplate = "schema://solidworks/feature-plan",
@@ -119,10 +115,9 @@ public sealed class SolidWorksAiResources
         + "}\n\n"
         + "The value is an intent proposal, not raw SOLIDWORKS COM and not permission to release. Keep identities stable"
         + " across regeneration; do not encode source PDF filenames or copied private drawing text.",
-        "Feature plan schema / Feature plan schema",
         "application/json");
 
-    private static TextResourceContents Text(string uri, string text, string name, string mimeType = "text/markdown") => new()
+    private static TextResourceContents Text(string uri, string text, string mimeType = "text/markdown") => new()
     {
         Uri = uri,
         MimeType = mimeType,

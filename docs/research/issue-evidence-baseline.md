@@ -1316,3 +1316,26 @@ Focused evidence from the final fresh-process run:
 The local rendered PDF was visually checked and shows the real obround opening in the bracket leg together with Front,
 Top, Isometric and the controlled slot callout. This slice is not a claim of full sheet-metal bend recognition or full
 dimension coverage; those remain governed by the later Engineering Requirement Graph and Drawing Compiler issues.
+
+## Native outline layout proof / native outline 布局证明增量
+
+The high-level `cad.build-part-drawing` workflow now carries a provider-neutral `DrawingLayoutPlan` generated from the
+final reopened drawing inspection. When the provider supplies the effective sheet and every persisted view outline,
+the compiler converts those native bounds into fixed layout items and runs the deterministic `PartDrawingLayoutPlanner`.
+The plan records a stable fingerprint, reserved-zone collisions, off-sheet views and view-view collisions. Missing native
+outlines are represented as `unavailable-review-required`; no rectangle is guessed and no draft is promoted to release.
+
+高层 `cad.build-part-drawing` 现在会基于最终 reopen inspection 生成厂商无关的 `DrawingLayoutPlan`。当 Provider 提供
+有效图幅以及每个持久化视图的 native outline 时，compiler 将这些真实边界转换为 fixed layout items，并运行确定性
+`PartDrawingLayoutPlanner`。计划记录稳定 fingerprint、保留区碰撞、越界视图和视图互撞；缺少 native outline 时只记录
+`unavailable-review-required`，不猜矩形，也不把 draft 晋级为 release。
+
+Hosted-safe evidence for this increment:
+
+    dotnet format SolidWorksMcp.slnx --no-restore --verify-no-changes --severity info --verbosity minimal # exit 0
+    powershell -ExecutionPolicy Bypass -File .\scripts\build-hosted.ps1                       # exit 0; build 0 warnings/0 errors
+    # Unit 106 passed; Contract 18 passed; FakeCad 15 passed; 0 failed; 0 skipped
+
+Live rerun was intentionally not started in this turn because a pre-existing `SLDWORKS.exe` process with no usable
+window handle remained present. The safety policy requires human/safe graceful cleanup before another process can be
+started; no forced termination or blind modal action was used.

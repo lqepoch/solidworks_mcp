@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using SolidWorksMcp.CadAbstractions;
 using SolidWorksMcp.Protocol;
 using SolidWorksMcp.RuleEngine;
@@ -78,24 +78,21 @@ public static class DrawingViewPlacementPlanner
         Length extrusionDepth,
         int scaleDenominator,
         ResolvedDrawingRulePack? rulePack,
-        bool needsSectionView,
-        bool needsDetailView)
+        bool needsSectionView)
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(scaleDenominator);
 
-        double[] xs = profile.Segments
+        double[] xs = [.. profile.Segments
             .SelectMany(segment => segment.Kind is SketchCurveKind.ThreePointArc
                 ? new[] { segment.Start.X.Millimeters, segment.End.X.Millimeters, segment.Through.X.Millimeters }
-                : new[] { segment.Start.X.Millimeters, segment.End.X.Millimeters })
-            .Where(double.IsFinite)
-            .ToArray();
-        double[] ys = profile.Segments
+                : [segment.Start.X.Millimeters, segment.End.X.Millimeters])
+            .Where(double.IsFinite)];
+        double[] ys = [.. profile.Segments
             .SelectMany(segment => segment.Kind is SketchCurveKind.ThreePointArc
                 ? new[] { segment.Start.Y.Millimeters, segment.End.Y.Millimeters, segment.Through.Y.Millimeters }
-                : new[] { segment.Start.Y.Millimeters, segment.End.Y.Millimeters })
-            .Where(double.IsFinite)
-            .ToArray();
+                : [segment.Start.Y.Millimeters, segment.End.Y.Millimeters])
+            .Where(double.IsFinite)];
         if (xs.Length == 0 || ys.Length == 0)
         {
             throw new ArgumentException("A non-empty profile is required for view planning.", nameof(profile));
@@ -169,11 +166,6 @@ public static class DrawingViewPlacementPlanner
             sectionY = bottom + 8d;
         }
 
-        var views = ImmutableArray.CreateBuilder<PlannedDrawingView>(needsDetailView ? 4 : 3);
-        views.Add(View("Front", "Front", primaryX, frontY, frontWidth, frontHeight));
-        views.Add(View("Top", "Top", primaryX, topY, topWidth, topHeight));
-        views.Add(View("Isometric", "Isometric", isoX, isoY, isoWidth, isoHeight));
-
         return new DrawingViewPlacementPlan
         {
             SheetName = sheet.Name,
@@ -187,7 +179,12 @@ public static class DrawingViewPlacementPlanner
                 Height = sheet.Height,
                 ProjectionMethod = rulePack?.Values.ProjectionMethod.ToString() ?? "FirstAngle",
             },
-            Views = views.ToImmutable(),
+            Views =
+            [
+                View("Front", "Front", primaryX, frontY, frontWidth, frontHeight),
+                View("Top", "Top", primaryX, topY, topWidth, topHeight),
+                View("Isometric", "Isometric", isoX, isoY, isoWidth, isoHeight),
+            ],
             FeatureNotePosition = new Coordinate2D(
                 Length.FromMillimeters(Math.Max(left, primaryX - projectedColumnWidth / 2d)),
                 Length.FromMillimeters(Math.Min(sheetHeight - margin, frontY + frontHeight / 2d + viewGap / 2d))),
@@ -209,7 +206,7 @@ public static class DrawingViewPlacementPlanner
             ],
         };
 
-        PlannedDrawingView View(string name, string orientation, double x, double y, double width, double height) => new()
+        static PlannedDrawingView View(string name, string orientation, double x, double y, double width, double height) => new()
         {
             Name = name,
             Orientation = orientation,

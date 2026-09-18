@@ -1,6 +1,6 @@
 ﻿using System.IO.Pipelines;
-using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -326,7 +326,7 @@ public sealed class McpServerIntegrationTests
                     + "\"start\":{\"xMillimeters\":-20,\"yMillimeters\":-8},"
                     + "\"end\":{\"xMillimeters\":-20,\"yMillimeters\":8},"
                     + "\"supportFaceProbe\":{\"xMillimeters\":-22,\"yMillimeters\":0}}",
-                ["surfaceFinishJson"] = "{\"annotationId\":\"mcp-build-drawing-001:surface-finish:plate\"," 
+                ["surfaceFinishJson"] = "{\"annotationId\":\"mcp-build-drawing-001:surface-finish:plate\","
                     + "\"viewId\":\"mcp-build-drawing-001:front\","
                     + "\"positionXMillimeters\":145,\"positionYMillimeters\":35,"
                     + "\"symbolType\":\"MachiningRequired\",\"layDirection\":\"None\","
